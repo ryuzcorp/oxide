@@ -1,0 +1,54 @@
+{
+  "name": "oxidejs",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "dist",
+    "virtual.d.ts"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.mts",
+      "default": "./dist/vite.mjs"
+    },
+    "./rsbuild": {
+      "types": "./dist/rsbuild.d.mts",
+      "default": "./dist/rsbuild.mjs"
+    },
+    "./virtual": {
+      "types": "./virtual.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "unplugin": "^3.3.0"
+  },
+  "devDependencies": {
+    "tacho": "^0.3.2"
+  },
+  "peerDependencies": {
+    "@rsbuild/core": "*",
+    "tacho": "*",
+    "vite": "*"
+  },
+  "peerDependenciesMeta": {
+    "@rsbuild/core": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    },
+    "tacho": {
+      "optional": true
+    }
+  }
+}
