@@ -1,0 +1,896 @@
+import { describe, expect, test } from "bun:test";
+import {
+  APP_ERROR_RANGE,
+  tacho,
+  JSON_RPC_ERROR,
+  router,
+  RpcError,
+  runOne,
+  runBatch,
+  rpcResult,
+  resolveProcedure,
+  toOpenRpc,
+  type RPCClient,
+} from "./index";
+import { createClient } from "./client/http";
+import { createClient as createWsClient } from "./client/ws";
+import { handle } from "./transport/fetch";
+import { handle as handleWs } from "./transport/ws";
+
+const schema = <T>(
+  fn: (v: unknown) => { value?: T; issues?: unknown } | Promise<{ value?: T; issues?: unknown }>,
+) => ({ "~standard": { validate: fn } });
+
+const idSchema = schema((v) =>
+  v && typeof v === "object" && typeof (v as any).id === "string"
+    ? { value: v as { id: string } }
+    : { issues: [{ message: "expected {id:string}" }] },
+);
+
+const nameSchema = schema((v) =>
+  v && typeof v === "object" && typeof (v as any).name === "string"
+    ? { value: v as { name: string } }
+    : { issues: [{ message: "expected {name:string}" }] },
+);
+
+const rpc = tacho<{ user?: string }>();
+const app = rpc({
+  ping: rpc.run(() => "pong" as const),
+  boom: rpc.run(() => {
+    throw new Error("kaboom");
+  }),
+  appErr: rpc.run(() => {
+    throw new RpcError({ code: -32001, message: "nope", data: { x: 1 } });
+  }),
+  user: {
+    get: rpc.input(idSchema).run(({ input }) => ({ id: input.id, name: "Ada" })),
+    posts: { list: rpc.run(() => [{ id: 1 }]) },
+  },
+  greet: rpc.use(async ({ next }) => next({ ctx: { user: "ada" } })).run(({ ctx }) => ctx.user),
+});
+
+const fetchHandler = handle(app);
+const call = (body: unknown, init?: RequestInit & { url?: string }) =>
+  fetchHandler(
+    new Request(init?.url ?? "http://x/rpc", {
+      method: "POST",
+      body: typeof body === "string" ? body : JSON.stringify(body),
+      ...init,
+    }),
+  );
+
+describe("spec matrix", () => {
+  test("1 valid single request", async () => {
+    const res = await call({ jsonrpc: "2.0", method: "ping", id: 1 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ jsonrpc: "2.0", result: "pong", id: 1 });
+  });
+
+  test("2 id: null is a request, echoed", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "ping", id: null })).json()).toEqual({
+      jsonrpc: "2.0",
+      result: "pong",
+      id: null,
+    });
+  });
+
+  test("3 no id key is notification → 204", async () => {
+    const res = await call({ jsonrpc: "2.0", method: "ping" });
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+  });
+
+  test("4 unknown method", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "nope", id: 1 })).json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32601, message: "Method not found: nope" },
+      id: 1,
+    });
+  });
+
+  test("5 malformed JSON", async () => {
+    const res = await call("{", {
+      headers: { "content-type": "application/json" },
+    });
+    expect(await res.json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32700, message: "Parse error" },
+      id: null,
+    });
+  });
+
+  test("6 missing jsonrpc", async () => {
+    expect(await (await call({ method: "ping", id: 1 })).json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32600, message: "Invalid Request" },
+      id: 1,
+    });
+  });
+
+  test("7 params fail schema", async () => {
+    const body = await (
+      await call({ jsonrpc: "2.0", method: "user.get", params: {}, id: 1 })
+    ).json();
+    expect(body.error.code).toBe(-32602);
+    expect(body.error.data).toBeDefined();
+    expect(body).not.toHaveProperty("result");
+  });
+
+  test("8 plain Error → INTERNAL_ERROR, message kept, no stack", async () => {
+    const body = await (await call({ jsonrpc: "2.0", method: "boom", id: 1 })).json();
+    expect(body).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32603, message: "kaboom" },
+      id: 1,
+    });
+    expect(JSON.stringify(body)).not.toContain("stack");
+  });
+
+  test("9 RpcError passed through", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "appErr", id: 1 })).json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "nope", data: { x: 1 } },
+      id: 1,
+    });
+  });
+
+  test("10 empty batch is single error object", async () => {
+    const res = await call([]);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(false);
+    expect(body).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32600, message: "Invalid Request" },
+      id: null,
+    });
+  });
+
+  test("11 batch 3 valid + 1 notification", async () => {
+    const body = await (
+      await call([
+        { jsonrpc: "2.0", method: "ping", id: 1 },
+        { jsonrpc: "2.0", method: "ping" },
+        { jsonrpc: "2.0", method: "ping", id: 2 },
+        { jsonrpc: "2.0", method: "user.get", params: { id: "a" }, id: 3 },
+      ])
+    ).json();
+    expect(body).toEqual([
+      { jsonrpc: "2.0", result: "pong", id: 1 },
+      { jsonrpc: "2.0", result: "pong", id: 2 },
+      { jsonrpc: "2.0", result: { id: "a", name: "Ada" }, id: 3 },
+    ]);
+  });
+
+  test("12 batch of only notifications → 204", async () => {
+    const res = await call([
+      { jsonrpc: "2.0", method: "ping" },
+      { jsonrpc: "2.0", method: "boom" },
+    ]);
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+  });
+
+  test("13 nested user.posts.list", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "user.posts.list", id: 1 })).json()).toEqual(
+      { jsonrpc: "2.0", result: [{ id: 1 }], id: 1 },
+    );
+  });
+
+  test("14 rpc.internal reserved", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "rpc.internal", id: 1 })).json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32601, message: "Method not found: rpc.internal" },
+      id: 1,
+    });
+  });
+
+  test("15 middleware mutates context", async () => {
+    expect(await (await call({ jsonrpc: "2.0", method: "greet", id: 1 })).json()).toEqual({
+      jsonrpc: "2.0",
+      result: "ada",
+      id: 1,
+    });
+  });
+
+  test("16 client proxy round-trip", async () => {
+    const client = createClient<typeof app>({
+      url: "http://x/rpc",
+      fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+        fetchHandler(new Request(input, init))) as typeof fetch,
+    });
+    expect(await client.ping()).toBe("pong");
+    expect(await client.user.get({ id: "1" })).toEqual({
+      id: "1",
+      name: "Ada",
+    });
+    const _typed: RPCClient<typeof app> = client;
+    expect(_typed).toBe(client);
+  });
+
+  test("17 non-POST → 405 Allow: POST", async () => {
+    for (const method of ["GET", "PUT", "DELETE", "PATCH"]) {
+      const res = await fetchHandler(new Request("http://x/rpc", { method }));
+      expect(res.status).toBe(405);
+      expect(res.headers.get("Allow")).toBe("POST");
+    }
+  });
+});
+
+test("id type preserved (string vs number)", async () => {
+  expect((await (await call({ jsonrpc: "2.0", method: "ping", id: "abc" })).json()).id).toBe("abc");
+  expect((await (await call({ jsonrpc: "2.0", method: "ping", id: 42 })).json()).id).toBe(42);
+});
+
+test("notification errors are silent", async () => {
+  expect((await call({ jsonrpc: "2.0", method: "nope" })).status).toBe(204);
+  expect((await call({ jsonrpc: "2.0", method: "boom" })).status).toBe(204);
+});
+
+test("path option 404s other paths", async () => {
+  const h = handle(app, { path: "/rpc" });
+  expect((await h(new Request("http://x/other", { method: "POST", body: "{}" }))).status).toBe(404);
+  expect(
+    (
+      await h(
+        new Request("http://x/rpc", {
+          method: "POST",
+          body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+        }),
+      )
+    ).status,
+  ).toBe(200);
+});
+
+test("createContext + client headers", async () => {
+  const whoApp = router({
+    who: tacho<{ who: string }>().run(({ ctx }) => ctx.who),
+  });
+  const h = handle(whoApp, {
+    createContext: (req) => ({ who: req.headers.get("x-who") ?? "" }),
+  });
+  const client = createClient<typeof whoApp>({
+    url: "http://x/",
+    headers: { "x-who": "ada" },
+    fetch: ((i: RequestInfo | URL, init?: RequestInit) => h(new Request(i, init))) as typeof fetch,
+  });
+  expect(await client.who()).toBe("ada");
+});
+
+test("client throws on rpc error and transport failure", async () => {
+  const client = createClient<typeof app>({
+    url: "http://x/rpc",
+    fetch: ((i: RequestInfo | URL, init?: RequestInit) =>
+      fetchHandler(new Request(i, init))) as typeof fetch,
+  });
+  try {
+    await client.boom();
+    throw new Error("expected");
+  } catch (err: any) {
+    expect(err.message).toBe("kaboom");
+    expect(err.code).toBe(-32603);
+  }
+  const dead = createClient<typeof app>({
+    url: "http://x/",
+    fetch: (async () => new Response("nope", { status: 502 })) as unknown as typeof fetch,
+  });
+  await expect(dead.ping()).rejects.toThrow(/502/);
+});
+
+test("exports", () => {
+  expect(JSON_RPC_ERROR.PARSE_ERROR).toBe(-32700);
+  expect(APP_ERROR_RANGE).toEqual({ min: -32099, max: -32000 });
+  expect(nameSchema["~standard"]).toBeDefined();
+});
+
+describe("websocket", () => {
+  const hooks = handleWs(app);
+  const callWs = async (raw: unknown | string) => {
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      {
+        text: () => (typeof raw === "string" ? raw : JSON.stringify(raw)),
+        json: () => (typeof raw === "string" ? JSON.parse(raw) : raw),
+      },
+    );
+    return sent;
+  };
+
+  test("upgrade rejects other paths", () => {
+    const gated = handleWs(app, { path: "/rpc" });
+    const denied = gated.upgrade(new Request("http://x/other"));
+    expect(denied).toBeInstanceOf(Response);
+    expect((denied as Response).status).toBe(404);
+    expect(gated.upgrade(new Request("http://x/rpc"))).toBeUndefined();
+  });
+
+  test("request, notification, parse error", async () => {
+    expect(await callWs({ jsonrpc: "2.0", method: "ping", id: 1 })).toEqual([
+      { jsonrpc: "2.0", result: "pong", id: 1 },
+    ]);
+    expect(await callWs({ jsonrpc: "2.0", method: "ping" })).toEqual([]);
+    const broken = handleWs(app);
+    const sent: unknown[] = [];
+    await broken.message(
+      { context: {}, send: (data) => sent.push(data) },
+      {
+        text: () => "{",
+        json: () => {
+          throw new SyntaxError("bad");
+        },
+      },
+    );
+    expect(sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        error: { code: -32700, message: "Parse error" },
+        id: null,
+      },
+    ]);
+  });
+
+  test("client proxy over a mock socket", async () => {
+    const hooks = handleWs(app);
+    const listeners = new Map<string, Set<(ev: { data?: unknown }) => void>>();
+    const emit = (type: string, ev: { data?: unknown } = {}) => {
+      for (const fn of listeners.get(type) ?? []) fn(ev);
+    };
+    class MockSocket {
+      readyState = 0;
+      addEventListener(type: string, fn: (ev: { data?: unknown }) => void) {
+        const set = listeners.get(type) ?? new Set();
+        set.add(fn);
+        listeners.set(type, set);
+      }
+      send(data: string) {
+        const sent: unknown[] = [];
+        void hooks
+          .message(
+            { context: {}, send: (body) => sent.push(body) },
+            { text: () => data, json: () => JSON.parse(data) },
+          )
+          .then(() => {
+            for (const body of sent) emit("message", { data: JSON.stringify(body) });
+          });
+      }
+      close() {
+        emit("close");
+      }
+    }
+    const socket = new MockSocket();
+    const client = createWsClient<typeof app>({
+      url: "ws://x",
+      WebSocket: function MockWebSocket() {
+        queueMicrotask(() => {
+          socket.readyState = 1;
+          emit("open");
+        });
+        return socket;
+      } as unknown as typeof WebSocket,
+    });
+    await client.ready;
+    expect(await client.ping()).toBe("pong");
+    await expect(client.boom()).rejects.toMatchObject({
+      message: "kaboom",
+      code: -32603,
+    });
+    client.close();
+  });
+});
+
+describe("dispatch", () => {
+  test("rpc() is router()", () => {
+    const ping = rpc.run(() => "pong" as const);
+    expect(rpc({ ping }).ping).toBe(ping);
+    expect(router({ ping }).ping).toBe(ping);
+  });
+
+  test("router is callable locally", async () => {
+    expect(await app.ping()).toBe("pong");
+    expect(await app.user.get({ id: "1" })).toEqual({ id: "1", name: "Ada" });
+    expect(await app.user.posts.list()).toEqual([{ id: 1 }]);
+    expect(await app.greet()).toBe("ada");
+    await expect(app.user.get({} as { id: string })).rejects.toMatchObject({
+      message: "Invalid params",
+      code: -32602,
+    });
+    await expect(app.boom()).rejects.toThrow("kaboom");
+    expect(await app.appErr().catch((err: RpcError) => err)).toMatchObject({
+      message: "nope",
+      code: -32001,
+      data: { x: 1 },
+    });
+  });
+
+  test("resolveProcedure skips empty, reserved, and intermediate nodes", () => {
+    expect(resolveProcedure(app, "")).toBeUndefined();
+    expect(resolveProcedure(app, "rpc.")).toBeUndefined();
+    expect(resolveProcedure(app, "user")).toBeUndefined();
+    expect(resolveProcedure(app, "user.missing")).toBeUndefined();
+    expect(resolveProcedure(app, "ping")?.__rpc).toBe(true);
+  });
+
+  test("undefined result becomes null", async () => {
+    const silent = rpc({ nada: rpc.run(() => undefined) });
+    expect(await runOne(silent, { jsonrpc: "2.0", method: "nada", id: 1 }, {})).toEqual({
+      jsonrpc: "2.0",
+      result: null,
+      id: 1,
+    });
+  });
+
+  test("non-Error throw becomes Internal error", async () => {
+    const app = rpc({
+      die: rpc.run(() => {
+        throw "nope";
+      }),
+    });
+    expect(await runOne(app, { jsonrpc: "2.0", method: "die", id: 1 }, {})).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32603, message: "Internal error" },
+      id: 1,
+    });
+  });
+
+  test("async schema + stacked middleware", async () => {
+    const seen: string[] = [];
+    const app = rpc({
+      echo: rpc
+        .use(async ({ ctx, next }) => {
+          seen.push("a");
+          return next({ ctx: { user: `${ctx.user ?? ""}a` } });
+        })
+        .use(async ({ ctx, next }) => {
+          seen.push("b");
+          return next({ ctx: { user: `${ctx.user}b` } });
+        })
+        .input(
+          schema(async (v) =>
+            typeof v === "string" ? { value: v.toUpperCase() } : { issues: [{ message: "str" }] },
+          ),
+        )
+        .run(({ input, ctx }) => `${input}:${ctx.user}`),
+    });
+    expect(
+      await runOne(app, { jsonrpc: "2.0", method: "echo", params: "hi", id: 1 }, { user: "" }),
+    ).toEqual({ jsonrpc: "2.0", result: "HI:ab", id: 1 });
+    expect(seen).toEqual(["a", "b"]);
+    const bad = await runOne(app, { jsonrpc: "2.0", method: "echo", params: 1, id: 2 }, {});
+    expect(bad).toMatchObject({ error: { code: -32602 } });
+  });
+
+  test("runBatch returns undefined for all-notifications", async () => {
+    expect(await runBatch(app, [{ jsonrpc: "2.0", method: "ping" }], {})).toBeUndefined();
+  });
+
+  test("middleware can wrap and skip", async () => {
+    const app = rpc({
+      wrap: rpc.use(async ({ next }) => `wrapped:${await next()}`).run(() => "ok"),
+      skip: rpc.use(async () => "skipped").run(() => "handler"),
+    });
+    expect(await runOne(app, { jsonrpc: "2.0", method: "wrap", id: 1 }, {})).toEqual({
+      jsonrpc: "2.0",
+      result: "wrapped:ok",
+      id: 1,
+    });
+    expect(await runOne(app, { jsonrpc: "2.0", method: "skip", id: 2 }, {})).toEqual({
+      jsonrpc: "2.0",
+      result: "skipped",
+      id: 2,
+    });
+  });
+});
+
+describe("rpcResult", () => {
+  test("returns result and attaches error fields", () => {
+    expect(rpcResult({ result: 1 })).toBe(1);
+    try {
+      rpcResult({ error: { message: "nope", code: -32001, data: { x: 1 } } });
+      throw new Error("expected");
+    } catch (err: any) {
+      expect(err).toMatchObject({ message: "nope", code: -32001, data: { x: 1 } });
+    }
+  });
+});
+
+describe("http client", () => {
+  test("headers function is awaited", async () => {
+    let seen: HeadersInit | undefined;
+    const client = createClient<typeof app>({
+      url: "http://x/rpc",
+      headers: async () => ({ "x-who": "ada" }),
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen = init?.headers as HeadersInit;
+        return fetchHandler(new Request("http://x/rpc", init));
+      }) as typeof fetch,
+    });
+    expect(await client.ping()).toBe("pong");
+    expect(seen).toMatchObject({ "content-type": "application/json", "x-who": "ada" });
+  });
+
+  test("signal is forwarded", async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const client = createClient<typeof app>({
+      url: "http://x/rpc",
+      signal: ac.signal,
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen = init?.signal ?? undefined;
+        expect(seen?.aborted).toBe(false);
+        ac.abort();
+        expect(seen?.aborted).toBe(true);
+        return fetchHandler(
+          new Request("http://x/rpc", { method: "POST", body: init?.body ?? null }),
+        );
+      }) as typeof fetch,
+    });
+    await client.ping();
+    expect(seen).toBeDefined();
+  });
+
+  test("per-call signal is forwarded", async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const client = createClient<typeof app>({
+      url: "http://x/rpc",
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen = init?.signal ?? undefined;
+        expect(seen?.aborted).toBe(false);
+        ac.abort();
+        expect(seen?.aborted).toBe(true);
+        return fetchHandler(
+          new Request("http://x/rpc", { method: "POST", body: init?.body ?? null }),
+        );
+      }) as typeof fetch,
+    });
+    await client.ping(undefined, { signal: ac.signal });
+    expect(seen).toBeDefined();
+  });
+});
+
+describe("fetch transport", () => {
+  test("createContext throw is a JSON-RPC error", async () => {
+    const seen: unknown[] = [];
+    const h = handle(app, {
+      createContext: () => {
+        throw new Error("ctx boom");
+      },
+      onError: (err) => seen.push(err),
+    });
+    const res = await h(
+      new Request("http://x/rpc", {
+        method: "POST",
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({
+      error: { code: -32603, message: "Internal error" },
+      id: null,
+    });
+    expect(seen[0]).toBeInstanceOf(Error);
+  });
+
+  test("req is on context by default", async () => {
+    const who = tacho<{ req: Request }>();
+    const whoApp = who({
+      path: who.run(({ ctx }) => new URL(ctx.req.url).pathname),
+    });
+    const res = await handle(whoApp)(
+      new Request("http://x/rpc", {
+        method: "POST",
+        body: JSON.stringify({ jsonrpc: "2.0", method: "path", id: 1 }),
+      }),
+    );
+    expect(await res.json()).toEqual({ jsonrpc: "2.0", result: "/rpc", id: 1 });
+  });
+});
+
+describe("ws transport extras", () => {
+  test("parses text when json() is missing", async () => {
+    const hooks = handleWs(app);
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) },
+    );
+    expect(sent).toEqual([{ jsonrpc: "2.0", result: "pong", id: 1 }]);
+  });
+
+  test("createContext + batch", async () => {
+    const who = tacho<{ who: string }>();
+    const whoApp = who({ who: who.run(({ ctx }) => ctx.who) });
+    const hooks = handleWs(whoApp, {
+      createContext: (peer) => ({ who: String(peer.context["who"] ?? "") }),
+    });
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: { who: "ada" }, send: (data) => sent.push(data) },
+      {
+        text: () => "",
+        json: () => [
+          { jsonrpc: "2.0", method: "who", id: 1 },
+          { jsonrpc: "2.0", method: "who" },
+        ],
+      },
+    );
+    expect(sent).toEqual([[{ jsonrpc: "2.0", result: "ada", id: 1 }]]);
+
+    const seen: unknown[] = [];
+    const boom = handleWs(app, {
+      createContext: () => {
+        throw new Error("ws ctx");
+      },
+      onError: (err) => seen.push(err),
+    });
+    const failed: unknown[] = [];
+    await boom.message(
+      { context: {}, send: (data) => failed.push(data) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) },
+    );
+    expect(failed[0]).toMatchObject({ error: { code: -32603 } });
+    expect(seen[0]).toBeInstanceOf(Error);
+  });
+});
+
+describe("ws client extras", () => {
+  const listeners = () => {
+    const map = new Map<string, Set<(ev: { data?: unknown }) => void>>();
+    const emit = (type: string, ev: { data?: unknown } = {}) => {
+      for (const fn of map.get(type) ?? []) fn(ev);
+    };
+    return {
+      emit,
+      listen(type: string, fn: (ev: { data?: unknown }) => void) {
+        const set = map.get(type) ?? new Set();
+        set.add(fn);
+        map.set(type, set);
+      },
+    };
+  };
+
+  test("rejects on socket error, close, and ignores junk", async () => {
+    const { emit, listen } = listeners();
+    const client = createWsClient<typeof app>({
+      url: "ws://x",
+      WebSocket: function MockWebSocket() {
+        return {
+          addEventListener: listen,
+          send() {},
+          close() {
+            emit("close");
+          },
+        };
+      } as unknown as typeof WebSocket,
+    });
+    queueMicrotask(() => emit("error"));
+    await expect(client.ready).rejects.toThrow("RPC transport error");
+
+    const live = listeners();
+    let opened = false;
+    const liveClient = createWsClient<typeof app>({
+      url: "ws://x",
+      WebSocket: function MockWebSocket() {
+        return {
+          addEventListener: live.listen,
+          send() {
+            opened = true;
+          },
+          close() {
+            live.emit("close");
+          },
+        };
+      } as unknown as typeof WebSocket,
+    });
+    queueMicrotask(() => live.emit("open"));
+    await liveClient.ready;
+    const pending = liveClient.ping();
+    await Promise.resolve();
+    expect(opened).toBe(true);
+    live.emit("message", { data: "not-json" });
+    live.emit("message", { data: { id: null, result: 1 } });
+    live.emit("message", { data: [{ id: 99, result: "ghost" }] });
+    live.emit("close");
+    await expect(pending).rejects.toThrow("socket closed");
+  });
+});
+
+describe("sse stream", () => {
+  const streamRpc = tacho();
+  let cleaned = 0;
+  const streamApp = streamRpc({
+    ticks: streamRpc.run(async function* () {
+      yield 0;
+      yield 1;
+      return 2;
+    }),
+    boom: streamRpc.run(async function* () {
+      yield 0;
+      throw new RpcError({ code: -32001, message: "nope", data: { x: 1 } });
+    }),
+    hang: streamRpc.run(async function* ({ ctx }) {
+      try {
+        yield 0;
+        await new Promise<void>((resolve) => {
+          const req = (ctx as { req?: Request }).req;
+          if (!req || req.signal.aborted) return resolve();
+          req.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      } finally {
+        cleaned += 1;
+      }
+    }),
+  });
+  const streamHandler = handle(streamApp);
+  const post = (body: unknown, init?: RequestInit) =>
+    streamHandler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        body: JSON.stringify(body),
+        ...init,
+      }),
+    );
+
+  test("yields then done", async () => {
+    const res = await post({ jsonrpc: "2.0", method: "ticks", id: 1 });
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(await res.text()).toBe(
+      [
+        'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
+        'data: {"jsonrpc":"2.0","result":1,"id":1}\n',
+        'event: done\ndata: {"jsonrpc":"2.0","result":2,"id":1}\n',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("throw becomes error event", async () => {
+    const res = await post({ jsonrpc: "2.0", method: "boom", id: 1 });
+    expect(await res.text()).toBe(
+      [
+        'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
+        'event: error\ndata: {"jsonrpc":"2.0","error":{"code":-32001,"message":"nope","data":{"x":1}},"id":1}\n',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("notification does not start the stream", async () => {
+    const res = await post({ jsonrpc: "2.0", method: "ticks" });
+    expect(res.status).toBe(204);
+  });
+
+  test("batch with a stream is INVALID_REQUEST", async () => {
+    const res = await post([
+      { jsonrpc: "2.0", method: "ping", id: 1 },
+      { jsonrpc: "2.0", method: "ticks", id: 2 },
+    ]);
+    expect(await res.json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32600, message: "Invalid Request" },
+      id: null,
+    });
+  });
+
+  test("ws rejects streams", async () => {
+    const hooks = handleWs(streamApp);
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ticks", id: 1 }) },
+    );
+    expect(sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Streaming is not supported" },
+        id: 1,
+      },
+    ]);
+  });
+
+  test("client iterates and return() cleans up", async () => {
+    cleaned = 0;
+    const client = createClient<typeof streamApp>({
+      url: "http://x/rpc",
+      fetch: ((i: RequestInfo | URL, init?: RequestInit) =>
+        streamHandler(new Request(i, init))) as typeof fetch,
+    });
+    const ticks = await client.ticks();
+    expect(await ticks.next()).toEqual({ value: 0, done: false });
+    expect(await ticks.next()).toEqual({ value: 1, done: false });
+    expect(await ticks.next()).toEqual({ value: 2, done: true });
+
+    const hang = await client.hang();
+    expect(await hang.next()).toEqual({ value: 0, done: false });
+    await hang.return(undefined);
+    await Promise.resolve();
+    expect(cleaned).toBe(1);
+
+    const boom = await client.boom();
+    expect(await boom.next()).toEqual({ value: 0, done: false });
+    await expect(boom.next()).rejects.toMatchObject({ message: "nope", code: -32001 });
+  });
+});
+
+describe("files", () => {
+  const files = tacho();
+  const fileSchema = schema((v) =>
+    v instanceof File ? { value: v } : { issues: [{ message: "file" }] },
+  );
+  const echoSchema = schema((v) => {
+    const rec = v as { file?: File; note?: string } | null;
+    return rec?.file instanceof File && typeof rec.note === "string"
+      ? { value: rec as { file: File; note: string } }
+      : { issues: [{ message: "echo" }] };
+  });
+  const fileApp = files({
+    echo: files.input(echoSchema).run(({ input }) => ({
+      name: input.file.name,
+      type: input.file.type,
+      note: input.note,
+    })),
+    download: files.run(() => new File(["hello"], "hello.txt", { type: "text/plain" })),
+    both: files.input(fileSchema).run(({ input }) => ({
+      name: input.name,
+      copy: new File(["out"], "out.txt", { type: "text/plain" }),
+    })),
+  });
+  const fileHandler = handle(fileApp);
+  const fileClient = createClient<typeof fileApp>({
+    url: "http://x/rpc",
+    fetch: ((i: RequestInfo | URL, init?: RequestInit) =>
+      fileHandler(new Request(i, init))) as typeof fetch,
+  });
+
+  test("upload File next to json", async () => {
+    const file = new File(["hi"], "hi.txt", { type: "text/plain" });
+    expect(await fileClient.echo({ file, note: "ok" })).toMatchObject({
+      name: "hi.txt",
+      note: "ok",
+    });
+  });
+
+  test("download File", async () => {
+    const got = await fileClient.download();
+    expect(got).toBeInstanceOf(File);
+    expect(got.name).toBe("hello.txt");
+    expect(got.type.startsWith("text/plain")).toBe(true);
+    expect(await got.text()).toBe("hello");
+  });
+
+  test("upload and download together", async () => {
+    const got = await fileClient.both(new File(["in"], "in.txt", { type: "text/plain" }));
+    expect(got.name).toBe("in.txt");
+    expect(got.copy).toBeInstanceOf(File);
+    expect(got.copy.name).toBe("out.txt");
+    expect(await got.copy.text()).toBe("out");
+  });
+});
+
+describe("toOpenRpc", () => {
+  test("walks nested methods and uses input schema when present", () => {
+    const spec = toOpenRpc(app, {
+      title: "demo",
+      version: "0.1.0",
+      servers: [{ url: "https://api.example.com" }],
+    });
+    expect(spec.openrpc).toBe("1.3.2");
+    expect(spec.info).toEqual({ title: "demo", version: "0.1.0" });
+    expect(spec.servers).toEqual([{ url: "https://api.example.com" }]);
+    expect(spec.methods.map((m) => m.name)).toEqual([
+      "ping",
+      "boom",
+      "appErr",
+      "user.get",
+      "user.posts.list",
+      "greet",
+    ]);
+    const ping = spec.methods.find((m) => m.name === "ping");
+    expect(ping?.params).toEqual([]);
+    expect(ping?.result).toEqual({ name: "result", schema: true });
+    expect(ping?.errors?.some((e) => e.code === -32601)).toBe(true);
+    expect(spec.methods.find((m) => m.name === "user.get")?.params).toEqual([
+      { name: "params", schema: true, required: true },
+    ]);
+  });
+});

@@ -1,0 +1,128 @@
+import { createProxyClient, rpcResult, type RPCClient } from "../index";
+import { extractFiles, filenameFrom, fromForm, injectFiles, toForm } from "../file";
+
+const JSON_HEADERS = { "content-type": "application/json" };
+
+export type ClientOptions = {
+  url: string;
+  headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
+  fetch?: typeof fetch;
+  signal?: AbortSignal;
+};
+
+let nextId = 0;
+
+function parseSse(block: string): { event?: string; data: unknown } | undefined {
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const line of block.split("\n")) {
+    if (!line || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    if (field === "event") event = value;
+    else if (field === "data") data.push(value);
+  }
+  if (data.length === 0) return;
+  try {
+    return event === undefined
+      ? { data: JSON.parse(data.join("\n")) }
+      : { event, data: JSON.parse(data.join("\n")) };
+  } catch {
+    return;
+  }
+}
+
+async function* readSse(
+  body: ReadableStream<Uint8Array>,
+  ac: AbortController,
+  cleanup: () => void,
+): AsyncGenerator<unknown> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buf.indexOf("\n\n")) !== -1) {
+        const event = parseSse(buf.slice(0, sep));
+        buf = buf.slice(sep + 2);
+        if (!event) continue;
+        if (event.event === "error") rpcResult(event.data as { error?: { message: string } });
+        if (event.event === "done") return rpcResult(event.data as { result?: unknown });
+        yield rpcResult(event.data as { result?: unknown });
+      }
+    }
+  } finally {
+    cleanup();
+    ac.abort();
+    await reader.cancel().catch(() => {});
+  }
+}
+
+export function createClient<R>(opts: ClientOptions): RPCClient<R> {
+  return createProxyClient(async (method, params, call) => {
+    const headers = typeof opts.headers === "function" ? await opts.headers() : opts.headers;
+    const ac = new AbortController();
+    const signals = [opts.signal, call?.signal].filter((s): s is AbortSignal => !!s);
+    const onAbort = () => ac.abort();
+    for (const signal of signals) {
+      if (signal.aborted) ac.abort();
+      else signal.addEventListener("abort", onAbort);
+    }
+    const cleanup = () => {
+      for (const signal of signals) signal.removeEventListener("abort", onAbort);
+    };
+    try {
+      const id = ++nextId;
+      const packed = extractFiles(params);
+      const envelope = { jsonrpc: "2.0", method, params: packed.json, id };
+      const init: RequestInit = {
+        method: "POST",
+        signal: ac.signal,
+        ...(packed.files.length
+          ? { body: toForm(envelope, packed.files) }
+          : {
+              headers: { ...JSON_HEADERS, ...(headers as object) },
+              body: JSON.stringify(envelope),
+            }),
+      };
+      if (packed.files.length && headers) {
+        init.headers = headers;
+      }
+      const response = await (opts.fetch ?? fetch)(opts.url, init);
+      const ct = response.headers.get("content-type") ?? "";
+      if (ct.includes("text/event-stream")) {
+        if (!response.body) {
+          cleanup();
+          throw new Error(`RPC transport error: ${response.status} ${response.statusText}`);
+        }
+        return readSse(response.body, ac, cleanup);
+      }
+      cleanup();
+      if (response.headers.get("x-rpc-result") === "file") {
+        const blob = await response.blob();
+        return new File([blob], filenameFrom(response.headers.get("content-disposition")), {
+          type: blob.type,
+        });
+      }
+      if (ct.includes("multipart/form-data")) {
+        const { rpc, files } = await fromForm(await response.formData());
+        const envelope = rpc as { result?: unknown; error?: { message: string } };
+        envelope.result = injectFiles(envelope.result, files);
+        return rpcResult(envelope);
+      }
+      const body = await response.json().catch(() => undefined);
+      if (!body) {
+        throw new Error(`RPC transport error: ${response.status} ${response.statusText}`);
+      }
+      return rpcResult(body);
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+  });
+}
