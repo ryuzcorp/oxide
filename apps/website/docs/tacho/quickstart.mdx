@@ -1,9 +1,9 @@
 ---
 title: Quickstart
-description: Install tacho and run the common workflows.
+sidebar:
+  icon: rocket
+description: Install tacho, define a few procedures, serve them, and call them from a typed client.
 ---
-
-This page shows the recommended setup for tacho and the most common workflows, with copy-paste commands.
 
 ## Install
 
@@ -31,7 +31,6 @@ export const router = rpc({
 export type Router = typeof router;
 
 const pong = await router.ping();
-//    ^?
 await router.user.get({ id: "1" });
 ```
 
@@ -88,7 +87,9 @@ import { z } from "zod";
 
 const rpc = tacho();
 const router = rpc({
-  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({ input }) {
+  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({
+    input,
+  }) {
     for (let i = 0; i < input.n; i++) yield { i };
   }),
 });
@@ -108,7 +109,9 @@ const rpc = tacho<{ req: Request; user?: string }>();
 
 const protect = rpc.use(async ({ ctx, next }) => {
   const user = ctx.req.headers.get("x-user");
-  if (!user) throw new RpcError({ code: -32001, message: "unauthorized" });
+  if (!user) {
+    throw new RpcError({ code: -32001, message: "unauthorized" });
+  }
   return next({ ctx: { user } });
 });
 
@@ -128,14 +131,16 @@ const router = rpc({ ping: rpc.run(() => "pong" as const) });
 // ---cut---
 handle(router, {
   path: "/rpc",
-  createContext: (req) => ({ user: req.headers.get("x-user") ?? undefined }),
+  createContext: (req) => ({
+    user: req.headers.get("x-user") ?? undefined,
+  }),
 });
 ```
 
 ## Next steps
 
-- [Router](/tacho/router) — `tacho()`, `.input()`, `.output()`, `.run()`
-- [Middleware](/tacho/middleware) — onion `next({ ctx })`
-- [Error handling](/tacho/error-handling) — `RpcError` and JSON-RPC codes
-- [SSE streaming](/tacho/sse-streaming) — `async function*` over fetch
-- [API reference](/tacho/api-reference) — transports and low-level helpers
+- [Router](/tacho/router) - `tacho()`, `.input()`, `.output()`, `.run()`
+- [HTTP](/tacho/transport/http) - `handle()` and `createClient`
+- [Files](/tacho/files) - `File` / `Blob` over fetch
+- [WebSocket](/tacho/transport/websocket) - one socket, `.ready` / `.close()`
+- [SSE streaming](/tacho/sse-streaming) - `async function*` over fetch

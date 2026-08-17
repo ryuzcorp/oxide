@@ -61,15 +61,6 @@ export const router = rpc({
 });
 ```
 
-`router(def)` is the same identity helper if you want a free function.
-
-```ts
-import { router, tacho } from "tacho";
-
-const rpc = tacho();
-export const app = router({ ping: rpc.run(() => "pong" as const) });
-```
-
 ### `.input(schema)`
 
 Any [Standard Schema](https://standardschema.dev/) (`zod`, `valibot`, `arktype`, …). Failed validation is `INVALID_PARAMS` (`-32602`).

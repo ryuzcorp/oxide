@@ -1,35 +1,38 @@
 ---
 title: Overview
-description: One unplugin. One build. A server bundle and an optional client.
+sidebar:
+  icon: layout-dashboard
+description: One plugin, one build - a server bundle, and a client only if you have a page to ship.
 ---
 
-oxidejs is a Vite and Rsbuild plugin. One build writes `dist/server.js`. If `index.html` exists, it also writes `dist/client/`. Server actions live in `*.server.ts` and ride on [tacho](/tacho/overview).
+Use the bundler you already have. `oxidejs` turns it into a server, and a client if you have a page. Server actions ride on [tacho](/tacho/overview).
 
 ## Choosing a stack
 
-Choose oxidejs when you want a deployable tree from the bundler you already use. Stay on a full framework if you need routing, SSR, or a component model. Use [tacho](/tacho/overview) alone if you only need RPC.
+Choose `oxidejs` when you want a deployable tree from [Vite](https://vite.dev/) or [Rsbuild](https://rsbuild.rs/). Stay on a full framework if you need routing, server-rendered pages, or a component model. Use [tacho](/tacho/overview) alone if you only need RPC.
 
-- Choose oxidejs if you want one plugin that builds the server and the client.
-- Choose tacho if you want typed JSON-RPC without a bundler plugin.
+- Choose `oxidejs` if you want one plugin that builds the server and the client.
+- Choose tacho if you want typed RPC without a bundler plugin.
 - Stay on a framework if you need more than a server entry and actions.
 
 ## What you get
 
-- **One output tree** — `dist/server.js`, plus `dist/client/` when there is an `index.html`.
-- **Server actions** — client imports of `*.server.ts` become tacho stubs that POST `/_action`. Server/SSR keeps the real module.
-- **Two presets** — `"fetch"` serves assets. `"celld"` writes `dist/wrangler.jsonc` and leaves assets to Wrangler.
-- **Vite and Rsbuild** — same factory, same output.
+- **One output tree** - a server bundle, plus a client when you have a page.
+- **Server actions** - write a function on the server and call it from the browser. Types stay in sync. The function never ships to the client.
+- **Two [presets](/oxide/configuration#preset)** - fetch serves static files from Node. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers.
+- **[Vite](https://vite.dev/) and [Rsbuild](https://rsbuild.rs/)** - same plugin, same output.
 
 You can call actions from the browser, or skip the client and ship a server-only worker.
 
 ## What it does not do
 
-- No `wrangler dev` / workerd emulation
-- No automatic `celld deploy`
-- No Node-builtin polyfills — a stray Node import fails the build
+- No local Worker emulation
+- No automatic celld deploy
+- No Node-builtin polyfills - a stray Node import fails the build
 
 ## Next steps
 
 - [Quickstart](/oxide/quickstart)
 - [Server entry](/oxide/server-entry)
+- [Server actions](/oxide/server-actions)
 - [Configuration](/oxide/configuration)

@@ -103,10 +103,13 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
       if (id === RESOLVED_VIRTUAL_WORKER_ID) {
         if (!resolved) return;
         this.addWatchFile(resolved.workerEntryAbs);
+        const modules = scanServerFiles(resolved.root);
+        for (const mod of modules) this.addWatchFile(mod.abs);
         return generateWorkerWrapper(resolved.workerEntryAbs, {
           preset: resolved.preset,
           clientDir: resolved.clientDir,
           hasClient: resolved.hasClient,
+          hasActions: modules.length > 0,
         });
       }
       if (isServerFileId(id) && pluginShouldStub(this, extra)) {

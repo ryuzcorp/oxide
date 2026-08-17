@@ -1,31 +1,32 @@
 ---
 title: Getting Started
-description: Pick a starting point and go.
+description: Oxide is a build plugin and a typed RPC layer. Start with one, or use both - they work together or on their own.
 ---
-
-Oxide is two packages. Use them together or on their own.
 
 <CardGroup cols={2}>
   <Card title="oxidejs" href="/oxide/overview" icon="box">
-    Vite/Rsbuild plugin. One build writes `dist/server.js` and an optional client.
+    A Vite or Rsbuild plugin. One build writes a server bundle and, if
+    you have a page, a client.
   </Card>
   <Card title="tacho" href="/tacho/overview" icon="radio">
-    Typed JSON-RPC. Call the same router in-process or over the wire.
+    Typed RPC. Call the same procedures in the same process or from
+    another machine.
   </Card>
 </CardGroup>
 
 ## Build an app
 
-- [Oxide overview](/oxide/overview) — what the plugin emits and when to use it
-- [Oxide quickstart](/oxide/quickstart) — install, add the plugin, run a build
+- [Oxide overview](/oxide/overview) - what the plugin builds and when to use it
+- [Oxide quickstart](/oxide/quickstart) - install the plugin and run a build
 
 ## Call typed RPC
 
-- [Tacho overview](/tacho/overview) — router, schemas, transports
-- [Tacho quickstart](/tacho/quickstart) — define a router, serve it, call it
+- [Tacho overview](/tacho/overview) - procedures, types, and how they travel
+- [Tacho quickstart](/tacho/quickstart) - define procedures, serve them, call them
 
 ## Other resources
 
-- [Server entry](/oxide/server-entry) — `src/server.ts` and `*.server.ts`
-- [Oxide configuration](/oxide/configuration) — presets, paths, wrangler
-- [Tacho API reference](/tacho/api-reference) — exports and transport options
+- [Server entry](/oxide/server-entry) - handle a request, or fall through to static files
+- [Server actions](/oxide/server-actions) - call a server function from the browser
+- [Oxide configuration](/oxide/configuration) - presets, paths, and deploy keys
+- [Tacho API reference](/tacho/api-reference) - every public export

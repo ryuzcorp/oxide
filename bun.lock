@@ -87,7 +87,7 @@
     "templates/xsaf": {
       "name": "template-xsaf",
       "dependencies": {
-        "tacho": "^0.1.0",
+        "tacho": "^0.4.0",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^5.20260815.1",
@@ -2793,8 +2793,6 @@
     "svgo/commander": ["commander@11.1.0", "", {}, "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ=="],
 
     "svgo/css-select": ["css-select@5.2.2", "", { "dependencies": { "boolbase": "^1.0.0", "css-what": "^6.1.0", "domhandler": "^5.0.2", "domutils": "^3.0.1", "nth-check": "^2.0.1" } }, "sha512-TizTzUddG/xYLA3NXodFM0fSbNizXjOKhqiQQwvhlspadZokn1KDy0NZFS0wuEubIYAV5/c1/lAr0TaaFXEXzw=="],
-
-    "template-xsaf/tacho": ["tacho@0.1.0", "", { "peerDependencies": { "crossws": "^0.4.0" }, "optionalPeers": ["crossws"] }, "sha512-tusBjTD7rHLoOIxKZ/0OCOsYOb7ff20sMx7MBtIvHtqb/8gQT8hLskXeEedDe9a1X4le+p7BbabE9H+3iGhH6g=="],
 
     "type-is/content-type": ["content-type@2.1.0", "", {}, "sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag=="],
 

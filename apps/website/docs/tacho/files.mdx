@@ -1,0 +1,58 @@
+---
+title: Files
+sidebar:
+  icon: file
+description: Send a file up, or return one as a download - mix it with regular data.
+---
+
+`File` and `Blob` are first-class. Mix them with objects. [HTTP](/tacho/transport/http) switches to multipart when needed; JSON stays JSON. A lone returned `File` is a download (`Content-Disposition`).
+
+```ts twoslash server.ts
+import { tacho } from "tacho";
+import { z } from "zod";
+
+const rpc = tacho();
+
+export const router = rpc({
+  upload: rpc
+    .input(z.object({ file: z.instanceof(File), note: z.string() }))
+    .run(({ input }) => input.file.name),
+  download: rpc.run(
+    () => new File(["hello"], "hello.txt", { type: "text/plain" }),
+  ),
+});
+
+export type Router = typeof router;
+```
+
+```ts twoslash client.ts
+// @filename: server.ts
+import { tacho } from "tacho";
+import { z } from "zod";
+
+const rpc = tacho();
+export const router = rpc({
+  upload: rpc
+    .input(z.object({ file: z.instanceof(File), note: z.string() }))
+    .run(({ input }) => input.file.name),
+  download: rpc.run(
+    () => new File(["hello"], "hello.txt", { type: "text/plain" }),
+  ),
+});
+export type Router = typeof router;
+// ---cut---
+// @filename: client.ts
+import { createClient } from "tacho/client/http";
+import type { Router } from "./server";
+
+const client = createClient<Router>({
+  url: "http://localhost:3000",
+});
+
+await client.upload({
+  file: new File(["hi"], "hi.txt"),
+  note: "ok",
+});
+const file = await client.download();
+await file.text();
+```

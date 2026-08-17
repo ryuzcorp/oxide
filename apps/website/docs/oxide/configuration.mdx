@@ -1,22 +1,24 @@
 ---
 title: Configuration
-description: Plugin options for oxidejs.
+sidebar:
+  icon: settings
+description: Choose how the app is built and where it lands - a Node server, or a self-hosted worker.
 ---
 
-| Option                         | Default                  | Notes                                |
-| ------------------------------ | ------------------------ | ------------------------------------ |
-| `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`               |
-| `workerEntry`                  | `src/server.ts`          | Relative to project root             |
-| `outDir`                       | `dist`                   | Output root                          |
-| `clientDir`                    | `client`                 | Must stay inside `outDir`            |
-| `wrangler.name`                | required if `emitConfig` |                                      |
-| `wrangler.compatibility_date`  | required if `emitConfig` |                                      |
-| `wrangler.compatibility_flags` | —                        | optional                             |
-| `wrangler.durable_objects`     | —                        | optional                             |
-| `wrangler.migrations`          | —                        | optional                             |
-| `wrangler.services`            | —                        | optional                             |
-| `wrangler.vars`                | —                        | optional                             |
-| `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc` |
+| Option                                      | Default                  | Notes                                |
+| ------------------------------------------- | ------------------------ | ------------------------------------ |
+| [`preset`](#preset)                         | `"fetch"`                | `"fetch"` or `"celld"`               |
+| [`workerEntry`](#workerentry)               | `src/server.ts`          | Relative to project root             |
+| [`outDir`](#outdir)                         | `dist`                   | Output root                          |
+| [`clientDir`](#clientdir)                   | `client`                 | Must stay inside `outDir`            |
+| [`wrangler.name`](#wrangler)                | required if `emitConfig` |                                      |
+| [`wrangler.compatibility_date`](#wrangler)  | required if `emitConfig` |                                      |
+| [`wrangler.compatibility_flags`](#wrangler) | -                        | optional                             |
+| [`wrangler.durable_objects`](#wrangler)     | -                        | optional                             |
+| [`wrangler.migrations`](#wrangler)          | -                        | optional                             |
+| [`wrangler.services`](#wrangler)            | -                        | optional                             |
+| [`wrangler.vars`](#wrangler)                | -                        | optional                             |
+| [`emitConfig`](#emitconfig)                 | `true` on `celld`        | Set `false` to skip `wrangler.jsonc` |
 
 `main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 
@@ -28,3 +30,27 @@ oxide({
   wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
 });
 ```
+
+## preset
+
+`"fetch"` or `"celld"`. fetch serves static files from Node. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers.
+
+## workerEntry
+
+Default `src/server.ts`. Path to the server entry, relative to the project root. See [Server entry](/oxide/server-entry).
+
+## outDir
+
+Default `dist`. Root of the build output.
+
+## clientDir
+
+Default `client`. Client subdirectory under [`outDir`](#outdir). Must stay inside the output root.
+
+## wrangler
+
+Fields merged into the generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is on. `name` and `compatibility_date` are required. Unknown keys fail at build time.
+
+## emitConfig
+
+Defaults to on for `"celld"`, off for `"fetch"`. Set `false` to skip writing `wrangler.jsonc`.

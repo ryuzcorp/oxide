@@ -1,0 +1,64 @@
+---
+title: HTTP
+description: Serve your procedures over HTTP and call them from a typed client.
+---
+
+`handle(router, opts?)` from `tacho/transport/fetch` is `(Request) => Promise<Response>`. POST only. Puts `req` on context. CORS is not built in - wrap `handle()`.
+
+```ts twoslash
+// @noErrors
+import { serve } from "srvx";
+import { handle } from "tacho/transport/fetch";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+// ---cut---
+serve({
+  fetch: handle(router, {
+    path: "/rpc",
+    createContext: (req) => ({
+      user: req.headers.get("x-user") ?? undefined,
+    }),
+    onError: (err, req) => console.error(req.url, err),
+  }),
+});
+```
+
+| option          |                                                           |
+| --------------- | --------------------------------------------------------- |
+| `path`          | Other paths → 404.                                        |
+| `createContext` | Merged onto `{ req }`. Throw → JSON-RPC `INTERNAL_ERROR`. |
+| `onError`       | Called when `createContext` or the stream throws.         |
+
+Non-POST → `405` + `Allow: POST`. Notification (no `id`) → `204`.
+
+`createClient` from `tacho/client/http` is a typed proxy over POST.
+
+```ts twoslash
+import { createClient } from "tacho/client/http";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+type Router = typeof router;
+const token = "secret";
+// ---cut---
+const client = createClient<Router>({
+  url: "http://localhost:3000",
+  headers: () => ({ authorization: `Bearer ${token}` }),
+  signal: AbortSignal.timeout(5_000),
+});
+
+await client.ping();
+await client.ping(undefined, { signal: AbortSignal.timeout(1_000) });
+```
+
+| option    |                                                            |
+| --------- | ---------------------------------------------------------- |
+| `url`     | POST target.                                               |
+| `headers` | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
+| `signal`  | Default abort. Per-call: `client.ping(input, { signal })`. |
+| `fetch`   | Custom `fetch`.                                            |
+
+`async function*` over this transport is [SSE](/tacho/sse-streaming). `File` / `Blob` in params or returns is [Files](/tacho/files).

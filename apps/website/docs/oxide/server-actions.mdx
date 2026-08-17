@@ -1,0 +1,34 @@
+---
+title: Server Actions
+sidebar:
+  icon: zap
+description: Write a function on the server and call it from the browser - types stay in sync, the function never ships to the client.
+---
+
+Server actions ride on [tacho](/tacho/overview). Install it next to `oxidejs`:
+
+```package-install
+npm i tacho
+```
+
+Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and [Vite](https://vite.dev/) SSR (`import.meta.env.SSR === true`) keep the real functions. Method names are `<file>.<fn>` (`test.ping`).
+
+```ts twoslash src/test.server.ts
+export async function ping() {
+  return "pong" as const;
+}
+```
+
+```ts twoslash src/client.ts
+// @filename: test.server.ts
+export async function ping() {
+  return "pong" as const;
+}
+// ---cut---
+// @filename: client.ts
+import { ping } from "./test.server";
+
+const result = await ping();
+```
+
+`async function*` exports stream over tacho SSE. `vite dev` and `rsbuild dev` serve `/_action` via middleware.

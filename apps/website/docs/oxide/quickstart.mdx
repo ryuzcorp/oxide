@@ -1,18 +1,14 @@
 ---
 title: Quickstart
-description: Install oxidejs and run the common workflows.
+sidebar:
+  icon: rocket
+description: Install the plugin, write a server, and run a production build with Vite or Rsbuild.
 ---
-
-This page shows the recommended setup for oxidejs and the most common workflows, with copy-paste commands.
 
 ## Install
 
 ```package-install
 npm i -D oxidejs
-```
-
-```package-install
-npm i tacho
 ```
 
 Extend the TypeScript config:
@@ -22,6 +18,8 @@ Extend the TypeScript config:
 ```
 
 ## Add the plugin
+
+Use [Vite](https://vite.dev/) or [Rsbuild](https://rsbuild.rs/). Same plugin, same output.
 
 <Tabs>
   <Tab title="Vite">
@@ -75,38 +73,19 @@ Add scripts to `package.json`:
   </Tab>
 </Tabs>
 
-## Write an entry and an action
+## Write a server entry
 
 ```ts twoslash src/server.ts
 export default {
   fetch(request: Request) {
-    if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
+    if (new URL(request.url).pathname === "/api/ok") {
+      return new Response("ok");
+    }
   },
 };
 ```
 
 Return `undefined` to fall through to static files / `index.html`.
-
-```ts twoslash src/test.server.ts
-export async function ping() {
-  return "pong";
-}
-```
-
-```ts twoslash src/client.ts
-// @filename: test.server.ts
-export async function ping() {
-  return "pong";
-}
-// ---cut---
-// @filename: client.ts
-import { ping } from "./test.server";
-
-console.log(await ping());
-//                   ^?
-```
-
-`vite dev` and `rsbuild dev` serve `/_action` via middleware. Client imports of `*.server.ts` are stubs. Server and Vite SSR keep the real functions (`import.meta.env.SSR`).
 
 ## Build and run
 
@@ -119,7 +98,9 @@ No `index.html` → only `dist/server.js`. With `index.html` → client assets i
 
 ## Common workflows
 
-### Cloudflare Worker (`celld`)
+### celld
+
+celld is a self-hosted alternative to Cloudflare Workers. It is not Cloudflare.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -130,7 +111,7 @@ oxide({
 });
 ```
 
-`"celld"` skips asset serving (Wrangler `ASSETS` does that) and writes `dist/wrangler.jsonc`.
+[`preset: "celld"`](/oxide/configuration#preset) writes `dist/wrangler.jsonc` and skips asset serving (`ASSETS` does that). See [`wrangler`](/oxide/configuration#wrangler).
 
 ### Server only
 
@@ -138,6 +119,6 @@ Leave out `index.html`. The plugin emits `dist/server.js` and does not build a c
 
 ## Next steps
 
-- [Server entry](/oxide/server-entry) — `src/server.ts`, fallback, `*.server.ts`
-- [Configuration](/oxide/configuration) — presets, paths, wrangler keys
-- [Tacho quickstart](/tacho/quickstart) — the RPC layer actions ride on
+- [Server entry](/oxide/server-entry) - `src/server.ts` and fallback
+- [Server actions](/oxide/server-actions) - `*.server.ts` and tacho
+- [Configuration](/oxide/configuration) - [`preset`](/oxide/configuration#preset), paths, [`wrangler`](/oxide/configuration#wrangler) keys

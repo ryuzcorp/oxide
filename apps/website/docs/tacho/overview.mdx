@@ -1,33 +1,36 @@
 ---
 title: Overview
-description: Typed JSON-RPC you can call in-process or over the wire.
+sidebar:
+  icon: layout-dashboard
+description: Define procedures once, then call them in the same process or from another machine - the types are the same.
 ---
 
-tacho is JSON-RPC you never write a client for. Define a router. Call it in-process. Serve it over fetch, SSE, or WebSocket. `typeof router` is the client.
+tacho is RPC you never write a client for. Define a router. Call it in the same process. Serve it over HTTP, a stream, or a WebSocket. The router type is the client.
 
-oxidejs server actions ride on tacho. You can also use tacho with no bundler plugin.
+`oxidejs` server actions ride on tacho. You can also use tacho with no bundler plugin.
 
 ## Choosing an RPC layer
 
-Choose tacho when you want typed procedures that work the same locally and on the wire. Use [oxidejs](/oxide/overview) when you also want the Vite/Rsbuild build. Stay on another RPC stack if you already depend on that ecosystem.
+Choose tacho when you want typed procedures that work the same locally and over the network. Use [oxidejs](/oxide/overview) when you also want the [Vite](https://vite.dev/) or [Rsbuild](https://rsbuild.rs/) build. Stay on another RPC stack if you already depend on that ecosystem.
 
-- Choose tacho if you want JSON-RPC, Standard Schema, and a typed proxy.
-- Choose oxidejs if you want actions plus a server bundle.
-- Wrap `handle()` yourself if you need CORS or a custom HTTP path.
+- Choose tacho if you want JSON-RPC, a schema you already use, and a typed client.
+- Choose `oxidejs` if you want actions plus a server bundle.
+- Wrap the HTTP handler yourself if you need CORS or a custom path.
 
 ## What you get
 
-- **One type** — `typeof router` is the client. Nested paths are `user.get`.
-- **JSON-RPC 2.0** — batch, notifications, `rpc.*` reserved.
-- **Runtime-agnostic** — `handle()` is `(Request) => Response`.
-- **Standard Schema** — `zod`, `valibot`, `arktype`, …
-- **Onion middleware** — `return next({ ctx })`. Skip `next()` to skip the handler.
-- **SSE, files, WebSocket** — `async function*` over fetch. `File` / `Blob` in params or returns.
+- **One type** - the router type is the client. Nested paths read like `user.get`.
+- **JSON-RPC** - batch, notifications, reserved method names. Works with any JSON-RPC client.
+- **Any runtime** - the handler takes a request and returns a response.
+- **Your schema** - Zod, Valibot, ArkType, or anything else that speaks Standard Schema.
+- **Middleware** - run code around a procedure. Add a user, skip the handler, or change the result.
+- **Streams, files, WebSocket** - yield values as they happen. Send or return a file. Share one socket.
 
-Failed input is `INVALID_PARAMS`. Failed output is `INTERNAL_ERROR`. CORS is not built in.
+Bad input is rejected. Bad output is an internal error. CORS is not built in.
 
 ## Next steps
 
 - [Quickstart](/tacho/quickstart)
 - [Router](/tacho/router)
-- [API reference](/tacho/api-reference)
+- [HTTP](/tacho/transport/http)
+- [Files](/tacho/files)

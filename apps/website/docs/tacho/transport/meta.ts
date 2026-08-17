@@ -1,8 +1,8 @@
 import { defineMeta } from "blume";
 
 export default defineMeta({
-  title: "Oxide",
+  title: "Transport",
   display: "group",
   collapsed: false,
-  pages: ["overview", "quickstart", "server-entry", "server-actions", "configuration"],
+  pages: ["http", "websocket"],
 });

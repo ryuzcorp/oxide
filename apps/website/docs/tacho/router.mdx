@@ -1,17 +1,19 @@
 ---
 title: Router
-description: tacho(), nested procedures, input and output schemas.
+sidebar:
+  icon: git-branch
+description: Group procedures into a router, nest them, check their inputs, and call them in the same process.
 ---
 
-`tacho()` creates a procedure builder. Call it as `rpc({ ... })` to make a router. `router(def)` is the same identity helper if you want a free function.
+`tacho()` creates a procedure builder. Call it as `rpc({ ... })` to make a router.
 
 ```ts twoslash
-import { router, tacho } from "tacho";
+import { tacho } from "tacho";
 import { z } from "zod";
 
 const rpc = tacho();
 
-export const app = router({
+export const app = rpc({
   ping: rpc.run(() => "pong" as const),
   user: {
     get: rpc
@@ -22,8 +24,8 @@ export const app = router({
 });
 ```
 
-- **`.input(schema)`** — Standard Schema. Failed input is `INVALID_PARAMS`.
-- **`.output(schema)`** — Failed output is `INTERNAL_ERROR`. Streams check each `yield`.
-- **`.run(fn)`** — Terminal. `fn` gets `{ input, ctx }`. Return a value, a `Promise`, or an `async function*`.
+- **`.input(schema)`** - Standard Schema. Failed input is `INVALID_PARAMS`.
+- **`.output(schema)`** - Failed output is `INTERNAL_ERROR`. Streams check each `yield`.
+- **`.run(fn)`** - Terminal. `fn` gets `{ input, ctx }`. Return a value, a `Promise`, or an `async function*`.
 
 No `.input()` → params are untyped / unused. Nested paths are `user.get`.

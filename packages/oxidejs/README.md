@@ -34,7 +34,7 @@ vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` → `src/server.ts` (`undefined` continues) → static file → `index.html`. No `wrangler.jsonc`.
+Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` (if you have `*.server.ts`) → `src/server.ts` (`undefined` continues) → static file → `index.html`. No `wrangler.jsonc`.
 
 ```ts
 oxide({
@@ -43,11 +43,11 @@ oxide({
 });
 ```
 
-`"celld"` skips asset serving (Wrangler `ASSETS` does that) and writes `dist/wrangler.jsonc`.
+`"celld"` writes `dist/wrangler.jsonc` for celld, a self-hosted alternative to Cloudflare Workers, and skips asset serving (`ASSETS` does that).
 
 ## Server actions
 
-Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Return `undefined` from `src/server.ts` to fall through to static files.
+Install `tacho` if you use actions. Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Return `undefined` from `src/server.ts` to fall through to static files. No `*.server.ts` → the bundle does not import tacho.
 
 ```ts
 // src/test.server.ts

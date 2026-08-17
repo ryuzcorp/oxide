@@ -155,11 +155,17 @@ function pipeResponse(
 
 export function generateWorkerWrapper(
   userWorkerAbs: string,
-  opts: { preset?: OxidejsPreset; clientDir?: string; hasClient?: boolean } = {},
+  opts: {
+    preset?: OxidejsPreset;
+    clientDir?: string;
+    hasClient?: boolean;
+    hasActions?: boolean;
+  } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
   const clientDir = opts.clientDir ?? "client";
   const serveAssets = preset === "fetch" && opts.hasClient === true;
+  const hasActions = opts.hasActions !== false;
   const assetBlock = serveAssets
     ? `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
@@ -221,16 +227,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 `
       : "";
+  const actionImports = hasActions
+    ? `import { handle } from "tacho/transport/fetch";
+import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)} });
+`
+    : "";
+  const actionGate = hasActions
+    ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) return __rpc(request);
+    `
+    : "";
   return `export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
-import { handle } from "tacho/transport/fetch";
-import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-${assetBlock}const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)} });
-const app = {
+${actionImports}${assetBlock}const app = {
   ...user,
   async fetch(request, env, ctx) {
-    if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) return __rpc(request);
-    ${afterAction}
+    ${actionGate}${afterAction}
   },
 };
 export default app;

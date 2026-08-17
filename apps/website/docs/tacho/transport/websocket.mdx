@@ -1,0 +1,51 @@
+---
+title: WebSocket
+description: Serve your procedures over a WebSocket and keep one connection for every call.
+---
+
+Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as [HTTP](/tacho/transport/http). Streams are not supported - a stream procedure is `INTERNAL_ERROR`.
+
+```ts twoslash
+// @noErrors
+import { handle } from "tacho/transport/ws";
+import { serve } from "crossws/server";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+// ---cut---
+serve({
+  websocket: handle(router, {
+    path: "/rpc",
+    createContext: (peer) => ({
+      user: String(peer.context["user"] ?? ""),
+    }),
+    onError: (err) => console.error(err),
+  }),
+});
+```
+
+Client from `tacho/client/ws`. One socket. `.ready` and `.close()`.
+
+```ts twoslash
+import { createClient } from "tacho/client/ws";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+type Router = typeof router;
+// ---cut---
+const ws = createClient<Router>({
+  url: "ws://localhost:3000",
+  protocols: "tacho",
+});
+await ws.ready;
+await ws.ping();
+ws.close();
+```
+
+| option      |                                         |
+| ----------- | --------------------------------------- |
+| `url`       | WebSocket URL.                          |
+| `protocols` | Passed to `WebSocket`.                  |
+| `WebSocket` | Custom constructor. Defaults to global. |

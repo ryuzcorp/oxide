@@ -1,30 +1,22 @@
 ---
 title: Server Entry
-description: src/server.ts, static fallback, and server actions.
+sidebar:
+  icon: server
+description: Handle a request in your server entry, or skip it and let static files take over.
 ---
 
-`workerEntry` defaults to `src/server.ts`. Return `undefined` from its `fetch` to fall through to static files / `index.html`.
+Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response.
 
 ```ts twoslash src/server.ts
 export default {
   fetch(request: Request) {
-    if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
+    if (new URL(request.url).pathname === "/api/ok") {
+      return new Response("ok");
+    }
   },
 };
 ```
 
-`*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Method names are `<file>.<fn>` (`test.ping`).
+If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, that means a matching static file, then `index.html`. Without a page, the build is only the server bundle - there is nothing to fall through to.
 
-```ts twoslash
-// @filename: test.server.ts
-export async function ping() {
-  return "pong";
-}
-
-// @filename: client.ts
-import { ping } from "./test.server";
-console.log(await ping());
-//                   ^?
-```
-
-`async function*` exports stream over tacho SSE. `vite dev` and `rsbuild dev` serve `/_action` via middleware.
+To serve typed RPC from this file, set up a tacho router and pass it to `handle()`. See the [Tacho quickstart](/tacho/quickstart).

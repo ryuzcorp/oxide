@@ -1,9 +1,13 @@
 ---
 title: OpenRPC
-description: Walk a router into an OpenRPC document.
+sidebar:
+  icon: file-json
+description: Turn your procedures into an OpenRPC document you can inspect in the playground.
 ---
 
 `toOpenRpc(router)` walks procedures into an [OpenRPC](https://spec.open-rpc.org/) document. Input/output schemas are used when the Standard Schema exposes `jsonSchema`; otherwise `true`. Methods list the JSON-RPC + app error codes.
+
+Paste the document into the [OpenRPC Playground](https://playground.open-rpc.org/) to inspect methods and schemas.
 
 ```ts twoslash
 import { tacho, toOpenRpc } from "tacho";

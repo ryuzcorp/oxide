@@ -92,6 +92,14 @@ describe("codegen", () => {
     expect(code).toContain('new Response("Not Found", { status: 404 })');
   });
 
+  test("wrapper without actions skips tacho", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { hasActions: false });
+    expect(code).not.toContain("tacho");
+    expect(code).not.toContain("virtual:oxide/actions");
+    expect(code).not.toContain("/_action");
+    expect(code).toContain("user.fetch(request, env, ctx)");
+  });
+
   test("stubs client, not worker", () => {
     expect(shouldStubServerModule({ consumer: "client" })).toBe(true);
     expect(shouldStubServerModule({ consumer: "server" })).toBe(false);

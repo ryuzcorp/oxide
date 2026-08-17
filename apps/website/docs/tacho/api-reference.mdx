@@ -1,35 +1,77 @@
 ---
 title: API Reference
-description: Public tacho exports and transport options.
+sidebar:
+  icon: book-marked
+description: A short list of every public export, with links to the pages that explain them.
 ---
 
-## Core
+## `tacho`
 
-`tacho`, `router`, `RpcError`, `rpcResult`, `runOne`, `runBatch`, `resolveProcedure`, `toOpenRpc`, `JSON_RPC_ERROR`, `APP_ERROR_RANGE`
+| export                    | from    |                                                                                                                  |
+| ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `tacho()`                 | `tacho` | Procedure builder. Call it as `rpc({ ... })` to make a [router](/tacho/router).                                  |
+| `router(def)`             | `tacho` | Identity helper. Same as `rpc({ ... })`.                                                                         |
+| `RpcError`                | `tacho` | Throw from a procedure or [middleware](/tacho/middleware). See [errors](/tacho/error-handling).                  |
+| `JSON_RPC_ERROR`          | `tacho` | `-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal. |
+| `APP_ERROR_RANGE`         | `tacho` | `{ min: -32099, max: -32000 }` for your own codes.                                                               |
+| `toOpenRpc(router, info)` | `tacho` | Walk a router into an [OpenRPC](/tacho/openrpc) document.                                                        |
 
-## Fetch
+## Transports
 
-`handle(router, opts?)` from `tacho/transport/fetch` is `(Request) => Promise<Response>`. POST only.
+| export                  | from                    |                                                                                            |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
+| `handle(router, opts?)` | `tacho/transport/fetch` | `(Request) => Promise<Response>`. [HTTP](/tacho/transport/http).                           |
+| `createClient(opts)`    | `tacho/client/http`     | Typed proxy over POST.                                                                     |
+| `handle(router, opts?)` | `tacho/transport/ws`    | [crossws](https://github.com/h3js/crossws) hooks. [WebSocket](/tacho/transport/websocket). |
+| `createClient(opts)`    | `tacho/client/ws`       | One socket. `.ready` and `.close()`.                                                       |
 
-| option          |                                                           |
-| --------------- | --------------------------------------------------------- |
-| `path`          | Other paths → 404.                                        |
-| `createContext` | Merged onto `{ req }`. Throw → JSON-RPC `INTERNAL_ERROR`. |
-| `onError`       | Called when `createContext` or the stream throws.         |
-
-`createClient` from `tacho/client/http`.
-
-| option    |                                                            |
-| --------- | ---------------------------------------------------------- |
-| `url`     | POST target.                                               |
-| `headers` | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
-| `signal`  | Default abort. Per-call: `client.ping(input, { signal })`. |
-| `fetch`   | Custom `fetch`.                                            |
-
-## WebSocket
-
-`handle` from `tacho/transport/ws` (optional `crossws` peer). `createClient` from `tacho/client/ws`. One socket. `.ready` and `.close()`.
+A `File` or `Blob` in params or the result is [Files](/tacho/files). An `async function*` is [SSE](/tacho/sse-streaming).
 
 ## Low-level
 
-`createProxyClient(send)` builds a typed proxy over your own send function.
+For a custom transport.
+
+```ts twoslash
+import {
+  createProxyClient,
+  resolveProcedure,
+  rpcResult,
+  runBatch,
+  runOne,
+  tacho,
+} from "tacho";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+const ctx = { req: new Request("http://localhost") };
+// ---cut---
+resolveProcedure(router, "ping");
+await runOne(router, { jsonrpc: "2.0", method: "ping", id: 1 }, ctx);
+await runBatch(
+  router,
+  [{ jsonrpc: "2.0", method: "ping", id: 1 }],
+  ctx,
+);
+rpcResult({ result: "pong" });
+rpcResult({ error: { message: "nope", code: -32603 } });
+
+const client = createProxyClient<typeof router>(
+  async (method, params) => {
+    const res = await runOne(
+      router,
+      { jsonrpc: "2.0", method, params, id: 1 },
+      ctx,
+    );
+    return rpcResult(res ?? {});
+  },
+);
+await client.ping();
+```
+
+| export                             |                                                          |
+| ---------------------------------- | -------------------------------------------------------- |
+| `resolveProcedure(router, method)` | Procedure, or `undefined`.                               |
+| `runOne(router, request, ctx)`     | One JSON-RPC call. No `id` → `undefined` (notification). |
+| `runBatch(router, requests, ctx)`  | Many calls. All notifications → `undefined`.             |
+| `rpcResult(body)`                  | Result, or throws `RpcError`.                            |
+| `createProxyClient(send)`          | Typed proxy over your own `send`.                        |
