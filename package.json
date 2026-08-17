@@ -9,6 +9,7 @@
   "scripts": {
     "test": "bun run --filter './packages/*' test",
     "build": "bun run --filter './packages/*' build",
+    "typecheck": "bun run --filter './packages/*' typecheck",
     "lint": "oxlint",
     "fmt": "oxfmt --write ."
   },

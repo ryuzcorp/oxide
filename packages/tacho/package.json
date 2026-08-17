@@ -12,12 +12,13 @@
     "typescript",
     "websocket"
   ],
-  "homepage": "https://github.com/ryuzcorp/tacho#readme",
-  "bugs": "https://github.com/ryuzcorp/tacho/issues",
+  "homepage": "https://github.com/ryuzcorp/oxide/tree/main/packages/tacho#readme",
+  "bugs": "https://github.com/ryuzcorp/oxide/issues",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ryuzcorp/tacho.git"
+    "url": "git+https://github.com/ryuzcorp/oxide.git",
+    "directory": "packages/tacho"
   },
   "files": [
     "dist"

@@ -1,7 +1,23 @@
 {
   "name": "oxidejs",
   "version": "0.1.0",
-  "private": true,
+  "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
+  "keywords": [
+    "cloudflare",
+    "rsbuild",
+    "server-actions",
+    "typescript",
+    "unplugin",
+    "vite"
+  ],
+  "homepage": "https://github.com/ryuzcorp/oxide/tree/main/packages/oxidejs#readme",
+  "bugs": "https://github.com/ryuzcorp/oxide/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryuzcorp/oxide.git",
+    "directory": "packages/oxidejs"
+  },
   "files": [
     "dist",
     "virtual.d.ts",
@@ -9,18 +25,19 @@
     "tsconfig.app.json"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
-      "default": "./dist/index.mjs"
+      "import": "./dist/index.mjs"
     },
     "./vite": {
       "types": "./dist/vite.d.mts",
-      "default": "./dist/vite.mjs"
+      "import": "./dist/vite.mjs"
     },
     "./rsbuild": {
       "types": "./dist/rsbuild.d.mts",
-      "default": "./dist/rsbuild.mjs"
+      "import": "./dist/rsbuild.mjs"
     },
     "./virtual": {
       "types": "./virtual.d.ts"
@@ -33,13 +50,16 @@
   "scripts": {
     "build": "tsdown",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "fmt": "oxfmt --write .",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "unplugin": "^3.3.0"
   },
   "devDependencies": {
-    "tacho": "^0.3.2"
+    "tacho": "workspace:*"
   },
   "peerDependencies": {
     "@rsbuild/core": "*",
@@ -56,5 +76,8 @@
     "tacho": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
