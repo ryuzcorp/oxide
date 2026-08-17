@@ -13,14 +13,15 @@ import {
 } from "./actions";
 
 describe("parseExportedNames", () => {
-  test("finds functions and consts", () => {
+  test("finds functions, generators, and consts", () => {
     expect(
       parseExportedNames(`
         export async function ping() { return "pong" }
         export function echo(x: string) { return x }
+        export async function* ticks() { yield 0 }
         export const add = async (a: number, b: number) => a + b
       `),
-    ).toEqual(["ping", "echo", "add"]);
+    ).toEqual(["ping", "echo", "ticks", "add"]);
   });
 });
 
@@ -55,11 +56,12 @@ describe("codegen", () => {
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('"test": {');
     expect(code).toContain('"ping": rpc.run');
+    expect(code).toContain(".apply(null,");
     expect(code).not.toContain('"_action": {');
   });
 
   test("fetch wrapper tries server.ts then assets", () => {
-    const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch" });
+    const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
     expect(code).toContain('export * from "/app/src/server.ts"');
     expect(code).toContain('import user from "/app/src/server.ts"');
     expect(code).toContain('import actions from "virtual:oxide/actions"');
@@ -70,6 +72,15 @@ describe("codegen", () => {
     expect(code).toContain("await __asset(request)");
     expect(code).toContain("await __asset(request, true)");
     expect(code).toContain("createServer");
+    expect(code).toContain("response.body.getReader()");
+  });
+
+  test("fetch wrapper without client skips assets", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch" });
+    expect(code).not.toContain("node:fs/promises");
+    expect(code).toContain("createServer");
+    expect(code).toContain("user.fetch(request, env, ctx)");
+    expect(code).not.toContain("__asset");
   });
 
   test("celld wrapper does not serve assets or listen", () => {
@@ -117,6 +128,37 @@ describe("generated router", () => {
         id: 1,
         result: "hello",
       });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("streams async generators as SSE", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-stream-"));
+    fs.writeFileSync(
+      path.join(root, "ticks.server.ts"),
+      `export async function* ticks() { yield 0; yield 1; return 2 }\n`,
+    );
+    const out = path.join(root, "actions.mjs");
+    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
+    try {
+      const { default: actions } = await import(out);
+      const res = await handle(actions, { path: "/_action" })(
+        new Request("http://localhost/_action", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ticks.ticks" }),
+        }),
+      );
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      expect(await res.text()).toBe(
+        [
+          'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
+          'data: {"jsonrpc":"2.0","result":1,"id":1}\n',
+          'event: done\ndata: {"jsonrpc":"2.0","result":2,"id":1}\n',
+          "",
+        ].join("\n"),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -84,6 +84,19 @@ user: {
 
 No `.input()` → params are untyped / unused.
 
+### `.output(schema)`
+
+Same Standard Schema as `.input()`. Failed validation is `INTERNAL_ERROR` (`-32603`, `Invalid result`). The handler return type must match; the IDE flags a mismatch. Streams check each `yield` (and a defined `return`).
+
+```ts
+user: {
+  get: rpc
+    .input(z.object({ id: z.string() }))
+    .output(z.object({ id: z.string(), name: z.string() }))
+    .run(({ input }) => ({ id: input.id, name: "Ada" })),
+}
+```
+
 ### `.run(fn)`
 
 Terminal. `fn` gets `{ input, ctx }`. Return a value, a `Promise`, or an `async function*` (stream).
@@ -264,7 +277,7 @@ rpcResult({ error: { message: "nope", code: -32603 } }); // throws
 
 ## OpenRPC
 
-`toOpenRpc(router)` walks procedures into an [OpenRPC](https://spec.open-rpc.org/) document. Input schema is used when the Standard Schema exposes `jsonSchema`; otherwise `true`. Result is always `true` (TS return types don’t exist at runtime). Methods list the JSON-RPC + app error codes.
+`toOpenRpc(router)` walks procedures into an [OpenRPC](https://spec.open-rpc.org/) document. Input/output schemas are used when the Standard Schema exposes `jsonSchema`; otherwise `true`. Methods list the JSON-RPC + app error codes.
 
 ```ts
 import { toOpenRpc } from "tacho";

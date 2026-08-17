@@ -410,6 +410,31 @@ describe("dispatch", () => {
     expect(resolveProcedure(app, "ping")?.__rpc).toBe(true);
   });
 
+  test("output schema parses the result", async () => {
+    const str = schema((v) =>
+      typeof v === "string" ? { value: v } : { issues: [{ message: "str" }] },
+    );
+    const app = rpc({
+      ok: rpc.output(str).run(() => "pong"),
+      bad: rpc.output(str).run(() => 1 as unknown as string),
+    });
+    expect(await app.ok()).toBe("pong");
+    await expect(app.bad()).rejects.toMatchObject({
+      message: "Invalid result",
+      code: -32603,
+    });
+    expect(await runOne(app, { jsonrpc: "2.0", method: "ok", id: 1 }, {})).toEqual({
+      jsonrpc: "2.0",
+      result: "pong",
+      id: 1,
+    });
+    expect(await runOne(app, { jsonrpc: "2.0", method: "bad", id: 2 }, {})).toMatchObject({
+      error: { code: -32603, message: "Invalid result" },
+    });
+    // @ts-expect-error output must match schema
+    rpc.output(str).run(() => 1);
+  });
+
   test("undefined result becomes null", async () => {
     const silent = rpc({ nada: rpc.run(() => undefined) });
     expect(await runOne(silent, { jsonrpc: "2.0", method: "nada", id: 1 }, {})).toEqual({
@@ -744,6 +769,50 @@ describe("sse stream", () => {
     );
   });
 
+  test("output schema checks each yield", async () => {
+    const num = schema((v) =>
+      typeof v === "number" ? { value: v } : { issues: [{ message: "num" }] },
+    );
+    const app = streamRpc({
+      ok: streamRpc.output(num).run(async function* () {
+        yield 0;
+        yield 1;
+        return 2;
+      }),
+      bad: streamRpc.output(num).run(async function* () {
+        yield 0;
+        yield "nope" as unknown as number;
+      }),
+    });
+    const handler = handle(app);
+    const post = (method: string) =>
+      handler(
+        new Request("http://x/rpc", {
+          method: "POST",
+          body: JSON.stringify({ jsonrpc: "2.0", method, id: 1 }),
+        }),
+      );
+    expect(await (await post("ok")).text()).toBe(
+      [
+        'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
+        'data: {"jsonrpc":"2.0","result":1,"id":1}\n',
+        'event: done\ndata: {"jsonrpc":"2.0","result":2,"id":1}\n',
+        "",
+      ].join("\n"),
+    );
+    expect(await (await post("bad")).text()).toBe(
+      [
+        'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
+        'event: error\ndata: {"jsonrpc":"2.0","error":{"code":-32603,"message":"Invalid result","data":[{"message":"num"}]},"id":1}\n',
+        "",
+      ].join("\n"),
+    );
+    // @ts-expect-error yield must match output schema
+    streamRpc.output(num).run(async function* () {
+      yield "nope";
+    });
+  });
+
   test("throw becomes error event", async () => {
     const res = await post({ jsonrpc: "2.0", method: "boom", id: 1 });
     expect(await res.text()).toBe(
@@ -892,5 +961,19 @@ describe("toOpenRpc", () => {
     expect(spec.methods.find((m) => m.name === "user.get")?.params).toEqual([
       { name: "params", schema: true, required: true },
     ]);
+  });
+
+  test("uses output schema when present", () => {
+    const out = Object.assign(
+      schema((v) => ({ value: v })),
+      {
+        "~standard": {
+          validate: (v: unknown) => ({ value: v }),
+          jsonSchema: { type: "string" },
+        },
+      },
+    );
+    const spec = toOpenRpc(rpc({ echo: rpc.output(out).run(() => "ok") }));
+    expect(spec.methods[0]?.result).toEqual({ name: "result", schema: { type: "string" } });
   });
 });

@@ -1,5 +1,6 @@
 import { createUnplugin } from "unplugin";
 import type { UnpluginFactory } from "unplugin";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -14,14 +15,60 @@ import {
   RESOLVED_VIRTUAL_ACTIONS_ID,
   RESOLVED_VIRTUAL_WORKER_ID,
   scanServerFiles,
-  sendWebResponse,
+  sendWebResponseFrom,
   shouldStubServerModule,
   VIRTUAL_ACTIONS_ID,
   VIRTUAL_WORKER_ID,
 } from "./actions";
 import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
 import type { OxidejsOptions, ResolvedOptions } from "./types";
-import { applyViteEnvironments, type ViteUserConfig } from "./worker-build";
+import {
+  applyRsbuildEnvironments,
+  applyViteEnvironments,
+  type RsbuildUserConfig,
+  type ViteUserConfig,
+} from "./worker-build";
+
+type ConnectReq = IncomingMessage;
+type ConnectRes = ServerResponse;
+type ConnectNext = (err?: unknown) => void;
+
+function actionMiddleware(loadRouter: () => Promise<unknown>) {
+  return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
+    if ((req.url ?? "").split("?")[0] !== ACTION_PATH) {
+      next();
+      return;
+    }
+    void (async () => {
+      const { handle } = await import("tacho/transport/fetch");
+      const response = await handle(await loadRouter(), { path: ACTION_PATH })(
+        await nodeToWebRequest(req),
+      );
+      await sendWebResponseFrom(req, res, response);
+    })().catch(next);
+  };
+}
+
+function previewMiddleware(file: string) {
+  return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
+    void (async () => {
+      const mod = (await import(pathToFileURL(file).href)) as {
+        default: { fetch: (request: Request) => Promise<Response> };
+      };
+      await sendWebResponseFrom(req, res, await mod.default.fetch(await nodeToWebRequest(req)));
+    })().catch(next);
+  };
+}
+
+interface RsbuildServer {
+  middlewares: { use: (fn: (req: ConnectReq, res: ConnectRes, next: ConnectNext) => void) => void };
+}
+
+interface RsbuildPluginApi {
+  modifyRsbuildConfig: (fn: (config: RsbuildUserConfig) => void) => void;
+  onBeforeStartDevServer: (fn: (ctx: { server: RsbuildServer }) => void) => void;
+  onBeforeStartPreviewServer?: (fn: (ctx: { server: RsbuildServer }) => void) => void;
+}
 
 export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (options) => {
   let resolved: ResolvedOptions | undefined;
@@ -30,7 +77,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
   return {
     name: "oxidejs",
     buildStart() {
-      resolved = resolveOptions(options, process.cwd());
+      resolved ??= resolveOptions(options, process.cwd());
       emitState.emitted = false;
     },
     resolveId(id) {
@@ -50,25 +97,26 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
         return generateWorkerWrapper(resolved.workerEntryAbs, {
           preset: resolved.preset,
           clientDir: resolved.clientDir,
+          hasClient: resolved.hasClient,
         });
       }
       return;
     },
+    transform(code, id) {
+      const environment = (this as { environment?: { name?: string; consumer?: string } })
+        .environment;
+      if (!isServerFileId(id) || !shouldStubServerModule(environment)) return;
+      const file = id.split("?")[0] ?? id;
+      return generateClientStub({
+        key: moduleKey(file),
+        exports: parseExportedNames(code),
+      });
+    },
     vite: {
       config(config) {
         const root = typeof config.root === "string" ? config.root : process.cwd();
-        resolved = resolveOptions(options, root);
+        resolved = resolveOptions(options, root, config);
         applyViteEnvironments(config as ViteUserConfig, resolved);
-      },
-      transform(code, id) {
-        const environment = (this as { environment?: { name?: string; consumer?: string } })
-          .environment;
-        if (!isServerFileId(id) || !shouldStubServerModule(environment)) return;
-        const file = id.split("?")[0] ?? id;
-        return generateClientStub({
-          key: moduleKey(file),
-          exports: parseExportedNames(code),
-        });
       },
       configureServer(server) {
         const invalidateActions = () => {
@@ -80,33 +128,39 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
         server.watcher.on("all", (_event, file) => {
           if (isServerFileId(file)) invalidateActions();
         });
-        server.middlewares.use((req, res, next) => {
-          if ((req.url ?? "").split("?")[0] !== ACTION_PATH) {
-            next();
-            return;
-          }
-          void (async () => {
-            const { handle } = await import("tacho/transport/fetch");
-            const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as {
-              default: unknown;
-            };
-            const response = await handle(mod.default, { path: ACTION_PATH })(
-              await nodeToWebRequest(req),
-            );
-            await sendWebResponse(res, response);
-          })().catch(next);
-        });
+        server.middlewares.use(
+          actionMiddleware(async () => {
+            const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
+            return mod.default;
+          }),
+        );
       },
       configurePreviewServer(server) {
         if (resolved?.preset !== "fetch") return;
-        const file = path.join(resolved.outDir, "server.js");
-        server.middlewares.use((req, res, next) => {
-          void (async () => {
-            const mod = (await import(pathToFileURL(file).href)) as {
-              default: { fetch: (request: Request) => Promise<Response> };
-            };
-            await sendWebResponse(res, await mod.default.fetch(await nodeToWebRequest(req)));
-          })().catch(next);
+        server.middlewares.use(previewMiddleware(path.join(resolved.outDir, "server.js")));
+      },
+    },
+    rsbuild: {
+      setup(api: RsbuildPluginApi) {
+        api.modifyRsbuildConfig((config) => {
+          const root = typeof config.root === "string" ? config.root : process.cwd();
+          resolved = resolveOptions(options, root, config);
+          applyRsbuildEnvironments(config, resolved);
+        });
+        api.onBeforeStartDevServer(({ server }) => {
+          server.middlewares.use(
+            actionMiddleware(async () => {
+              const root = resolved?.root ?? process.cwd();
+              const code = generateActionsModule(scanServerFiles(root));
+              const data = `data:text/javascript,${encodeURIComponent(code)}`;
+              const mod = (await import(data)) as { default: unknown };
+              return mod.default;
+            }),
+          );
+        });
+        api.onBeforeStartPreviewServer?.(({ server }) => {
+          if (resolved?.preset !== "fetch") return;
+          server.middlewares.use(previewMiddleware(path.join(resolved.outDir, "server.js")));
         });
       },
     },

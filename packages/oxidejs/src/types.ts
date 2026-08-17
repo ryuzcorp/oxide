@@ -41,4 +41,6 @@ export interface ResolvedOptions {
   clientDir: string;
   wrangler: OxidejsWranglerOptions | undefined;
   emitConfig: boolean;
+  /** False when there is no index.html — server-only, no client env or assets. */
+  hasClient: boolean;
 }

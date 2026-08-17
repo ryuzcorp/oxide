@@ -4,7 +4,9 @@
   "private": true,
   "files": [
     "dist",
-    "virtual.d.ts"
+    "virtual.d.ts",
+    "client.d.ts",
+    "tsconfig.app.json"
   ],
   "type": "module",
   "exports": {
@@ -22,7 +24,11 @@
     },
     "./virtual": {
       "types": "./virtual.d.ts"
-    }
+    },
+    "./client": {
+      "types": "./client.d.ts"
+    },
+    "./tsconfig": "./tsconfig.app.json"
   },
   "scripts": {
     "build": "tsdown",

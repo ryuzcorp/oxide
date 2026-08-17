@@ -29,6 +29,33 @@ describe("resolveOptions", () => {
     expect(resolved.clientDir).toBe("client");
     expect(resolved.emitConfig).toBe(false);
     expect(resolved.workerEntryAbs).toBe(path.resolve(root, "src/server.ts"));
+    expect(resolved.hasClient).toBe(false);
+  });
+
+  test("detects client when index.html exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
+    expect(resolveOptions({}, root).hasClient).toBe(true);
+  });
+
+  test("detects html from vite rollupOptions.input", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "app.html"), "<html></html>");
+    expect(
+      resolveOptions({}, root, { build: { rollupOptions: { input: "app.html" } } }).hasClient,
+    ).toBe(true);
+    expect(resolveOptions({}, root).hasClient).toBe(false);
+  });
+
+  test("ignores non-html vite input even if index.html exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
+    expect(
+      resolveOptions({}, root, { build: { rolldownOptions: { input: "src/main.ts" } } }).hasClient,
+    ).toBe(false);
   });
 
   test("celld requires wrangler.name and compatibility_date", () => {
@@ -68,7 +95,10 @@ describe("resolveOptions", () => {
   });
 
   test("rejects clientDir that escapes outDir", () => {
-    expect(() => resolveOptions({ clientDir: "../escape" }, process.cwd())).toThrow(
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
+    expect(() => resolveOptions({ clientDir: "../escape" }, root)).toThrow(
       "clientDir must resolve inside outDir",
     );
   });
@@ -81,7 +111,7 @@ describe("resolveOptions", () => {
 });
 
 describe("tryEmitWranglerConfig", () => {
-  test("no-ops if server.js or client dir is missing", () => {
+  test("no-ops if server.js is missing", () => {
     const root = makeTempRoot();
     temps.push(root);
     const resolved = resolveOptions({ preset: "celld", wrangler }, root);
@@ -90,9 +120,37 @@ describe("tryEmitWranglerConfig", () => {
     expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(false);
   });
 
+  test("no-ops if client dir is missing when index.html exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
+    const resolved = resolveOptions({ preset: "celld", wrangler }, root);
+    fs.mkdirSync(resolved.outDir, { recursive: true });
+    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
+    tryEmitWranglerConfig(resolved, createEmitState());
+    expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(false);
+  });
+
+  test("writes wrangler.jsonc without assets when there is no index.html", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    const resolved = resolveOptions({ preset: "celld", wrangler }, root);
+    fs.mkdirSync(resolved.outDir, { recursive: true });
+    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
+    tryEmitWranglerConfig(resolved, createEmitState());
+    expect(
+      JSON.parse(fs.readFileSync(path.join(resolved.outDir, "wrangler.jsonc"), "utf8")),
+    ).toEqual({
+      name: "vite-cf",
+      main: "./server.js",
+      compatibility_date: "2026-01-01",
+    });
+  });
+
   test("writes wrangler.jsonc once when both outputs exist", () => {
     const root = makeTempRoot();
     temps.push(root);
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
     const resolved = resolveOptions(
       {
         preset: "celld",

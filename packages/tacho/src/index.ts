@@ -66,6 +66,7 @@ export type ProcedureDef<C extends Context, In, Out> = {
   (input?: In, ctx?: C): Promise<Out>;
   __rpc: true;
   inputSchema?: Schema<In> | undefined;
+  outputSchema?: Schema<Out> | undefined;
   middlewares: Middleware<C>[];
   run: (opts: { input: In; ctx: C }) => Out | Promise<Out>;
 };
@@ -76,49 +77,95 @@ export type AnyRouter = {
 
 export const router = <T extends AnyRouter>(def: T): T => def;
 
-type Builder<C extends Context, In = undefined> = {
+declare const unset: unique symbol;
+type Unset = typeof unset;
+
+type HandlerResult<Out> =
+  | Out
+  | Promise<Out>
+  | AsyncGenerator<Out, unknown, unknown>
+  | Promise<AsyncGenerator<Out, unknown, unknown>>;
+
+type Builder<C extends Context, In = undefined, Out = Unset> = {
   <T extends AnyRouter>(def: T): T;
-  use(mw: Middleware<C>): Builder<C, In>;
-  input<Out>(schema: Schema<Out>): Builder<C, Out>;
-  run<Out>(fn: (opts: { input: In; ctx: C }) => Out | Promise<Out>): ProcedureDef<C, In, Out>;
+  use(mw: Middleware<C>): Builder<C, In, Out>;
+  input<Next>(schema: Schema<Next>): Builder<C, Next, Out>;
+  output<Next>(schema: Schema<Next>): Builder<C, In, Next>;
+  run: [Out] extends [Unset]
+    ? <R>(fn: (opts: { input: In; ctx: C }) => R | Promise<R>) => ProcedureDef<C, In, R>
+    : (fn: (opts: { input: In; ctx: C }) => HandlerResult<Out>) => ProcedureDef<C, In, Out>;
 };
 
-const builder = <C extends Context, In = undefined>(
+async function parseWith(
+  schema: Schema | undefined,
+  value: unknown,
+  error: { code: number; message: string },
+): Promise<unknown> {
+  if (!schema) return value;
+  const result = await schema["~standard"].validate(value);
+  if (result.issues) throw new RpcError({ ...error, data: result.issues });
+  return result.value;
+}
+
+const builder = <C extends Context, In = undefined, Out = Unset>(
   middlewares: Middleware<C>[] = [],
   inputSchema?: Schema<In>,
-): Builder<C, In> =>
+  outputSchema?: Schema,
+): Builder<C, In, Out> =>
   Object.assign(<T extends AnyRouter>(def: T): T => def, {
     use(mw: Middleware<C>) {
-      return builder<C, In>([...middlewares, mw], inputSchema);
+      return builder<C, In, Out>([...middlewares, mw], inputSchema, outputSchema);
     },
-    input<Out>(schema: Schema<Out>) {
-      return builder<C, Out>(middlewares, schema);
+    input<Next>(schema: Schema<Next>) {
+      return builder<C, Next, Out>(middlewares, schema, outputSchema);
     },
-    run<Out>(fn: (opts: { input: In; ctx: C }) => Out | Promise<Out>): ProcedureDef<C, In, Out> {
+    output<Next>(schema: Schema<Next>) {
+      return builder<C, In, Next>(middlewares, inputSchema, schema);
+    },
+    run(fn: (opts: { input: In; ctx: C }) => unknown) {
       const call = (async (input?: In, ctx?: C) => {
-        let value: unknown = input;
-        if (inputSchema) {
-          const result = await inputSchema["~standard"].validate(value);
-          if (result.issues) {
-            throw new RpcError({
-              code: JSON_RPC_ERROR.INVALID_PARAMS,
-              message: "Invalid params",
-              data: result.issues,
-            });
-          }
-          value = result.value;
-        }
-        return applyMiddleware(middlewares, ctx ?? ({} as C), (nextCtx) =>
+        const value = await parseWith(inputSchema, input, {
+          code: JSON_RPC_ERROR.INVALID_PARAMS,
+          message: "Invalid params",
+        });
+        const result = await applyMiddleware(middlewares, ctx ?? ({} as C), (nextCtx) =>
           fn({ input: value as In, ctx: nextCtx }),
-        ) as Promise<Out>;
-      }) as ProcedureDef<C, In, Out>;
+        );
+        if (isAsyncGenerator(result)) {
+          if (!outputSchema) return result;
+          return (async function* () {
+            let next: unknown;
+            for (;;) {
+              const step = await result.next(next);
+              if (step.done) {
+                if (step.value !== undefined) {
+                  return await parseWith(outputSchema, step.value, {
+                    code: JSON_RPC_ERROR.INTERNAL_ERROR,
+                    message: "Invalid result",
+                  });
+                }
+                return step.value;
+              }
+              next = yield await parseWith(outputSchema, step.value, {
+                code: JSON_RPC_ERROR.INTERNAL_ERROR,
+                message: "Invalid result",
+              });
+            }
+          })();
+        }
+        return parseWith(outputSchema, result, {
+          code: JSON_RPC_ERROR.INTERNAL_ERROR,
+          message: "Invalid result",
+        });
+      }) as ProcedureDef<C, In, unknown>;
       call.__rpc = true;
       call.inputSchema = inputSchema;
+      call.outputSchema = outputSchema;
       call.middlewares = middlewares;
-      call.run = fn;
+      call.run = fn as ProcedureDef<C, In, unknown>["run"];
       return call;
     },
-  });
+  }) as unknown as Builder<C, In, Out>;
 
 export const tacho = <C extends Context = {}>() => builder<C>();
 
@@ -235,26 +282,7 @@ export async function runOne(
   }
 
   try {
-    let input: unknown = raw.params;
-    if (procedure.inputSchema) {
-      const result = await procedure.inputSchema["~standard"].validate(input);
-      if (result.issues) {
-        return reply(
-          notification,
-          errorResponse(
-            JSON_RPC_ERROR.INVALID_PARAMS,
-            "Invalid params",
-            raw.id ?? null,
-            result.issues,
-          ),
-        );
-      }
-      input = result.value;
-    }
-
-    const result = await applyMiddleware(procedure.middlewares, ctx, (nextCtx) =>
-      procedure.run({ input, ctx: nextCtx }),
-    );
+    const result = await procedure(raw.params, ctx);
     if (isAsyncGenerator(result)) {
       if (notification || !opts?.stream) {
         await result.return(undefined).catch(() => {});
@@ -407,7 +435,7 @@ export function toOpenRpc(
           params: procedure.inputSchema
             ? [{ name: "params", schema: jsonSchema(procedure.inputSchema), required: true }]
             : [],
-          result: { name: "result", schema: true },
+          result: { name: "result", schema: jsonSchema(procedure.outputSchema) },
           errors: OPENRPC_ERRORS,
         });
       } else if (value && typeof value === "object") {

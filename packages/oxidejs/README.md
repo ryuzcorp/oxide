@@ -4,13 +4,13 @@ One build command → a deployable tree:
 
 ```
 dist/
-├── client/           # frontend output
+├── client/           # only if index.html exists
 └── server.js         # ESM server bundle
 ```
 
 `preset: "celld"` also writes `dist/wrangler.jsonc` with `main: "./server.js"`.
 
-v1 targets **Vite** (client + server in one `vite build`) and **Rsbuild** (native plugin). Other bundlers are out of scope for now.
+v1 targets **Vite** and **Rsbuild** via unplugin. Other bundlers are out of scope for now.
 
 ## Vite
 
@@ -24,12 +24,17 @@ export default defineConfig({
 });
 ```
 
+```json
+// tsconfig.json
+{ "extends": "oxidejs/tsconfig" }
+```
+
 ```bash
 vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`: client from `index.html` → `dist/client/`, server from `src/server.ts` → `dist/server.js`. Request order: `/_action` → `src/server.ts` (`undefined` continues) → static file → `index.html`. No `wrangler.jsonc`.
+Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` → `src/server.ts` (`undefined` continues) → static file → `index.html`. No `wrangler.jsonc`.
 
 ```ts
 oxide({
@@ -62,7 +67,9 @@ export default {
 };
 ```
 
-`vite dev` serves `/_action` via Vite middleware.
+`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck.
+
+`vite dev` and `rsbuild dev` serve `/_action` via middleware.
 
 ## Rsbuild
 
@@ -76,7 +83,7 @@ export default defineConfig({
 });
 ```
 
-Rsbuild is not an unplugin target. `oxidejs/rsbuild` is a hand-written Rsbuild plugin that shares only the wrangler-config core.
+Same factory as Vite: client stubs, `/_action`, and `dist/server.js`.
 
 ## Options
 
@@ -95,7 +102,7 @@ Rsbuild is not an unplugin target. `oxidejs/rsbuild` is a hand-written Rsbuild p
 | `wrangler.vars`                | —                        | optional                             |
 | `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc` |
 
-`main` and `assets` are always computed (`./server.js`, `./client` + `ASSETS` binding). Unknown wrangler keys fail at build time.
+`main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 
 ## Non-goals
 

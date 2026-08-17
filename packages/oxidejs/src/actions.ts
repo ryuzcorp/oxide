@@ -11,7 +11,7 @@ export const ACTION_PATH = "/_action";
 
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 const EXPORT_RE =
-  /^\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=/gm;
+  /^\s*export\s+(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)|^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=/gm;
 
 export interface ServerModule {
   abs: string;
@@ -106,7 +106,7 @@ export function generateActionsModule(modules: ServerModule[]): string {
     lines.push(`  ${JSON.stringify(mod.key)}: {`);
     for (const name of mod.exports) {
       lines.push(
-        `    ${JSON.stringify(name)}: rpc.run(({ input }) => ${alias}[${JSON.stringify(name)}](...(Array.isArray(input) ? input : []))),`,
+        `    ${JSON.stringify(name)}: rpc.run(({ input }) => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : [])),`,
       );
     }
     lines.push(`  },`);
@@ -117,15 +117,51 @@ export function generateActionsModule(modules: ServerModule[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+function pipeResponse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  response: Response,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    res.statusCode = response.status;
+    response.headers.forEach((value, key) => {
+      res.setHeader(key, value);
+    });
+    if (!response.body) {
+      res.end();
+      resolve();
+      return;
+    }
+    const reader = response.body.getReader();
+    const abort = () => {
+      void reader.cancel();
+    };
+    req.once("close", abort);
+    const pull = (): void => {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          req.off("close", abort);
+          res.end();
+          resolve();
+          return;
+        }
+        if (value) res.write(value);
+        pull();
+      }, reject);
+    };
+    pull();
+  });
+}
+
 export function generateWorkerWrapper(
   userWorkerAbs: string,
-  opts: { preset?: OxidejsPreset; clientDir?: string } = {},
+  opts: { preset?: OxidejsPreset; clientDir?: string; hasClient?: boolean } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
   const clientDir = opts.clientDir ?? "client";
-  const assetBlock =
-    preset === "fetch"
-      ? `import { readFile } from "node:fs/promises";
+  const serveAssets = preset === "fetch" && opts.hasClient === true;
+  const assetBlock = serveAssets
+    ? `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 const __assets = join(import.meta.dirname, ${JSON.stringify(clientDir)});
 const __types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
@@ -140,15 +176,14 @@ async function __asset(request, spa) {
   }
 }
 `
-      : "";
-  const afterAction =
-    preset === "fetch"
-      ? `if (typeof user.fetch === "function") {
+    : "";
+  const afterAction = serveAssets
+    ? `if (typeof user.fetch === "function") {
       const hit = await user.fetch(request, env, ctx);
       if (hit) return hit;
     }
     return (await __asset(request)) ?? (await __asset(request, true)) ?? new Response("Not Found", { status: 404 });`
-      : `return typeof user.fetch === "function"
+    : `return typeof user.fetch === "function"
       ? user.fetch(request, env, ctx)
       : new Response("Not Found", { status: 404 });`;
   const listen =
@@ -174,7 +209,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const response = await app.fetch(new Request(url, init));
     res.statusCode = response.status;
     response.headers.forEach((value, key) => res.setHeader(key, value));
-    res.end(Buffer.from(await response.arrayBuffer()));
+    if (!response.body) { res.end(); return; }
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) res.write(value);
+    }
+    res.end();
   }).listen(port, () => console.log(\`oxidejs listening on \${port}\`));
 }
 `
@@ -231,13 +273,13 @@ export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {
 }
 
 export async function sendWebResponse(res: ServerResponse, response: Response): Promise<void> {
-  res.statusCode = response.status;
-  response.headers.forEach((value, key) => {
-    res.setHeader(key, value);
-  });
-  if (!response.body) {
-    res.end();
-    return;
-  }
-  res.end(Buffer.from(await response.arrayBuffer()));
+  return pipeResponse({} as IncomingMessage, res, response);
+}
+
+export async function sendWebResponseFrom(
+  req: IncomingMessage,
+  res: ServerResponse,
+  response: Response,
+): Promise<void> {
+  return pipeResponse(req, res, response);
 }

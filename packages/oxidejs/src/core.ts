@@ -66,7 +66,61 @@ function requireWranglerFields(
   return wrangler;
 }
 
-export function resolveOptions(raw: OxidejsOptions | undefined, root: string): ResolvedOptions {
+type HtmlInput = string | string[] | Record<string, string>;
+
+interface HtmlEntryConfig {
+  build?: {
+    rolldownOptions?: { input?: HtmlInput };
+    rollupOptions?: { input?: HtmlInput };
+  };
+  environments?: Record<string, unknown>;
+}
+
+function flattenInput(input: HtmlInput | undefined): string[] {
+  if (!input) return [];
+  if (typeof input === "string") return [input];
+  if (Array.isArray(input)) return input;
+  return Object.values(input);
+}
+
+function envInput(env: unknown): HtmlInput | undefined {
+  if (!env || typeof env !== "object") return;
+  const rec = env as {
+    input?: HtmlInput;
+    build?: {
+      input?: HtmlInput;
+      rolldownOptions?: { input?: HtmlInput };
+      rollupOptions?: { input?: HtmlInput };
+    };
+  };
+  return (
+    rec.build?.rolldownOptions?.input ||
+    rec.build?.rollupOptions?.input ||
+    rec.build?.input ||
+    rec.input
+  );
+}
+
+/** Vite client input: rolldown/rollup `input`, else `path.resolve(root, "index.html")`. */
+function hasHtmlEntry(root: string, config?: unknown): boolean {
+  const cfg = config as HtmlEntryConfig | undefined;
+  const explicit =
+    envInput(cfg?.environments?.["client"]) ||
+    envInput(cfg?.environments?.["web"]) ||
+    cfg?.build?.rolldownOptions?.input ||
+    cfg?.build?.rollupOptions?.input;
+  const entries = flattenInput(explicit || path.resolve(root, "index.html"));
+  return entries.some((entry) => {
+    const file = path.resolve(root, entry);
+    return file.endsWith(".html") && fs.existsSync(file);
+  });
+}
+
+export function resolveOptions(
+  raw: OxidejsOptions | undefined,
+  root: string,
+  config?: unknown,
+): ResolvedOptions {
   const preset: OxidejsPreset = raw?.preset ?? "fetch";
   if (preset !== "fetch" && preset !== "celld") {
     throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
@@ -79,8 +133,9 @@ export function resolveOptions(raw: OxidejsOptions | undefined, root: string): R
   const rootAbs = path.resolve(root);
   const outDir = path.resolve(rootAbs, outDirInput);
   const workerEntryAbs = path.resolve(rootAbs, workerEntry);
+  const hasClient = hasHtmlEntry(rootAbs, config);
 
-  assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
+  if (hasClient) assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
 
   if (raw?.wrangler) {
     validateWranglerOptions(raw.wrangler as unknown as Record<string, unknown>);
@@ -97,6 +152,7 @@ export function resolveOptions(raw: OxidejsOptions | undefined, root: string): R
     clientDir,
     wrangler,
     emitConfig,
+    hasClient,
   };
 }
 
@@ -107,10 +163,11 @@ export function tryEmitWranglerConfig(opts: ResolvedOptions, state: EmitState): 
   const serverFile = path.join(opts.outDir, "server.js");
   const clientDirPath = path.join(opts.outDir, opts.clientDir);
 
-  if (!fs.existsSync(serverFile) || !fs.existsSync(clientDirPath)) return;
+  if (!fs.existsSync(serverFile)) return;
+  if (opts.hasClient && !fs.existsSync(clientDirPath)) return;
 
   assertContained(opts.outDir, serverFile, "main");
-  assertContained(opts.outDir, clientDirPath, "assets.directory");
+  if (opts.hasClient) assertContained(opts.outDir, clientDirPath, "assets.directory");
 
   const config = {
     name: wrangler.name,
@@ -121,10 +178,7 @@ export function tryEmitWranglerConfig(opts: ResolvedOptions, state: EmitState): 
     ...(wrangler.migrations ? { migrations: wrangler.migrations } : {}),
     ...(wrangler.services ? { services: wrangler.services } : {}),
     ...(wrangler.vars ? { vars: wrangler.vars } : {}),
-    assets: {
-      directory: `./${opts.clientDir}`,
-      binding: "ASSETS",
-    },
+    ...(opts.hasClient ? { assets: { directory: `./${opts.clientDir}`, binding: "ASSETS" } } : {}),
   };
 
   fs.writeFileSync(
