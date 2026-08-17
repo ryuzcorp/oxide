@@ -62,6 +62,8 @@
   box-shadow: none !important;
   border-radius: 0 !important;
   max-width: none !important;
-  font-size: 1rem !important;
-  line-height: 1.6 !important;
+  font: inherit !important;
+  line-height: inherit !important;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }

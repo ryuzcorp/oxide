@@ -23,10 +23,12 @@ const files = [
   {
     name: "client.ts",
     html: highlight(
-      `import { create, list } from "./notes.server";
+      `// Looks local. Runs on the server.
+import { create, list } from "./notes.server";
 
 const note = await create("Ship Oxide");
-console.log(note, await list());
+const notes = await list();
+console.log(note, notes);
 // { id: "…", title: "Ship Oxide" } [{ id: "1", title: "Ship Oxide" }]`,
       "ts",
     ),
@@ -141,10 +143,10 @@ export default defineConfig({
         </CardHeader>
         <CardContent>
           <Tabs defaultValue={files[0].name}>
-            <TabsList class="w-full justify-start" size="sm" variant="line">
+            <TabsList class="h-auto w-full justify-start overflow-x-auto overflow-y-hidden pb-1.5" size="sm" variant="line">
               {
                 files.map((file) => (
-                  <TabsTrigger class="font-mono" value={file.name}>
+                  <TabsTrigger class="flex-none font-mono" value={file.name}>
                     {file.name}
                   </TabsTrigger>
                 ))
@@ -154,7 +156,7 @@ export default defineConfig({
               files.map((file) => (
                 <TabsContent value={file.name}>
                   <div
-                    class="overflow-x-auto pt-4 font-mono text-[13px] leading-7"
+                    class="overflow-x-auto pt-4 font-mono text-[13px] leading-7 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
                     set:html={file.html}
                   />
                 </TabsContent>
