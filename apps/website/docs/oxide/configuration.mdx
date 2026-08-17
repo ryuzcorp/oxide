@@ -20,7 +20,9 @@ description: Plugin options for oxidejs.
 
 `main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 
-```ts
+```ts twoslash
+import oxide from "oxidejs/vite";
+
 oxide({
   preset: "celld",
   wrangler: { name: "my-app", compatibility_date: "2026-01-01" },

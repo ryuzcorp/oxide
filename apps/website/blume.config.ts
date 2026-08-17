@@ -10,4 +10,7 @@ export default defineConfig({
   navigation: {
     tabs: [{ label: "Docs", path: "/", href: "/getting-started" }],
   },
+  deployment: {
+    site: "https://oxide.build",
+  },
 });

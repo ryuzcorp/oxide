@@ -5,7 +5,7 @@ description: Per-request context from tacho() and createContext.
 
 The type argument to `tacho<C>()` is the context shape. `handle()` puts `req` on context. Pass `createContext` to merge more.
 
-```ts
+```ts twoslash
 import { tacho } from "tacho";
 import { handle } from "tacho/transport/fetch";
 

@@ -5,13 +5,19 @@ description: async function* over fetch becomes SSE.
 
 Return an `async function*` from `.run()`. The fetch client is the same call; `for await` the result. WS and batch reject streams. Notifications to a stream procedure are 204 and do not start the generator.
 
-```ts
-export const router = rpc({
+```ts twoslash
+import { createClient } from "tacho/client/http";
+import { tacho } from "tacho";
+import { z } from "zod";
+
+const rpc = tacho();
+const router = rpc({
   ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({ input }) {
     for (let i = 0; i < input.n; i++) yield { i };
   }),
 });
-
+const client = createClient<typeof router>({ url: "http://localhost:3000" });
+// ---cut---
 const ticks = await client.ticks({ n: 3 });
 for await (const t of ticks) console.log(t.i);
 await ticks.return();

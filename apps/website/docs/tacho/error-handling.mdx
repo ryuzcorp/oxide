@@ -5,17 +5,18 @@ description: RpcError, JSON-RPC codes, and rpcResult.
 
 Throw `RpcError` from a procedure or middleware for a custom JSON-RPC error. Plain `Error` becomes `INTERNAL_ERROR` with the message kept, no stack.
 
-```ts
-import { APP_ERROR_RANGE, JSON_RPC_ERROR, RpcError, rpcResult } from "tacho";
+```ts twoslash
+import { APP_ERROR_RANGE, JSON_RPC_ERROR, RpcError } from "tacho";
 
 throw new RpcError({ code: -32001, message: "nope", data: { retry: true } });
 
-JSON_RPC_ERROR.PARSE_ERROR; // -32700
-JSON_RPC_ERROR.INVALID_REQUEST; // -32600
-JSON_RPC_ERROR.METHOD_NOT_FOUND; // -32601
-JSON_RPC_ERROR.INVALID_PARAMS; // -32602
-JSON_RPC_ERROR.INTERNAL_ERROR; // -32603
-APP_ERROR_RANGE; // { min: -32099, max: -32000 }
+JSON_RPC_ERROR.PARSE_ERROR;
+// ^?
+JSON_RPC_ERROR.INVALID_REQUEST;
+JSON_RPC_ERROR.METHOD_NOT_FOUND;
+JSON_RPC_ERROR.INVALID_PARAMS;
+JSON_RPC_ERROR.INTERNAL_ERROR;
+APP_ERROR_RANGE;
 ```
 
 `rpcResult` throws `RpcError` on a JSON-RPC error object. Clients check with `instanceof RpcError`.

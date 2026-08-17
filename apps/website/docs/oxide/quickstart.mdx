@@ -7,29 +7,17 @@ This page shows the recommended setup for oxidejs and the most common workflows,
 
 ## Install
 
-<CodeGroup>
-
-```sh bun
-bun add -d oxidejs
-bun add tacho
+```package-install
+npm i -D oxidejs
 ```
 
-```sh npm
-npm add -D oxidejs
-npm add tacho
+```package-install
+npm i tacho
 ```
-
-```sh pnpm
-pnpm add -D oxidejs
-pnpm add tacho
-```
-
-</CodeGroup>
 
 Extend the TypeScript config:
 
-```json
-// tsconfig.json
+```json tsconfig.json
 { "extends": "oxidejs/tsconfig" }
 ```
 
@@ -38,8 +26,7 @@ Extend the TypeScript config:
 <Tabs>
   <Tab title="Vite">
 
-```ts
-// vite.config.ts
+```ts twoslash vite.config.ts
 import { defineConfig } from "vite";
 import oxide from "oxidejs/vite";
 
@@ -50,7 +37,7 @@ export default defineConfig({
 
 Add scripts to `package.json`:
 
-```json
+```json package.json
 {
   "scripts": {
     "dev": "vite",
@@ -63,8 +50,8 @@ Add scripts to `package.json`:
   </Tab>
   <Tab title="Rsbuild">
 
-```ts
-// rsbuild.config.ts
+```ts twoslash rsbuild.config.ts
+// @noErrors
 import { defineConfig } from "@rsbuild/core";
 import oxide from "oxidejs/rsbuild";
 
@@ -75,7 +62,7 @@ export default defineConfig({
 
 Add scripts to `package.json`:
 
-```json
+```json package.json
 {
   "scripts": {
     "dev": "rsbuild dev",
@@ -90,8 +77,7 @@ Add scripts to `package.json`:
 
 ## Write an entry and an action
 
-```ts
-// src/server.ts
+```ts twoslash src/server.ts
 export default {
   fetch(request: Request) {
     if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
@@ -101,18 +87,23 @@ export default {
 
 Return `undefined` to fall through to static files / `index.html`.
 
-```ts
-// src/test.server.ts
+```ts twoslash src/test.server.ts
 export async function ping() {
   return "pong";
 }
 ```
 
-```ts
-// src/client.ts
+```ts twoslash src/client.ts
+// @filename: test.server.ts
+export async function ping() {
+  return "pong";
+}
+// ---cut---
+// @filename: client.ts
 import { ping } from "./test.server";
 
 console.log(await ping());
+//                   ^?
 ```
 
 `vite dev` and `rsbuild dev` serve `/_action` via middleware. Client imports of `*.server.ts` are stubs. Server and Vite SSR keep the real functions (`import.meta.env.SSR`).
@@ -130,7 +121,9 @@ No `index.html` → only `dist/server.js`. With `index.html` → client assets i
 
 ### Cloudflare Worker (`celld`)
 
-```ts
+```ts twoslash
+import oxide from "oxidejs/vite";
+
 oxide({
   preset: "celld",
   wrangler: { name: "my-app", compatibility_date: "2026-01-01" },

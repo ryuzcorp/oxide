@@ -5,7 +5,7 @@ description: Onion middleware with next({ ctx }).
 
 `.use(mw)` wraps a procedure. `return next({ ctx })` continues and merges context. Skip `next()` to skip the handler. `await next()` to wrap the result.
 
-```ts
+```ts twoslash
 import { RpcError, tacho } from "tacho";
 
 const rpc = tacho<{ req: Request; user?: string }>();
