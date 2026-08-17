@@ -1,0 +1,35 @@
+---
+title: API Reference
+description: Public tacho exports and transport options.
+---
+
+## Core
+
+`tacho`, `router`, `RpcError`, `rpcResult`, `runOne`, `runBatch`, `resolveProcedure`, `toOpenRpc`, `JSON_RPC_ERROR`, `APP_ERROR_RANGE`
+
+## Fetch
+
+`handle(router, opts?)` from `tacho/transport/fetch` is `(Request) => Promise<Response>`. POST only.
+
+| option          |                                                           |
+| --------------- | --------------------------------------------------------- |
+| `path`          | Other paths → 404.                                        |
+| `createContext` | Merged onto `{ req }`. Throw → JSON-RPC `INTERNAL_ERROR`. |
+| `onError`       | Called when `createContext` or the stream throws.         |
+
+`createClient` from `tacho/client/http`.
+
+| option    |                                                            |
+| --------- | ---------------------------------------------------------- |
+| `url`     | POST target.                                               |
+| `headers` | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
+| `signal`  | Default abort. Per-call: `client.ping(input, { signal })`. |
+| `fetch`   | Custom `fetch`.                                            |
+
+## WebSocket
+
+`handle` from `tacho/transport/ws` (optional `crossws` peer). `createClient` from `tacho/client/ws`. One socket. `.ready` and `.close()`.
+
+## Low-level
+
+`createProxyClient(send)` builds a typed proxy over your own send function.

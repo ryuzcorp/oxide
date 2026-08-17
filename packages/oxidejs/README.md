@@ -47,7 +47,7 @@ oxide({
 
 ## Server actions
 
-Files named `*.server.ts` / `*.server.js` are server-only. Client imports become tacho stubs that POST `/_action`. Methods are `<file>.<fn>` (`test.ping`). Return `undefined` from `src/server.ts` to fall through to static files.
+Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Return `undefined` from `src/server.ts` to fall through to static files.
 
 ```ts
 // src/test.server.ts

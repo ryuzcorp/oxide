@@ -1,6 +1,6 @@
 # Oxide
 
-The lighter and simpler web.
+The backend unframework.
 
 ## Packages
 

@@ -1,0 +1,67 @@
+@import "tw-animate-css";
+@import "bejamas/tailwind.css";
+
+@theme inline {
+  --color-primary: var(--blume-accent);
+  --color-primary-foreground: var(--blume-accent-foreground);
+  --color-secondary: var(--blume-muted);
+  --color-secondary-foreground: var(--blume-foreground);
+  --color-destructive: oklch(0.58 0.22 25);
+  --color-input: var(--blume-border);
+  --color-ring: var(--blume-accent);
+  --color-card: var(--blume-background);
+  --color-card-foreground: var(--blume-foreground);
+}
+
+:root {
+  --shj-bg: transparent;
+  --shj-fg: #112;
+  --shj-numbers: #999;
+  --shj-kwd: #e16;
+  --shj-oper: #5af;
+  --shj-esc: #e16;
+  --shj-deleted: #f44;
+  --shj-err: #e16;
+  --shj-class: #f60;
+  --shj-cmnt: #999;
+  --shj-bracket: #999;
+  --shj-num: #f60;
+  --shj-bool: #3bf;
+  --shj-type: #5af;
+  --shj-section: #84f;
+  --shj-var: #f44;
+  --shj-str: #7d8;
+  --shj-func: #84f;
+  --shj-insert: #7d8;
+}
+
+:root[data-theme="dark"] {
+  --shj-fg: #f8f8f2;
+  --shj-numbers: #7d828b;
+  --shj-kwd: #ff7cc6;
+  --shj-oper: #80c6ff;
+  --shj-esc: #ff7cc6;
+  --shj-deleted: #ff5261;
+  --shj-err: #ff5261;
+  --shj-class: #eab07c;
+  --shj-cmnt: #7d828b;
+  --shj-bracket: #7d828b;
+  --shj-num: #b581fd;
+  --shj-bool: #71d58a;
+  --shj-type: #71d58a;
+  --shj-section: #ff7cc6;
+  --shj-var: #ff5261;
+  --shj-str: #4dacfa;
+  --shj-func: #71d58a;
+  --shj-insert: #71d58a;
+}
+
+[class*="shj-lang-"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  max-width: none !important;
+  font-size: 1rem !important;
+  line-height: 1.6 !important;
+}

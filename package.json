@@ -2,6 +2,7 @@
   "name": "oxide-monorepo",
   "private": true,
   "workspaces": [
+    "apps/*",
     "packages/*",
     "templates/*"
   ],
@@ -11,7 +12,9 @@
     "build": "bun run --filter './packages/*' build",
     "typecheck": "bun run --filter './packages/*' typecheck",
     "lint": "oxlint",
-    "fmt": "oxfmt --write ."
+    "fmt": "oxfmt --write .",
+    "docs:dev": "bun run --filter website dev",
+    "docs:build": "bun run --filter website build"
   },
   "devDependencies": {
     "@tsconfig/strictest": "^2.0.8",

@@ -1,0 +1,23 @@
+---
+title: Context
+description: Per-request context from tacho() and createContext.
+---
+
+The type argument to `tacho<C>()` is the context shape. `handle()` puts `req` on context. Pass `createContext` to merge more.
+
+```ts
+import { tacho } from "tacho";
+import { handle } from "tacho/transport/fetch";
+
+const rpc = tacho<{ req: Request; user?: string }>();
+
+export const router = rpc({
+  me: rpc.run(({ ctx }) => ctx.user),
+});
+
+handle(router, {
+  createContext: (req) => ({ user: req.headers.get("x-user") ?? undefined }),
+});
+```
+
+Throw from `createContext` → JSON-RPC `INTERNAL_ERROR`. Middleware can widen context with `next({ ctx })`.

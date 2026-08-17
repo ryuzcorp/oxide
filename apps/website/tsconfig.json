@@ -1,0 +1,14 @@
+{
+  "extends": "@tsconfig/strictest/tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "ilha",
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["pages/**/*.ts", "pages/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "blume.config.ts"]
+}

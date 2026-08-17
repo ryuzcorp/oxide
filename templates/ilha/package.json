@@ -10,7 +10,7 @@
     "celld": "celld"
   },
   "dependencies": {
-    "tacho": "^0.3.2"
+    "tacho": "^0.4.0"
   },
   "devDependencies": {
     "oxidejs": "0.1.0",

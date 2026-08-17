@@ -1,0 +1,28 @@
+---
+title: Configuration
+description: Plugin options for oxidejs.
+---
+
+| Option                         | Default                  | Notes                                |
+| ------------------------------ | ------------------------ | ------------------------------------ |
+| `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`               |
+| `workerEntry`                  | `src/server.ts`          | Relative to project root             |
+| `outDir`                       | `dist`                   | Output root                          |
+| `clientDir`                    | `client`                 | Must stay inside `outDir`            |
+| `wrangler.name`                | required if `emitConfig` |                                      |
+| `wrangler.compatibility_date`  | required if `emitConfig` |                                      |
+| `wrangler.compatibility_flags` | —                        | optional                             |
+| `wrangler.durable_objects`     | —                        | optional                             |
+| `wrangler.migrations`          | —                        | optional                             |
+| `wrangler.services`            | —                        | optional                             |
+| `wrangler.vars`                | —                        | optional                             |
+| `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc` |
+
+`main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
+
+```ts
+oxide({
+  preset: "celld",
+  wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
+});
+```

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { VIRTUAL_WORKER_ID } from "./actions";
+import { RESOLVED_VIRTUAL_ACTIONS_ID, VIRTUAL_ACTIONS_ID, VIRTUAL_WORKER_ID } from "./actions";
 import { oxidejs, unpluginFactory, vite } from "./index";
 import rsbuild from "./rsbuild";
 import { applyRsbuildEnvironments, applyViteEnvironments } from "./worker-build";
@@ -29,6 +29,7 @@ describe("factory shape", () => {
     const plugin = unpluginFactory({}, { framework: "vite" } as never);
     if (Array.isArray(plugin)) throw new Error("expected a single plugin");
     expect(plugin.name).toBe("oxidejs");
+    expect(plugin.enforce).toBe("pre");
     expect(typeof plugin.resolveId).toBe("function");
     expect(typeof plugin.load).toBe("function");
     expect(typeof plugin.transform).toBe("function");
@@ -37,6 +38,38 @@ describe("factory shape", () => {
     expect(typeof plugin.vite?.configureServer).toBe("function");
     expect(typeof plugin.vite?.configurePreviewServer).toBe("function");
     expect(typeof plugin.rsbuild?.setup).toBe("function");
+  });
+
+  test("client load stubs *.server.ts and blocks virtual actions", () => {
+    const plugin = unpluginFactory({}, { framework: "vite" } as never);
+    if (Array.isArray(plugin)) throw new Error("expected a single plugin");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-load-"));
+    const file = path.join(root, "secret.server.ts");
+    fs.writeFileSync(
+      file,
+      `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
+    );
+    const load = plugin.load as (this: object, id: string) => unknown;
+    const ctx = {
+      environment: { config: { consumer: "client" } },
+      addWatchFile() {},
+    };
+    try {
+      const stub = load.call(ctx, file);
+      expect(typeof stub).toBe("string");
+      expect(String(stub)).toContain("createClient");
+      expect(String(stub)).not.toContain("leak-me");
+      expect(() => load.call(ctx, RESOLVED_VIRTUAL_ACTIONS_ID)).toThrow(
+        `${VIRTUAL_ACTIONS_ID} is server-only`,
+      );
+      const serverCtx = {
+        environment: { config: { consumer: "server" } },
+        addWatchFile() {},
+      };
+      expect(load.call(serverCtx, file)).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("fetch preset writes dist/server.js for node", () => {
@@ -49,6 +82,8 @@ describe("factory shape", () => {
       expect(config.environments?.["client"]?.build?.outDir).toBe(
         path.join(resolved.outDir, "client"),
       );
+      expect(config.environments?.["server"]?.consumer).toBe("server");
+      expect(config.environments?.["server"]?.build?.ssr).toBe(true);
       expect(config.environments?.["server"]?.build?.outDir).toBe(resolved.outDir);
       expect(config.environments?.["server"]?.build?.emptyOutDir).toBe(false);
       expect(config.environments?.["server"]?.build?.rollupOptions?.input).toBe(VIRTUAL_WORKER_ID);

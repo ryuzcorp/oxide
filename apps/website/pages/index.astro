@@ -1,0 +1,255 @@
+---
+import PageLayout from "blume/components/layout/PageLayout.astro";
+import data from "blume:data";
+import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/ui/card";
+import { Separator } from "@/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
+import { BuildSwitcher } from "./_home/BuildSwitcher";
+import { highlight } from "./_home/highlight";
+
+const { config } = data;
+const repoUrl = "https://github.com/ryuzcorp/oxide";
+const files = [
+  {
+    name: "client.ts",
+    html: highlight(
+      `import { create, list } from "./notes.server";
+
+const note = await create("Ship Oxide");
+console.log(note, await list());
+// { id: "…", title: "Ship Oxide" } [{ id: "1", title: "Ship Oxide" }]`,
+      "ts",
+    ),
+  },
+  {
+    name: "notes.server.ts",
+    html: highlight(
+      `// Talk to a database or any external service here.
+export async function create(title: string) {
+  return { id: crypto.randomUUID(), title };
+}
+
+export async function list() {
+  return [{ id: "1", title: "Ship Oxide" }];
+}`,
+      "ts",
+    ),
+  },
+  {
+    name: "server.ts",
+    html: highlight(
+      `import { handle } from "tacho/transport/fetch";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+
+const app = rpc({
+  health: rpc.run(() => "ok" as const),
+});
+
+export default {
+  fetch: handle(app),
+};`,
+      "ts",
+    ),
+  },
+  {
+    name: "vite.config.ts",
+    html: highlight(
+      `import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [oxide()],
+});`,
+      "ts",
+    ),
+  },
+];
+---
+
+<PageLayout
+  site={{ title: config.title, description: config.description }}
+  logo={config.logo}
+  favicon={config.favicon}
+  appleIcon={config.appleIcon}
+  banner={config.banner}
+  analytics={config.analytics}
+  navigation={data.navigation}
+  page={{
+    title: "Oxide - The backend unframework",
+    description: config.description,
+    route: "/",
+  }}
+  themeMode={config.theme.mode}
+  fontCssVars={data.fontCssVars}
+  searchEnabled={config.search.enabled}
+  siteUrl={config.site}
+  ogEnabled={config.og.enabled}
+  ogImage="/opengraph-image.png"
+  ogImageAlt="Oxide — The backend unframework"
+  ogImageSize={{ width: 1200, height: 630 }}
+>
+  <div class="relative overflow-hidden">
+    <div
+      class="pointer-events-none absolute inset-x-0 top-0 h-[32rem] bg-[radial-gradient(ellipse_at_top,color-mix(in_oklch,var(--color-accent)_18%,transparent),transparent_60%)]"
+    >
+    </div>
+
+    <section class="relative mx-auto max-w-5xl px-6 pt-20 pb-16 sm:pt-28">
+      <Badge shape="pill" variant="secondary">Oxide</Badge>
+      <h1
+        class="mt-5 max-w-3xl text-balance font-semibold text-4xl text-foreground tracking-tight sm:text-6xl"
+      >
+        The backend unframework.
+      </h1>
+      <p class="mt-6 max-w-xl text-lg text-muted-foreground leading-relaxed">
+        Ship a backend from the bundler you already use. Call the server from
+        the client like a function.
+      </p>
+      <div class="mt-8 flex flex-wrap items-center gap-3">
+        <Button as="a" href="/getting-started" size="lg">Get started</Button>
+        <Button
+          as="a"
+          href={repoUrl}
+          rel="noreferrer"
+          size="lg"
+          target="_blank"
+          variant="outline">View on GitHub</Button
+        >
+      </div>
+    </section>
+
+    <section class="relative mx-auto max-w-5xl px-6 pb-20">
+      <Card>
+        <CardHeader>
+          <CardTitle>Four files. That's the whole app.</CardTitle>
+          <CardDescription>A server, an action, a client, and the plugin.</CardDescription>
+          <CardAction>
+            <Button size="sm" type="button" variant="secondary">Run</Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue={files[0].name}>
+            <TabsList class="w-full justify-start" size="sm" variant="line">
+              {
+                files.map((file) => (
+                  <TabsTrigger class="font-mono" value={file.name}>
+                    {file.name}
+                  </TabsTrigger>
+                ))
+              }
+            </TabsList>
+            {
+              files.map((file) => (
+                <TabsContent value={file.name}>
+                  <div
+                    class="overflow-x-auto pt-4 font-mono text-[13px] leading-7"
+                    set:html={file.html}
+                  />
+                </TabsContent>
+              ))
+            }
+          </Tabs>
+        </CardContent>
+      </Card>
+    </section>
+  </div>
+
+  <section class="mx-auto max-w-5xl px-6 pb-20">
+    <h2
+      class="max-w-2xl text-balance font-semibold text-3xl text-foreground tracking-tight"
+    >
+      It guides you. It doesn't frame you.
+    </h2>
+    <div class="mt-10 grid gap-4 sm:grid-cols-3">
+      <Card>
+        <CardHeader>
+          <CardTitle>Single bundle</CardTitle>
+          <CardDescription>
+            One folder to deploy. A server, and a client if you have a page.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Server actions</CardTitle>
+          <CardDescription>
+            Import a server function. Call it like it's local.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Your host</CardTitle>
+          <CardDescription>
+            Same plugin on a VPS or on Cloudflare. You pick the host, not a new
+            stack.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    </div>
+  </section>
+
+  <section class="mx-auto max-w-5xl px-6 pb-20">
+    <div class="grid items-start gap-10 lg:grid-cols-2">
+      <div>
+        <h2 class="font-semibold text-3xl text-foreground tracking-tight">
+          Keep your bundler. Add one plugin.
+        </h2>
+        <p class="mt-4 text-muted-foreground leading-relaxed">
+          Vite or Rsbuild. Switch the import. Keep the rest.
+        </p>
+        <Button as="a" class="mt-6 pl-0" href="/oxide/quickstart" variant="link">
+          Read the quickstart →
+        </Button>
+      </div>
+      <BuildSwitcher client:visible />
+    </div>
+  </section>
+
+  <section class="mx-auto max-w-5xl px-6 pb-24">
+    <Card>
+      <CardHeader>
+        <CardTitle>Your backend can start this small.</CardTitle>
+        <CardDescription>
+          Install Oxide, add the plugin, write an action.
+        </CardDescription>
+      </CardHeader>
+      <CardFooter>
+        <Button as="a" href="/getting-started" size="lg">Get started</Button>
+      </CardFooter>
+    </Card>
+  </section>
+
+  <footer
+    slot="footer"
+    class="border-border border-t px-6 py-8 text-muted-foreground text-sm"
+  >
+    <div
+      class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3"
+    >
+      <span>
+        Oxide · Built by the team behind{" "}
+        <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noreferrer" target="_blank">Ilha</a>
+      </span>
+      <div class="flex h-5 items-center gap-3">
+        <Button as="a" href="/getting-started" variant="link">Docs</Button>
+        <Separator orientation="vertical" />
+        <Button as="a" href={repoUrl} rel="noreferrer" target="_blank" variant="link"
+          >GitHub</Button
+        >
+      </div>
+    </div>
+  </footer>
+</PageLayout>

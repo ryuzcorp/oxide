@@ -237,13 +237,66 @@ export default app;
 ${listen}`;
 }
 
-export function shouldStubServerModule(environment?: {
+export type StubEnvironment = {
   name?: string;
   consumer?: string;
-}): boolean {
-  if (environment?.consumer === "server") return false;
-  if (environment?.name && environment.name !== "client") return false;
+  config?: { consumer?: string };
+};
+
+export type StubExtra = {
+  ssr?: boolean;
+  target?: string | string[];
+};
+
+const SERVER_TARGETS = new Set(["node", "async-node", "webworker", "web-worker"]);
+const CLIENT_TARGETS = new Set(["web", "browserslist"]);
+const SERVER_NAMES = new Set(["server", "ssr", "worker", "node"]);
+const CLIENT_NAMES = new Set(["client", "web"]);
+
+/** Stub unless the graph is a known server. Unknown graphs stub so *.server.ts never ships. */
+export function shouldStubServerModule(environment?: StubEnvironment, extra?: StubExtra): boolean {
+  if (extra?.ssr) return false;
+
+  const consumer = environment?.config?.consumer ?? environment?.consumer;
+  if (consumer === "server") return false;
+  if (consumer === "client") return true;
+
+  const name = environment?.name;
+  if (name && CLIENT_NAMES.has(name)) return true;
+  if (name && SERVER_NAMES.has(name)) return false;
+
+  const targets = extra?.target == null ? [] : [extra.target].flat();
+  if (targets.some((target) => SERVER_TARGETS.has(target))) return false;
+  if (targets.some((target) => CLIENT_TARGETS.has(target))) return true;
+
   return true;
+}
+
+export function pluginShouldStub(pluginThis: object, options?: { ssr?: boolean }): boolean {
+  const ctx = pluginThis as {
+    environment?: StubEnvironment;
+    getNativeBuildContext?: () => {
+      compiler?: { name?: string; options?: { name?: string; target?: string | string[] } };
+    };
+  };
+  const compiler = ctx.getNativeBuildContext?.()?.compiler;
+  const env: StubEnvironment = {};
+  const name = ctx.environment?.name ?? compiler?.name ?? compiler?.options?.name;
+  if (name) env.name = name;
+  if (ctx.environment?.consumer) env.consumer = ctx.environment.consumer;
+  if (ctx.environment?.config) env.config = ctx.environment.config;
+  const extra: StubExtra = {};
+  if (options?.ssr) extra.ssr = true;
+  if (compiler?.options?.target) extra.target = compiler.options.target;
+  return shouldStubServerModule(env, extra);
+}
+
+export function loadClientStub(id: string): string {
+  const file = id.split("?")[0] ?? id;
+  return generateClientStub({
+    key: moduleKey(file),
+    exports: parseExportedNames(fs.readFileSync(file, "utf8")),
+  });
 }
 
 export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {

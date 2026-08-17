@@ -1,0 +1,150 @@
+---
+title: Quickstart
+description: Install oxidejs and run the common workflows.
+---
+
+This page shows the recommended setup for oxidejs and the most common workflows, with copy-paste commands.
+
+## Install
+
+<CodeGroup>
+
+```sh bun
+bun add -d oxidejs
+bun add tacho
+```
+
+```sh npm
+npm add -D oxidejs
+npm add tacho
+```
+
+```sh pnpm
+pnpm add -D oxidejs
+pnpm add tacho
+```
+
+</CodeGroup>
+
+Extend the TypeScript config:
+
+```json
+// tsconfig.json
+{ "extends": "oxidejs/tsconfig" }
+```
+
+## Add the plugin
+
+<Tabs>
+  <Tab title="Vite">
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [oxide()],
+});
+```
+
+Add scripts to `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
+```
+
+  </Tab>
+  <Tab title="Rsbuild">
+
+```ts
+// rsbuild.config.ts
+import { defineConfig } from "@rsbuild/core";
+import oxide from "oxidejs/rsbuild";
+
+export default defineConfig({
+  plugins: [oxide()],
+});
+```
+
+Add scripts to `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev": "rsbuild dev",
+    "build": "rsbuild build",
+    "preview": "rsbuild preview"
+  }
+}
+```
+
+  </Tab>
+</Tabs>
+
+## Write an entry and an action
+
+```ts
+// src/server.ts
+export default {
+  fetch(request: Request) {
+    if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
+  },
+};
+```
+
+Return `undefined` to fall through to static files / `index.html`.
+
+```ts
+// src/test.server.ts
+export async function ping() {
+  return "pong";
+}
+```
+
+```ts
+// src/client.ts
+import { ping } from "./test.server";
+
+console.log(await ping());
+```
+
+`vite dev` and `rsbuild dev` serve `/_action` via middleware. Client imports of `*.server.ts` are stubs. Server and Vite SSR keep the real functions (`import.meta.env.SSR`).
+
+## Build and run
+
+```sh
+vite build
+node dist/server.js
+```
+
+No `index.html` → only `dist/server.js`. With `index.html` → client assets in `dist/client/`.
+
+## Common workflows
+
+### Cloudflare Worker (`celld`)
+
+```ts
+oxide({
+  preset: "celld",
+  wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
+});
+```
+
+`"celld"` skips asset serving (Wrangler `ASSETS` does that) and writes `dist/wrangler.jsonc`.
+
+### Server only
+
+Leave out `index.html`. The plugin emits `dist/server.js` and does not build a client.
+
+## Next steps
+
+- [Server entry](/oxide/server-entry) — `src/server.ts`, fallback, `*.server.ts`
+- [Configuration](/oxide/configuration) — presets, paths, wrangler keys
+- [Tacho quickstart](/tacho/quickstart) — the RPC layer actions ride on

@@ -270,7 +270,7 @@ resolveProcedure(router, "user.get"); // procedure or undefined
 await runOne(router, { jsonrpc: "2.0", method: "ping", id: 1 }, { req });
 await runBatch(router, [{ jsonrpc: "2.0", method: "ping", id: 1 }], { req });
 rpcResult({ result: "pong" }); // "pong"
-rpcResult({ error: { message: "nope", code: -32603 } }); // throws
+rpcResult({ error: { message: "nope", code: -32603 } }); // throws RpcError
 ```
 
 `createProxyClient(send)` builds a typed proxy over your own send function.

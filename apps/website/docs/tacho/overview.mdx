@@ -1,0 +1,33 @@
+---
+title: Overview
+description: Typed JSON-RPC you can call in-process or over the wire.
+---
+
+tacho is JSON-RPC you never write a client for. Define a router. Call it in-process. Serve it over fetch, SSE, or WebSocket. `typeof router` is the client.
+
+oxidejs server actions ride on tacho. You can also use tacho with no bundler plugin.
+
+## Choosing an RPC layer
+
+Choose tacho when you want typed procedures that work the same locally and on the wire. Use [oxidejs](/oxide/overview) when you also want the Vite/Rsbuild build. Stay on another RPC stack if you already depend on that ecosystem.
+
+- Choose tacho if you want JSON-RPC, Standard Schema, and a typed proxy.
+- Choose oxidejs if you want actions plus a server bundle.
+- Wrap `handle()` yourself if you need CORS or a custom HTTP path.
+
+## What you get
+
+- **One type** — `typeof router` is the client. Nested paths are `user.get`.
+- **JSON-RPC 2.0** — batch, notifications, `rpc.*` reserved.
+- **Runtime-agnostic** — `handle()` is `(Request) => Response`.
+- **Standard Schema** — `zod`, `valibot`, `arktype`, …
+- **Onion middleware** — `return next({ ctx })`. Skip `next()` to skip the handler.
+- **SSE, files, WebSocket** — `async function*` over fetch. `File` / `Blob` in params or returns.
+
+Failed input is `INVALID_PARAMS`. Failed output is `INTERNAL_ERROR`. CORS is not built in.
+
+## Next steps
+
+- [Quickstart](/tacho/quickstart)
+- [Router](/tacho/router)
+- [API reference](/tacho/api-reference)

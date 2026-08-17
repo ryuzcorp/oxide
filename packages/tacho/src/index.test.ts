@@ -266,6 +266,7 @@ test("client throws on rpc error and transport failure", async () => {
     await client.boom();
     throw new Error("expected");
   } catch (err: any) {
+    expect(err).toBeInstanceOf(RpcError);
     expect(err.message).toBe("kaboom");
     expect(err.code).toBe(-32603);
   }
@@ -513,6 +514,7 @@ describe("rpcResult", () => {
       rpcResult({ error: { message: "nope", code: -32001, data: { x: 1 } } });
       throw new Error("expected");
     } catch (err: any) {
+      expect(err).toBeInstanceOf(RpcError);
       expect(err).toMatchObject({ message: "nope", code: -32001, data: { x: 1 } });
     }
   });

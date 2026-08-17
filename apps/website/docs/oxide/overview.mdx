@@ -1,0 +1,35 @@
+---
+title: Overview
+description: One unplugin. One build. A server bundle and an optional client.
+---
+
+oxidejs is a Vite and Rsbuild plugin. One build writes `dist/server.js`. If `index.html` exists, it also writes `dist/client/`. Server actions live in `*.server.ts` and ride on [tacho](/tacho/overview).
+
+## Choosing a stack
+
+Choose oxidejs when you want a deployable tree from the bundler you already use. Stay on a full framework if you need routing, SSR, or a component model. Use [tacho](/tacho/overview) alone if you only need RPC.
+
+- Choose oxidejs if you want one plugin that builds the server and the client.
+- Choose tacho if you want typed JSON-RPC without a bundler plugin.
+- Stay on a framework if you need more than a server entry and actions.
+
+## What you get
+
+- **One output tree** — `dist/server.js`, plus `dist/client/` when there is an `index.html`.
+- **Server actions** — client imports of `*.server.ts` become tacho stubs that POST `/_action`. Server/SSR keeps the real module.
+- **Two presets** — `"fetch"` serves assets. `"celld"` writes `dist/wrangler.jsonc` and leaves assets to Wrangler.
+- **Vite and Rsbuild** — same factory, same output.
+
+You can call actions from the browser, or skip the client and ship a server-only worker.
+
+## What it does not do
+
+- No `wrangler dev` / workerd emulation
+- No automatic `celld deploy`
+- No Node-builtin polyfills — a stray Node import fails the build
+
+## Next steps
+
+- [Quickstart](/oxide/quickstart)
+- [Server entry](/oxide/server-entry)
+- [Configuration](/oxide/configuration)

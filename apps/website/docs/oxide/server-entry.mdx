@@ -1,0 +1,30 @@
+---
+title: Server Entry
+description: src/server.ts, static fallback, and server actions.
+---
+
+`workerEntry` defaults to `src/server.ts`. Return `undefined` from its `fetch` to fall through to static files / `index.html`.
+
+```ts
+// src/server.ts
+export default {
+  fetch(request: Request) {
+    if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
+  },
+};
+```
+
+`*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Method names are `<file>.<fn>` (`test.ping`).
+
+```ts
+// src/test.server.ts
+export async function ping() {
+  return "pong";
+}
+
+// src/client.ts
+import { ping } from "./test.server";
+console.log(await ping());
+```
+
+`async function*` exports stream over tacho SSE. `vite dev` and `rsbuild dev` serve `/_action` via middleware.

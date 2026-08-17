@@ -42,6 +42,7 @@ export class RpcError extends Error {
   readonly data?: unknown;
   constructor({ code, message, data }: { code: number; message: string; data?: unknown }) {
     super(message);
+    this.name = "RpcError";
     this.code = code;
     this.data = data;
   }
@@ -369,8 +370,9 @@ export function rpcResult(body: {
   error?: { message: string; code?: number; data?: unknown };
 }) {
   if (body.error) {
-    throw Object.assign(new Error(body.error.message), {
-      code: body.error.code,
+    throw new RpcError({
+      code: body.error.code ?? JSON_RPC_ERROR.INTERNAL_ERROR,
+      message: body.error.message,
       data: body.error.data,
     });
   }

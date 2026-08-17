@@ -7,7 +7,9 @@ import {
   generateActionsModule,
   generateClientStub,
   generateWorkerWrapper,
+  loadClientStub,
   parseExportedNames,
+  pluginShouldStub,
   scanServerFiles,
   shouldStubServerModule,
 } from "./actions";
@@ -93,8 +95,49 @@ describe("codegen", () => {
   test("stubs client, not worker", () => {
     expect(shouldStubServerModule({ consumer: "client" })).toBe(true);
     expect(shouldStubServerModule({ consumer: "server" })).toBe(false);
+    expect(shouldStubServerModule({ config: { consumer: "server" } })).toBe(false);
     expect(shouldStubServerModule({ name: "worker" })).toBe(false);
+    expect(shouldStubServerModule({ name: "ssr" })).toBe(false);
+    expect(shouldStubServerModule({ name: "web" })).toBe(true);
+    expect(shouldStubServerModule({ name: "browser" })).toBe(true);
+    expect(shouldStubServerModule(undefined, { ssr: true })).toBe(false);
+    expect(shouldStubServerModule(undefined, { target: "node" })).toBe(false);
+    expect(shouldStubServerModule(undefined, { target: "web" })).toBe(true);
     expect(shouldStubServerModule()).toBe(true);
+  });
+
+  test("plugin this follows Vite consumer and webpack target", () => {
+    expect(pluginShouldStub({ environment: { config: { consumer: "server" } } })).toBe(false);
+    expect(pluginShouldStub({ environment: { config: { consumer: "client" } } })).toBe(true);
+    expect(pluginShouldStub({}, { ssr: true })).toBe(false);
+    expect(
+      pluginShouldStub({
+        getNativeBuildContext: () => ({ compiler: { options: { target: "node" } } }),
+      }),
+    ).toBe(false);
+    expect(
+      pluginShouldStub({
+        getNativeBuildContext: () => ({ compiler: { name: "web" } }),
+      }),
+    ).toBe(true);
+  });
+
+  test("client stub load never includes server source", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-stub-"));
+    const file = path.join(root, "secret.server.ts");
+    fs.writeFileSync(
+      file,
+      `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
+    );
+    try {
+      const stub = loadClientStub(file);
+      expect(stub).toContain('createClient({ url: "/_action" })');
+      expect(stub).toContain('__rpc["secret"]["ping"](args)');
+      expect(stub).not.toContain("leak-me");
+      expect(stub).not.toContain("const SECRET");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

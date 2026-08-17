@@ -9,14 +9,15 @@ import {
   generateClientStub,
   generateWorkerWrapper,
   isServerFileId,
+  loadClientStub,
   moduleKey,
   nodeToWebRequest,
   parseExportedNames,
+  pluginShouldStub,
   RESOLVED_VIRTUAL_ACTIONS_ID,
   RESOLVED_VIRTUAL_WORKER_ID,
   scanServerFiles,
   sendWebResponseFrom,
-  shouldStubServerModule,
   VIRTUAL_ACTIONS_ID,
   VIRTUAL_WORKER_ID,
 } from "./actions";
@@ -76,6 +77,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
 
   return {
     name: "oxidejs",
+    enforce: "pre",
     buildStart() {
       resolved ??= resolveOptions(options, process.cwd());
       emitState.emitted = false;
@@ -85,7 +87,14 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
       if (id === VIRTUAL_WORKER_ID) return RESOLVED_VIRTUAL_WORKER_ID;
       return null;
     },
-    load(id) {
+    load(id, extra?: { ssr?: boolean }) {
+      if (id === RESOLVED_VIRTUAL_ACTIONS_ID || id === RESOLVED_VIRTUAL_WORKER_ID) {
+        if (pluginShouldStub(this, extra)) {
+          throw new Error(
+            `oxidejs: ${id === RESOLVED_VIRTUAL_ACTIONS_ID ? VIRTUAL_ACTIONS_ID : VIRTUAL_WORKER_ID} is server-only`,
+          );
+        }
+      }
       if (id === RESOLVED_VIRTUAL_ACTIONS_ID) {
         const modules = scanServerFiles(resolved?.root ?? process.cwd());
         for (const mod of modules) this.addWatchFile(mod.abs);
@@ -100,15 +109,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           hasClient: resolved.hasClient,
         });
       }
+      if (isServerFileId(id) && pluginShouldStub(this, extra)) {
+        const file = id.split("?")[0] ?? id;
+        this.addWatchFile(file);
+        return loadClientStub(id);
+      }
       return;
     },
-    transform(code, id) {
-      const environment = (this as { environment?: { name?: string; consumer?: string } })
-        .environment;
-      if (!isServerFileId(id) || !shouldStubServerModule(environment)) return;
-      const file = id.split("?")[0] ?? id;
+    transform(code, id, extra?: { ssr?: boolean }) {
+      if (!isServerFileId(id) || !pluginShouldStub(this, extra)) return;
       return generateClientStub({
-        key: moduleKey(file),
+        key: moduleKey(id.split("?")[0] ?? id),
         exports: parseExportedNames(code),
       });
     },
