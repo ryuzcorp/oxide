@@ -24,6 +24,6 @@ jobs:
       - run: bun install
       - run: bun run typecheck
       - run: bun run lint
-      - run: bun test
       - run: bun run build
+      - run: bun test
       - run: bunx pkg-pr-new publish './packages/*'
