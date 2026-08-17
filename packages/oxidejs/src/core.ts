@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type {
+  OxidejsActionTransport,
   OxidejsOptions,
   OxidejsPreset,
   OxidejsWranglerOptions,
@@ -125,6 +126,13 @@ export function resolveOptions(
   if (preset !== "fetch" && preset !== "celld") {
     throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
   }
+  const actions: OxidejsActionTransport = raw?.actions ?? "http";
+  if (actions !== "http" && actions !== "ws") {
+    throw new Error(`oxidejs: unknown actions transport "${String(actions)}"`);
+  }
+  if (actions === "ws" && preset === "celld") {
+    throw new Error('oxidejs: actions: "ws" is not supported with preset: "celld"');
+  }
   const workerEntry = raw?.workerEntry ?? "src/server.ts";
   const outDirInput = raw?.outDir ?? "dist";
   const clientDir = raw?.clientDir ?? "client";
@@ -134,8 +142,9 @@ export function resolveOptions(
   const outDir = path.resolve(rootAbs, outDirInput);
   const workerEntryAbs = path.resolve(rootAbs, workerEntry);
   const hasClient = hasHtmlEntry(rootAbs, config);
+  const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
 
-  if (hasClient) assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
+  if (hasClient || hasPublic) assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
 
   if (raw?.wrangler) {
     validateWranglerOptions(raw.wrangler as unknown as Record<string, unknown>);
@@ -153,7 +162,17 @@ export function resolveOptions(
     wrangler,
     emitConfig,
     hasClient,
+    hasPublic,
+    actions,
+    actionHeaders: raw?.actionHeaders,
   };
+}
+
+export function copyPublicDir(opts: ResolvedOptions): void {
+  if (opts.preset !== "fetch") return;
+  const src = path.join(opts.root, "public");
+  if (!fs.existsSync(src)) return;
+  fs.cpSync(src, path.join(opts.outDir, opts.clientDir), { recursive: true, force: true });
 }
 
 export function tryEmitWranglerConfig(opts: ResolvedOptions, state: EmitState): void {

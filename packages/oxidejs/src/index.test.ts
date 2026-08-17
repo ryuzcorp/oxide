@@ -57,8 +57,13 @@ describe("factory shape", () => {
     try {
       const stub = load.call(ctx, file);
       expect(typeof stub).toBe("string");
-      expect(String(stub)).toContain("createClient");
+      expect(String(stub)).toContain("virtual:oxide/client");
       expect(String(stub)).not.toContain("leak-me");
+      expect(String(load.call(ctx, "\0virtual:oxide/client"))).toContain("tacho/client/http");
+      const wsPlugin = unpluginFactory({ actions: "ws" }, { framework: "vite" } as never);
+      if (Array.isArray(wsPlugin)) throw new Error("expected a single plugin");
+      const wsLoad = wsPlugin.load as (this: object, id: string) => unknown;
+      expect(String(wsLoad.call(ctx, "\0virtual:oxide/client"))).toContain("tacho/client/ws");
       expect(() => load.call(ctx, RESOLVED_VIRTUAL_ACTIONS_ID)).toThrow(
         `${VIRTUAL_ACTIONS_ID} is server-only`,
       );

@@ -85,7 +85,7 @@ export default {
 };
 ```
 
-Return `undefined` to fall through to static files / `index.html`.
+Return `undefined` to fall through to static files. Missing files fall back to `index.html` only for navigations.
 
 ## Build and run
 
@@ -94,7 +94,7 @@ vite build
 node dist/server.js
 ```
 
-No `index.html` → only `dist/server.js`. With `index.html` → client assets in `dist/client/`.
+No `index.html` → only `dist/server.js`. With `index.html` → client assets in `dist/client/`. Files in `public/` land next to those assets.
 
 ## Common workflows
 

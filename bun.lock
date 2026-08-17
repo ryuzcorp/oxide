@@ -46,11 +46,13 @@
       },
       "peerDependencies": {
         "@rsbuild/core": "*",
+        "crossws": "*",
         "tacho": "*",
         "vite": "*",
       },
       "optionalPeers": [
         "@rsbuild/core",
+        "crossws",
         "tacho",
         "vite",
       ],

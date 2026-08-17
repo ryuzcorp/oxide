@@ -63,11 +63,15 @@
   },
   "peerDependencies": {
     "@rsbuild/core": "*",
+    "crossws": "*",
     "tacho": "*",
     "vite": "*"
   },
   "peerDependenciesMeta": {
     "@rsbuild/core": {
+      "optional": true
+    },
+    "crossws": {
       "optional": true
     },
     "vite": {

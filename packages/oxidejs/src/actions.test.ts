@@ -5,6 +5,7 @@ import path from "node:path";
 import { handle } from "tacho/transport/fetch";
 import {
   generateActionsModule,
+  generateClientModule,
   generateClientStub,
   generateWorkerWrapper,
   loadClientStub,
@@ -13,6 +14,7 @@ import {
   scanServerFiles,
   shouldStubServerModule,
 } from "./actions";
+import { useRequest } from "./context";
 
 describe("parseExportedNames", () => {
   test("finds functions, generators, and consts", () => {
@@ -45,10 +47,15 @@ describe("scanServerFiles", () => {
 });
 
 describe("codegen", () => {
-  test("client stub posts through tacho", () => {
+  test("client stub posts through the shared tacho client", () => {
     const stub = generateClientStub({ key: "test", exports: ["ping"] });
-    expect(stub).toContain('createClient({ url: "/_action" })');
-    expect(stub).toContain('__rpc["test"]["ping"](args)');
+    expect(stub).toContain('from "virtual:oxide/client"');
+    expect(stub).toContain('client["test"]["ping"](args)');
+    expect(generateClientModule()).toContain('createClient({"url":"/_action"})');
+    expect(generateClientModule("http", { authorization: "Bearer x" })).toContain(
+      '"authorization":"Bearer x"',
+    );
+    expect(generateClientModule("ws")).toContain("tacho/client/ws");
   });
 
   test("virtual module keys exports by file", () => {
@@ -58,6 +65,7 @@ describe("codegen", () => {
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('"test": {');
     expect(code).toContain('"ping": rpc.run');
+    expect(code).toContain("__als.run(ctx.req");
     expect(code).toContain(".apply(null,");
     expect(code).not.toContain('"_action": {');
   });
@@ -72,9 +80,12 @@ describe("codegen", () => {
     expect(code).toContain("if (hit) return hit");
     expect(code).toContain('from "node:fs/promises"');
     expect(code).toContain("await __asset(request)");
-    expect(code).toContain("await __asset(request, true)");
+    expect(code).toContain("__nav(request)");
+    expect(code).toContain("woff2");
+    expect(code).toContain("immutable");
     expect(code).toContain("createServer");
     expect(code).toContain("response.body.getReader()");
+    expect(code).toContain("...user");
   });
 
   test("fetch wrapper without client skips assets", () => {
@@ -90,6 +101,14 @@ describe("codegen", () => {
     expect(code).not.toContain("node:fs/promises");
     expect(code).not.toContain("createServer");
     expect(code).toContain('new Response("Not Found", { status: 404 })');
+    expect(code).toContain("export * from");
+    expect(code).toContain("...user");
+  });
+
+  test("fetch wrapper with public/ still serves assets", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { hasPublic: true });
+    expect(code).toContain("node:fs/promises");
+    expect(code).toContain("__nav(request)");
   });
 
   test("wrapper without actions skips tacho", () => {
@@ -98,6 +117,13 @@ describe("codegen", () => {
     expect(code).not.toContain("virtual:oxide/actions");
     expect(code).not.toContain("/_action");
     expect(code).toContain("user.fetch(request, env, ctx)");
+  });
+
+  test("ws wrapper upgrades /_action", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { actions: "ws" });
+    expect(code).toContain("tacho/transport/ws");
+    expect(code).toContain("crossws/adapters/node");
+    expect(code).not.toContain("tacho/transport/fetch");
   });
 
   test("stubs client, not worker", () => {
@@ -139,8 +165,8 @@ describe("codegen", () => {
     );
     try {
       const stub = loadClientStub(file);
-      expect(stub).toContain('createClient({ url: "/_action" })');
-      expect(stub).toContain('__rpc["secret"]["ping"](args)');
+      expect(stub).toContain('from "virtual:oxide/client"');
+      expect(stub).toContain('client["secret"]["ping"](args)');
       expect(stub).not.toContain("leak-me");
       expect(stub).not.toContain("const SECRET");
     } finally {
@@ -210,6 +236,32 @@ describe("generated router", () => {
           "",
         ].join("\n"),
       );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("useRequest() reads the inbound Request inside an action", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-req-"));
+    fs.writeFileSync(
+      path.join(root, "who.server.ts"),
+      `import { useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export async function who() { return useRequest().headers.get("x-user") }
+`,
+    );
+    const out = path.join(root, "actions.mjs");
+    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
+    try {
+      const { default: actions } = await import(out);
+      const res = await handle(actions, { path: "/_action" })(
+        new Request("http://localhost/_action", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-user": "ada" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
+        }),
+      );
+      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "ada" });
+      expect(() => useRequest()).toThrow("outside an action");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

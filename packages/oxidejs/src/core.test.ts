@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { copyPublicDir, createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
 
 const wrangler = { name: "vite-cf", compatibility_date: "2026-01-01" };
 
@@ -30,6 +30,24 @@ describe("resolveOptions", () => {
     expect(resolved.emitConfig).toBe(false);
     expect(resolved.workerEntryAbs).toBe(path.resolve(root, "src/server.ts"));
     expect(resolved.hasClient).toBe(false);
+    expect(resolved.hasPublic).toBe(false);
+    expect(resolved.actions).toBe("http");
+  });
+
+  test("detects public/", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.mkdirSync(path.join(root, "public"));
+    expect(resolveOptions({}, root).hasPublic).toBe(true);
+  });
+
+  test("rejects unknown actions transport and ws+celld", () => {
+    expect(() => resolveOptions({ actions: "ftp" as never }, process.cwd())).toThrow(
+      "unknown actions transport",
+    );
+    expect(() =>
+      resolveOptions({ preset: "celld", actions: "ws", wrangler }, process.cwd()),
+    ).toThrow('actions: "ws" is not supported with preset: "celld"');
   });
 
   test("detects client when index.html exists", () => {
@@ -199,5 +217,28 @@ describe("tryEmitWranglerConfig", () => {
     fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
     tryEmitWranglerConfig(resolved, createEmitState());
     expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(false);
+  });
+});
+
+describe("copyPublicDir", () => {
+  test("copies public/ next to client assets", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.mkdirSync(path.join(root, "public"), { recursive: true });
+    fs.writeFileSync(path.join(root, "public", "favicon.ico"), "ico");
+    const resolved = resolveOptions({}, root);
+    copyPublicDir(resolved);
+    expect(fs.readFileSync(path.join(resolved.outDir, "client", "favicon.ico"), "utf8")).toBe(
+      "ico",
+    );
+  });
+
+  test("skips public/ on celld", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.mkdirSync(path.join(root, "public"), { recursive: true });
+    fs.writeFileSync(path.join(root, "public", "favicon.ico"), "ico");
+    copyPublicDir(resolveOptions({ preset: "celld", wrangler }, root));
+    expect(fs.existsSync(path.join(root, "dist", "client", "favicon.ico"))).toBe(false);
   });
 });

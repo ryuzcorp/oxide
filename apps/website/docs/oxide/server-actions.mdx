@@ -31,4 +31,38 @@ import { ping } from "./test.server";
 const result = await ping();
 ```
 
-`async function*` exports stream over tacho SSE. `vite dev` and `rsbuild dev` serve `/_action` via middleware.
+`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. `vite dev` and `rsbuild dev` serve `/_action` via middleware. Changing a `*.server.ts` file reloads that handler on both.
+
+## useRequest
+
+Call `useRequest()` inside an action for the inbound `Request`. It throws outside `/_action`.
+
+```ts twoslash src/who.server.ts
+import { useRequest } from "oxidejs";
+
+export async function who() {
+  return useRequest().headers.get("x-user");
+}
+```
+
+## Transport
+
+Stubs share one tacho client. Pass static headers with [`actionHeaders`](/oxide/configuration#actionheaders). Functions cannot ship to the browser.
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({
+  actionHeaders: { authorization: "Bearer x" },
+});
+```
+
+[`actions: "ws"`](/oxide/configuration#actions) upgrades `/_action` to a WebSocket. Install `crossws`. It does not work with [`preset: "celld"`](/oxide/configuration#preset).
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({
+  actions: "ws",
+});
+```

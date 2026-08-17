@@ -18,7 +18,7 @@ Choose `oxidejs` when you want a deployable tree from [Vite](https://vite.dev/) 
 ## What you get
 
 - **One output tree** - a server bundle, plus a client when you have a page.
-- **Server actions** - write a function on the server and call it from the browser. Types stay in sync. The function never ships to the client.
+- **Server actions** - write a function on the server and call it from the browser. Types stay in sync. The function never ships to the client. Call [`useRequest()`](/oxide/server-actions#userequest) for the inbound `Request`.
 - **Two [presets](/oxide/configuration#preset)** - fetch serves static files from Node. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers.
 - **[Vite](https://vite.dev/) and [Rsbuild](https://rsbuild.rs/)** - same plugin, same output.
 

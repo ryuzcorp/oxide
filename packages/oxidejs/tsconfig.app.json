@@ -15,6 +15,6 @@
     "resolveJsonModule": true,
     "noImplicitOverride": true,
     "jsx": "preserve",
-    "types": ["vite/client", "oxidejs/client"]
+    "types": ["vite/client", "oxidejs/client", "oxidejs/virtual"]
   }
 }

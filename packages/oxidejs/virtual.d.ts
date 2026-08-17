@@ -4,3 +4,7 @@ declare module "virtual:oxide/actions" {
   export default actions;
   export { actions };
 }
+
+declare module "virtual:oxide/client" {
+  export const client: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>;
+}

@@ -10,6 +10,11 @@ export interface OxidejsWranglerOptions {
   vars?: Record<string, unknown>;
 }
 
+export type OxidejsActionTransport = "http" | "ws";
+
+/** Static headers inlined into the shared action client. Functions cannot ship to the browser. */
+export type OxidejsActionHeaders = Record<string, string> | [string, string][];
+
 export interface OxidejsOptions {
   /** "fetch" (default) skips wrangler.jsonc and serves client assets. "celld" emits wrangler.jsonc. */
   preset?: OxidejsPreset;
@@ -28,6 +33,12 @@ export interface OxidejsOptions {
 
   /** Skip config emission. Defaults to false for celld, true for fetch. */
   emitConfig?: boolean;
+
+  /** Transport for `*.server.ts` stubs. Default: "http". */
+  actions?: OxidejsActionTransport;
+
+  /** Extra headers on the shared HTTP action client. Ignored when `actions` is "ws". */
+  actionHeaders?: OxidejsActionHeaders;
 }
 
 export interface ResolvedOptions {
@@ -43,4 +54,8 @@ export interface ResolvedOptions {
   emitConfig: boolean;
   /** False when there is no index.html — server-only, no client env or assets. */
   hasClient: boolean;
+  /** True when `<root>/public` exists. Copied next to client assets on fetch. */
+  hasPublic: boolean;
+  actions: OxidejsActionTransport;
+  actionHeaders: OxidejsActionHeaders | undefined;
 }

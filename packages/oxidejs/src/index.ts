@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   ACTION_PATH,
   generateActionsModule,
+  generateClientModule,
   generateClientStub,
   generateWorkerWrapper,
   isServerFileId,
@@ -15,13 +16,16 @@ import {
   parseExportedNames,
   pluginShouldStub,
   RESOLVED_VIRTUAL_ACTIONS_ID,
+  RESOLVED_VIRTUAL_CLIENT_ID,
   RESOLVED_VIRTUAL_WORKER_ID,
   scanServerFiles,
   sendWebResponseFrom,
   VIRTUAL_ACTIONS_ID,
+  VIRTUAL_CLIENT_ID,
   VIRTUAL_WORKER_ID,
 } from "./actions";
-import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { copyPublicDir, createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { useRequest } from "./context";
 import type { OxidejsOptions, ResolvedOptions } from "./types";
 import {
   applyRsbuildEnvironments,
@@ -50,6 +54,39 @@ function actionMiddleware(loadRouter: () => Promise<unknown>) {
   };
 }
 
+function attachActionUpgrade(
+  httpServer:
+    | {
+        on(
+          event: "upgrade",
+          listener: (req: IncomingMessage, socket: { destroy(): void }, head: Buffer) => void,
+        ): void;
+      }
+    | null
+    | undefined,
+  loadRouter: () => Promise<unknown>,
+) {
+  if (!httpServer) return;
+  void Promise.all([import("tacho/transport/ws"), import("crossws/adapters/node")]).then(
+    ([{ handle }, { default: crossws }]) => {
+      httpServer.on("upgrade", (req, socket, head) => {
+        if ((req.url ?? "").split("?")[0] !== ACTION_PATH) return;
+        void loadRouter()
+          .then((router) =>
+            crossws({ hooks: handle(router, { path: ACTION_PATH }) }).handleUpgrade(
+              req,
+              socket as never,
+              head,
+            ),
+          )
+          .catch(() => {
+            socket.destroy();
+          });
+      });
+    },
+  );
+}
+
 function previewMiddleware(file: string) {
   return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
     void (async () => {
@@ -63,12 +100,25 @@ function previewMiddleware(file: string) {
 
 interface RsbuildServer {
   middlewares: { use: (fn: (req: ConnectReq, res: ConnectRes, next: ConnectNext) => void) => void };
+  httpServer?: {
+    on(
+      event: "upgrade",
+      listener: (req: IncomingMessage, socket: { destroy(): void }, head: Buffer) => void,
+    ): void;
+  };
 }
 
 interface RsbuildPluginApi {
   modifyRsbuildConfig: (fn: (config: RsbuildUserConfig) => void) => void;
   onBeforeStartDevServer: (fn: (ctx: { server: RsbuildServer }) => void) => void;
   onBeforeStartPreviewServer?: (fn: (ctx: { server: RsbuildServer }) => void) => void;
+}
+
+function loadActions(root: string) {
+  const code = generateActionsModule(scanServerFiles(root), { bust: true });
+  return import(`data:text/javascript,${encodeURIComponent(code)}`) as Promise<{
+    default: unknown;
+  }>;
 }
 
 export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (options) => {
@@ -85,9 +135,16 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
     resolveId(id) {
       if (id === VIRTUAL_ACTIONS_ID) return RESOLVED_VIRTUAL_ACTIONS_ID;
       if (id === VIRTUAL_WORKER_ID) return RESOLVED_VIRTUAL_WORKER_ID;
+      if (id === VIRTUAL_CLIENT_ID) return RESOLVED_VIRTUAL_CLIENT_ID;
       return null;
     },
     load(id, extra?: { ssr?: boolean }) {
+      if (id === RESOLVED_VIRTUAL_CLIENT_ID) {
+        return generateClientModule(
+          resolved?.actions ?? options?.actions ?? "http",
+          resolved?.actionHeaders ?? options?.actionHeaders,
+        );
+      }
       if (id === RESOLVED_VIRTUAL_ACTIONS_ID || id === RESOLVED_VIRTUAL_WORKER_ID) {
         if (pluginShouldStub(this, extra)) {
           throw new Error(
@@ -109,7 +166,9 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           preset: resolved.preset,
           clientDir: resolved.clientDir,
           hasClient: resolved.hasClient,
+          hasPublic: resolved.hasPublic,
           hasActions: modules.length > 0,
+          actions: resolved.actions,
         });
       }
       if (isServerFileId(id) && pluginShouldStub(this, extra)) {
@@ -142,12 +201,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
         server.watcher.on("all", (_event, file) => {
           if (isServerFileId(file)) invalidateActions();
         });
-        server.middlewares.use(
-          actionMiddleware(async () => {
-            const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
-            return mod.default;
-          }),
-        );
+        const loadRouter = async () => {
+          const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
+          return mod.default;
+        };
+        if (resolved?.actions === "ws") attachActionUpgrade(server.httpServer, loadRouter);
+        else server.middlewares.use(actionMiddleware(loadRouter));
       },
       configurePreviewServer(server) {
         if (resolved?.preset !== "fetch") return;
@@ -162,15 +221,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           applyRsbuildEnvironments(config, resolved);
         });
         api.onBeforeStartDevServer(({ server }) => {
-          server.middlewares.use(
-            actionMiddleware(async () => {
-              const root = resolved?.root ?? process.cwd();
-              const code = generateActionsModule(scanServerFiles(root));
-              const data = `data:text/javascript,${encodeURIComponent(code)}`;
-              const mod = (await import(data)) as { default: unknown };
-              return mod.default;
-            }),
-          );
+          const loadRouter = async () => {
+            const root = resolved?.root ?? process.cwd();
+            return (await loadActions(root)).default;
+          };
+          if (resolved?.actions === "ws") attachActionUpgrade(server.httpServer, loadRouter);
+          else server.middlewares.use(actionMiddleware(loadRouter));
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {
           if (resolved?.preset !== "fetch") return;
@@ -180,6 +236,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
     },
     writeBundle() {
       if (!resolved) return;
+      copyPublicDir(resolved);
       tryEmitWranglerConfig(resolved, emitState);
     },
   };
@@ -190,7 +247,10 @@ export const oxidejs = createUnplugin(unpluginFactory);
 export const vite = oxidejs.vite;
 
 export default oxidejs;
+export { useRequest };
 export type {
+  OxidejsActionHeaders,
+  OxidejsActionTransport,
   OxidejsOptions,
   OxidejsPreset,
   OxidejsWranglerOptions,

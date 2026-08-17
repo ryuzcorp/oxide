@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import type { OxidejsPreset } from "./types";
+import type { OxidejsActionHeaders, OxidejsActionTransport, OxidejsPreset } from "./types";
 
 export const VIRTUAL_ACTIONS_ID = "virtual:oxide/actions";
 export const RESOLVED_VIRTUAL_ACTIONS_ID = `\0${VIRTUAL_ACTIONS_ID}`;
 export const VIRTUAL_WORKER_ID = "virtual:oxide/worker";
 export const RESOLVED_VIRTUAL_WORKER_ID = `\0${VIRTUAL_WORKER_ID}`;
+export const VIRTUAL_CLIENT_ID = "virtual:oxide/client";
+export const RESOLVED_VIRTUAL_CLIENT_ID = `\0${VIRTUAL_CLIENT_ID}`;
 export const ACTION_PATH = "/_action";
 
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
@@ -80,24 +82,44 @@ export function scanServerFiles(root: string): ServerModule[] {
   return modules;
 }
 
+export function generateClientModule(
+  transport: OxidejsActionTransport = "http",
+  headers?: OxidejsActionHeaders,
+): string {
+  if (transport === "ws") {
+    return `import { createClient } from "tacho/client/ws";
+const __proto = typeof location === "undefined" ? "ws:" : location.protocol === "https:" ? "wss:" : "ws:";
+const __host = typeof location === "undefined" ? "localhost" : location.host;
+export const client = createClient({ url: __proto + "//" + __host + ${JSON.stringify(ACTION_PATH)} });
+`;
+  }
+  const opts: { url: string; headers?: OxidejsActionHeaders } = { url: ACTION_PATH };
+  if (headers) opts.headers = headers;
+  return `import { createClient } from "tacho/client/http";
+export const client = createClient(${JSON.stringify(opts)});
+`;
+}
+
 export function generateClientStub(mod: Pick<ServerModule, "key" | "exports">): string {
-  const lines = [
-    `import { createClient } from "tacho/client/http";`,
-    `const __rpc = createClient({ url: ${JSON.stringify(ACTION_PATH)} });`,
-  ];
+  const lines = [`import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`];
   for (const name of mod.exports) {
     lines.push(
-      `export const ${name} = (...args) => __rpc[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args);`,
+      `export const ${name} = (...args) => client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args);`,
     );
   }
   return `${lines.join("\n")}\n`;
 }
 
-export function generateActionsModule(modules: ServerModule[]): string {
-  const lines = [`import { tacho } from "tacho";`];
+export function generateActionsModule(modules: ServerModule[], opts?: { bust?: boolean }): string {
+  const lines = [
+    `import { AsyncLocalStorage } from "node:async_hooks";`,
+    `import { tacho } from "tacho";`,
+    `const __als = globalThis.__oxidejsRequest ??= new AsyncLocalStorage();`,
+  ];
   const aliases = modules.map((mod, i) => {
     const alias = `__m${i}`;
-    lines.push(`import * as ${alias} from ${JSON.stringify(mod.abs)};`);
+    const spec = opts?.bust === true ? `${mod.abs}?t=${fs.statSync(mod.abs).mtimeMs}` : mod.abs;
+    lines.push(`import * as ${alias} from ${JSON.stringify(spec)};`);
     return { alias, mod };
   });
   lines.push(`const rpc = tacho();`);
@@ -106,7 +128,7 @@ export function generateActionsModule(modules: ServerModule[]): string {
     lines.push(`  ${JSON.stringify(mod.key)}: {`);
     for (const name of mod.exports) {
       lines.push(
-        `    ${JSON.stringify(name)}: rpc.run(({ input }) => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : [])),`,
+        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx.req, () => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []))),`,
       );
     }
     lines.push(`  },`);
@@ -159,24 +181,40 @@ export function generateWorkerWrapper(
     preset?: OxidejsPreset;
     clientDir?: string;
     hasClient?: boolean;
+    hasPublic?: boolean;
     hasActions?: boolean;
+    actions?: OxidejsActionTransport;
   } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
   const clientDir = opts.clientDir ?? "client";
-  const serveAssets = preset === "fetch" && opts.hasClient === true;
+  const serveAssets = preset === "fetch" && (opts.hasClient === true || opts.hasPublic === true);
   const hasActions = opts.hasActions !== false;
+  const ws = hasActions && opts.actions === "ws";
   const assetBlock = serveAssets
     ? `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 const __assets = join(import.meta.dirname, ${JSON.stringify(clientDir)});
-const __types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+const __types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2", ".webp": "image/webp" };
+function __nav(request) {
+  const dest = request.headers.get("sec-fetch-dest");
+  if (dest) return dest === "document";
+  return (request.headers.get("accept") ?? "").includes("text/html");
+}
+function __cache(file) {
+  if (file === "/index.html") return "no-cache";
+  return /[-.][0-9a-f]{8,}.[a-z0-9]+$/i.test(file) ? "public, max-age=31536000, immutable" : undefined;
+}
 async function __asset(request, spa) {
   let file = new URL(request.url).pathname;
+  if (file.includes("\\0") || file.split("/").includes("..")) return;
   if (file === "/" || spa) file = "/index.html";
   try {
     const body = await readFile(join(__assets, file));
-    return new Response(body, { headers: { "content-type": __types[extname(file)] ?? "application/octet-stream" } });
+    const headers = { "content-type": __types[extname(file)] ?? "application/octet-stream" };
+    const cache = __cache(file);
+    if (cache) headers["cache-control"] = cache;
+    return new Response(body, { headers });
   } catch {
     return;
   }
@@ -188,7 +226,7 @@ async function __asset(request, spa) {
       const hit = await user.fetch(request, env, ctx);
       if (hit) return hit;
     }
-    return (await __asset(request)) ?? (await __asset(request, true)) ?? new Response("Not Found", { status: 404 });`
+    return (await __asset(request)) ?? (__nav(request) ? await __asset(request, true) : undefined) ?? new Response("Not Found", { status: 404 });`
     : `return typeof user.fetch === "function"
       ? user.fetch(request, env, ctx)
       : new Response("Not Found", { status: 404 });`;
@@ -199,7 +237,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT) || 3000;
-  createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     const url = \`http://\${req.headers.host ?? "localhost"}\${req.url ?? "/"}\`;
     const headers = new Headers();
     for (const [key, value] of Object.entries(req.headers)) {
@@ -223,20 +261,37 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (value) res.write(value);
     }
     res.end();
-  }).listen(port, () => console.log(\`oxidejs listening on \${port}\`));
+  });${
+    ws
+      ? `
+  import("crossws/adapters/node").then(({ default: crossws }) => {
+    const ws = crossws({ hooks: __ws });
+    server.on("upgrade", (req, socket, head) => {
+      if (req.url?.split("?")[0] === ${JSON.stringify(ACTION_PATH)}) ws.handleUpgrade(req, socket, head);
+    });
+  });`
+      : ""
+  }
+  server.listen(port, () => console.log(\`oxidejs listening on \${port}\`));
 }
 `
       : "";
   const actionImports = hasActions
-    ? `import { handle } from "tacho/transport/fetch";
+    ? ws
+      ? `import { handle as handleWs } from "tacho/transport/ws";
+import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+const __ws = handleWs(actions, { path: ${JSON.stringify(ACTION_PATH)} });
+`
+      : `import { handle } from "tacho/transport/fetch";
 import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)} });
 `
     : "";
-  const actionGate = hasActions
-    ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) return __rpc(request);
+  const actionGate =
+    hasActions && !ws
+      ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) return __rpc(request);
     `
-    : "";
+      : "";
   return `export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
 ${actionImports}${assetBlock}const app = {

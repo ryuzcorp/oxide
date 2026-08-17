@@ -17,6 +17,10 @@ export default {
 };
 ```
 
-If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, that means a matching static file, then `index.html`. Without a page, the build is only the server bundle - there is nothing to fall through to.
+If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, that means a matching static file. Missing files fall back to `index.html` only for navigations (`Sec-Fetch-Dest: document` or `Accept: text/html`). A fetch for `/missing.js` is still `404`.
+
+`public/` is copied next to the client on [`preset: "fetch"`](/oxide/configuration#preset). Hashed assets get `Cache-Control: immutable`. `index.html` is `no-cache`. Without a page, the build is only the server bundle - there is nothing to fall through to.
+
+Named exports such as `scheduled` and `queue` stay on the celld wrapper. Spread them yourself if you replace `fetch`.
 
 To serve typed RPC from this file, set up a tacho router and pass it to `handle()`. See the [Tacho quickstart](/tacho/quickstart).

@@ -9,5 +9,13 @@ export default defineConfig({
   dts: true,
   format: "esm",
   platform: "node",
-  external: ["unplugin", "tacho", "tacho/transport/fetch", "tacho/client/http"],
+  external: [
+    "unplugin",
+    "tacho",
+    "tacho/transport/fetch",
+    "tacho/transport/ws",
+    "tacho/client/http",
+    "tacho/client/ws",
+    "crossws/adapters/node",
+  ],
 });
