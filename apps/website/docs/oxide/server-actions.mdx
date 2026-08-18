@@ -42,23 +42,22 @@ export async function* ticks(n: number) {
 
 ## Abort
 
-Pass `{ signal }` last on any action — stream or unary. Types still come from the real `*.server.ts`, so cast with `Action`.
+Pass `{ signal }` last on any action — stream or unary. Types come from the real `*.server.ts`, so declare the last argument there:
 
 ```ts twoslash src/abort.ts
 // @filename: test.server.ts
-export async function ping() {
+import type { ActionOptions } from "oxidejs";
+
+export async function ping(_opts?: ActionOptions) {
   return "pong" as const;
 }
-export async function* ticks(n: number) {
+export async function* ticks(n: number, _opts?: ActionOptions) {
   for (let i = 0; i < n; i++) yield i;
 }
 // ---cut---
 // @filename: abort.ts
-import type { Action } from "oxidejs";
-import { ping as pingFn, ticks as ticksFn } from "./test.server";
+import { ping, ticks } from "./test.server";
 
-const ping = pingFn as Action<typeof pingFn>;
-const ticks = ticksFn as Action<typeof ticksFn>;
 const ac = new AbortController();
 const stream = await ticks(10, { signal: ac.signal });
 await ping({ signal: ac.signal });

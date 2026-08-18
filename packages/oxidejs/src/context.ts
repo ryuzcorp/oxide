@@ -54,9 +54,5 @@ export function runWithRequest<T>(req: Request, fn: () => T, extra?: ActionConte
   return als().run(extra ?? { req }, fn);
 }
 
+/** Optional last argument on a `*.server.ts` export so the client can pass `{ signal }`. */
 export type ActionOptions = { signal?: AbortSignal };
-
-/** Client call shape: same args as the server export, plus optional `{ signal }` last. */
-export type Action<T extends (...args: never[]) => unknown> = (
-  ...args: [...Parameters<T>, options?: ActionOptions]
-) => ReturnType<T> | Promise<ReturnType<T>>;

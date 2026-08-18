@@ -247,7 +247,7 @@ export const vite = oxidejs.vite;
 
 export default oxidejs;
 export { useCtx, useEnv, useFetchCtx, useRequest } from "./context";
-export type { Action, ActionContext, ActionOptions, ExecutionContext } from "./context";
+export type { ActionContext, ActionOptions, ExecutionContext } from "./context";
 export type {
   OxidejsActionHeaders,
   OxidejsActionTransport,

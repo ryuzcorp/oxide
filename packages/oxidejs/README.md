@@ -73,13 +73,19 @@ export default {
 };
 ```
 
-`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch:
+`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch. Types come from the real `*.server.ts`, so declare the last argument there:
 
 ```ts
-import type { Action } from "oxidejs";
-import { ticks as ticksFn } from "./test.server";
+// src/test.server.ts
+import type { ActionOptions } from "oxidejs";
 
-const ticks = ticksFn as Action<typeof ticksFn>;
+export async function* ticks(n: number, _opts?: ActionOptions) {
+  for (let i = 0; i < n; i++) yield i;
+}
+
+// src/client.ts
+import { ticks } from "./test.server";
+
 const ac = new AbortController();
 const stream = await ticks(10, { signal: ac.signal });
 ac.abort();
