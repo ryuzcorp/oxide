@@ -35,4 +35,15 @@ export default defineConfig({
   deployment: {
     site: "https://oxide.build",
   },
+  analytics: {
+    scripts: [
+      {
+        src: "https://umami.guarana.studio/script.js",
+        strategy: "defer",
+        attributes: {
+          "data-website-id": "a6f30bfd-7ef3-49f5-901c-b9ce066cd824",
+        },
+      },
+    ],
+  },
 });
