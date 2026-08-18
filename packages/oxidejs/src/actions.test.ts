@@ -138,7 +138,7 @@ describe("codegen", () => {
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('"test": {');
     expect(code).toContain('"ping": rpc.run');
-    expect(code).toContain("__als.run(ctx,");
+    expect(code).toContain("__als.run(ctx, () => out.next");
     expect(code).toContain(".apply(null,");
     expect(code).not.toContain('"_action": {');
   });
@@ -159,6 +159,7 @@ describe("codegen", () => {
     expect(code).toContain("immutable");
     expect(code).toContain("createServer");
     expect(code).toContain("signal: ac.signal");
+    expect(code).toContain('req.once("aborted"');
     expect(code).toContain("response.body.getReader()");
     expect(code).toContain("...user");
   });
@@ -330,6 +331,32 @@ describe("generated router", () => {
     }
   });
 
+  test("useRequest() works inside an async generator", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-gen-req-"));
+    fs.writeFileSync(
+      path.join(root, "who.server.ts"),
+      `import { useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export async function* who() { yield useRequest().headers.get("x-user") }
+`,
+    );
+    const out = path.join(root, "actions.mjs");
+    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
+    try {
+      const { default: actions } = await import(out);
+      const res = await handle(actions, { path: "/_action" })(
+        new Request("http://localhost/_action", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-user": "ada" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
+        }),
+      );
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      expect(await res.text()).toContain('"result":"ada"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("useRequest() reads the inbound Request inside an action", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-req-"));
     fs.writeFileSync(
@@ -435,19 +462,38 @@ export async function wait() {
     }
   });
 
-  test("nodeToWebRequest abort follows IncomingMessage close", async () => {
+  test("nodeToWebRequest abort follows IncomingMessage aborted", async () => {
     const { EventEmitter } = await import("node:events");
     const req = Object.assign(new EventEmitter(), {
       method: "GET",
       url: "/",
       headers: { host: "localhost" },
       aborted: false,
-      destroyed: false,
+      destroyed: true,
     });
     const request = await nodeToWebRequest(req as never);
     expect(request.signal.aborted).toBe(false);
     req.emit("close");
+    expect(request.signal.aborted).toBe(false);
+    req.emit("aborted");
     expect(request.signal.aborted).toBe(true);
+  });
+
+  test("nodeToWebRequest stays open after draining a POST body", async () => {
+    const { EventEmitter } = await import("node:events");
+    const chunks = [Buffer.from('{"jsonrpc":"2.0"}')];
+    const req = Object.assign(new EventEmitter(), {
+      method: "POST",
+      url: "/_action",
+      headers: { host: "localhost" },
+      destroyed: true,
+      async *[Symbol.asyncIterator]() {
+        yield* chunks;
+      },
+    });
+    const request = await nodeToWebRequest(req as never);
+    expect(request.signal.aborted).toBe(false);
+    expect(await request.text()).toBe('{"jsonrpc":"2.0"}');
   });
 
   test("/_action is POST-only and rejects unknown methods", async () => {

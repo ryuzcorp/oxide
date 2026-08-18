@@ -149,7 +149,16 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     lines.push(`  ${JSON.stringify(mod.key)}: {`);
     for (const name of mod.exports) {
       lines.push(
-        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx, () => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []))),`,
+        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx, () => {
+      const out = ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []);
+      if (!out || typeof out !== "object" || typeof out.next !== "function") return out;
+      return {
+        next: (v) => __als.run(ctx, () => out.next(v)),
+        return: (v) => __als.run(ctx, () => out.return(v)),
+        throw: (e) => __als.run(ctx, () => out.throw(e)),
+        [Symbol.asyncIterator]() { return this; },
+      };
+    })),`,
       );
     }
     lines.push(`  },`);
@@ -179,11 +188,11 @@ function pipeResponse(
     const abort = () => {
       void reader.cancel();
     };
-    req.once("close", abort);
+    req.once("aborted", abort);
     const pull = (): void => {
       reader.read().then(({ done, value }) => {
         if (done) {
-          req.off("close", abort);
+          req.off("aborted", abort);
           res.end();
           resolve();
           return;
@@ -275,8 +284,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else headers.set(key, value);
     }
     const ac = new AbortController();
-    if (req.destroyed) ac.abort();
-    else req.once("close", () => ac.abort());
+    req.once("aborted", () => ac.abort());
     const method = req.method ?? "GET";
     const chunks = [];
     if (method !== "GET" && method !== "HEAD") for await (const chunk of req) chunks.push(chunk);
@@ -415,8 +423,7 @@ export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {
     }
   }
   const ac = new AbortController();
-  if (req.destroyed) ac.abort();
-  else req.once("close", () => ac.abort());
+  req.once("aborted", () => ac.abort());
   const method = req.method ?? "GET";
   const init: RequestInit = { method, headers, signal: ac.signal };
   if (method === "GET" || method === "HEAD") return new Request(url, init);

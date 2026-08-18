@@ -1,5 +1,5 @@
 {
-  "name": "template-ilha",
+  "name": "@oxidejs/template-ilha",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,8 @@
     "celld": "celld"
   },
   "dependencies": {
+    "@ilha/router": "^0.8.12",
+    "ilha": "^0.10.2",
     "tacho": "^0.4.0",
     "unstorage": "^2.0.0-alpha.7"
   },

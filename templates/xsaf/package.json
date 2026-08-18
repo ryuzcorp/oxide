@@ -1,5 +1,5 @@
 {
-  "name": "template-xsaf",
+  "name": "@oxidejs/template-xsaf",
   "private": true,
   "type": "module",
   "scripts": {

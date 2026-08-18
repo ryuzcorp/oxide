@@ -89,7 +89,7 @@ function attachActionUpgrade(
 function previewMiddleware(file: string) {
   return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
     void (async () => {
-      const mod = (await import(pathToFileURL(file).href)) as {
+      const mod = (await import(/* @vite-ignore */ pathToFileURL(file).href)) as {
         default: { fetch: (request: Request) => Promise<Response> };
       };
       await sendWebResponseFrom(req, res, await mod.default.fetch(await nodeToWebRequest(req)));
@@ -115,7 +115,7 @@ interface RsbuildPluginApi {
 
 function loadActions(root: string) {
   const code = generateActionsModule(scanServerFiles(root), { bust: true });
-  return import(`data:text/javascript,${encodeURIComponent(code)}`) as Promise<{
+  return import(/* @vite-ignore */ `data:text/javascript,${encodeURIComponent(code)}`) as Promise<{
     default: unknown;
   }>;
 }

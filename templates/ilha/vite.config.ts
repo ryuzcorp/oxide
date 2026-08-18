@@ -1,6 +1,10 @@
 import { defineConfig } from "vite";
 import oxide from "oxidejs/vite";
+import { pages } from "@ilha/router/vite";
 
 export default defineConfig({
-  plugins: [oxide()],
+  plugins: [oxide(), pages()],
+  resolve: {
+    tsconfigPaths: true,
+  },
 });
