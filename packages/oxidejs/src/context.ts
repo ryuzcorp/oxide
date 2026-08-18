@@ -59,4 +59,4 @@ export type ActionOptions = { signal?: AbortSignal };
 /** Client call shape: same args as the server export, plus optional `{ signal }` last. */
 export type Action<T extends (...args: never[]) => unknown> = (
   ...args: [...Parameters<T>, options?: ActionOptions]
-) => Promise<Awaited<ReturnType<T>>>;
+) => ReturnType<T> | Promise<ReturnType<T>>;
