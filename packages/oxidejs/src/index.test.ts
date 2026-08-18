@@ -104,7 +104,7 @@ describe("factory shape", () => {
         "server.js",
       );
       expect(config.environments?.["ssr"]?.resolve).toEqual({ noExternal: true });
-      expect(config.environments?.["ssr"]?.ssr).toEqual({ noExternal: true });
+      expect(config.environments?.["ssr"]?.ssr).toEqual({ noExternal: ["tacho"] });
       expect(config.build?.outDir).toBe(path.join(resolved.outDir, "client"));
       expect(config.build?.manifest).toBe(true);
     } finally {
