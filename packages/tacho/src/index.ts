@@ -174,7 +174,7 @@ export function resolveProcedure(router: AnyRouter, method: string) {
   if (!method || method.startsWith("rpc.")) return;
   let node: unknown = router;
   for (const segment of method.split(".")) {
-    if (!node || typeof node !== "object") return;
+    if (!node || typeof node !== "object" || !Object.hasOwn(node, segment)) return;
     node = (node as Record<string, unknown>)[segment];
   }
   return (node as ProcedureDef<any, any, any> | undefined)?.__rpc === true

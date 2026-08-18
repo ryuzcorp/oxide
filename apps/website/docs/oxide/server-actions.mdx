@@ -33,6 +33,40 @@ const result = await ping();
 
 `async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. `vite dev` and `rsbuild dev` serve `/_action` via middleware. Changing a `*.server.ts` file reloads that handler on both.
 
+```ts twoslash src/stream.ts
+// @filename: test.server.ts
+export async function* ticks(n: number) {
+  for (let i = 0; i < n; i++) yield i;
+}
+```
+
+## Abort
+
+Pass `{ signal }` last on any action — stream or unary. Types still come from the real `*.server.ts`, so cast with `Action`.
+
+```ts twoslash src/abort.ts
+// @filename: test.server.ts
+export async function ping() {
+  return "pong" as const;
+}
+export async function* ticks(n: number) {
+  for (let i = 0; i < n; i++) yield i;
+}
+// ---cut---
+// @filename: abort.ts
+import type { Action } from "oxidejs";
+import { ping as pingFn, ticks as ticksFn } from "./test.server";
+
+const ping = pingFn as Action<typeof pingFn>;
+const ticks = ticksFn as Action<typeof ticksFn>;
+const ac = new AbortController();
+const stream = await ticks(10, { signal: ac.signal });
+await ping({ signal: ac.signal });
+ac.abort();
+```
+
+`useRequest().signal` follows that abort. Breaking a `for await` also cancels.
+
 ## useRequest
 
 Call `useRequest()` inside an action for the inbound `Request`. It throws outside `/_action`.
@@ -42,6 +76,33 @@ import { useRequest } from "oxidejs";
 
 export async function who() {
   return useRequest().headers.get("x-user");
+}
+```
+
+## useCtx
+
+`useCtx()` is tacho `ctx`: `{ req }` plus anything middleware or `createContext` added.
+
+```ts twoslash src/me.server.ts
+import { useCtx } from "oxidejs";
+
+export async function me() {
+  return useCtx<{ req: Request; user?: string }>().user;
+}
+```
+
+## useEnv and useFetchCtx
+
+On [`preset: "celld"`](/oxide/configuration#preset), `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. They are `undefined` on the Node fetch preset.
+
+```ts twoslash src/secret.server.ts
+import { useEnv, useFetchCtx } from "oxidejs";
+
+type Env = { SECRET: string };
+
+export async function secret() {
+  useFetchCtx()?.waitUntil?.(Promise.resolve());
+  return useEnv<Env>()?.SECRET;
 }
 ```
 

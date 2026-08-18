@@ -25,7 +25,6 @@ import {
   VIRTUAL_WORKER_ID,
 } from "./actions";
 import { copyPublicDir, createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
-import { useRequest } from "./context";
 import type { OxidejsOptions, ResolvedOptions } from "./types";
 import {
   applyRsbuildEnvironments,
@@ -247,7 +246,8 @@ export const oxidejs = createUnplugin(unpluginFactory);
 export const vite = oxidejs.vite;
 
 export default oxidejs;
-export { useRequest };
+export { useCtx, useEnv, useFetchCtx, useRequest } from "./context";
+export type { Action, ActionContext, ActionOptions, ExecutionContext } from "./context";
 export type {
   OxidejsActionHeaders,
   OxidejsActionTransport,

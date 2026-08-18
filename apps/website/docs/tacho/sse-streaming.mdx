@@ -44,4 +44,28 @@ for await (const t of ticks) console.log(t.i);
 await ticks.return();
 ```
 
+Pass `{ signal }` as the second argument to abort the fetch. `await ticks.return()` also cancels.
+
+```ts twoslash
+import { createClient } from "tacho/client/http";
+import { tacho } from "tacho";
+import { z } from "zod";
+
+const rpc = tacho();
+const router = rpc({
+  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({
+    input,
+  }) {
+    for (let i = 0; i < input.n; i++) yield { i };
+  }),
+});
+const client = createClient<typeof router>({
+  url: "http://localhost:3000",
+});
+// ---cut---
+const ac = new AbortController();
+const ticks = await client.ticks({ n: 3 }, { signal: ac.signal });
+ac.abort();
+```
+
 Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `event: done`. Throw is `event: error`.

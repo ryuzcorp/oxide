@@ -1,7 +1,7 @@
 declare module "tacho/transport/fetch" {
   export function handle(
     router: unknown,
-    opts?: { path?: string },
+    opts?: { path?: string; createContext?: (req: Request) => unknown },
   ): (request: Request) => Promise<Response>;
 }
 

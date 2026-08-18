@@ -82,6 +82,21 @@ export function scanServerFiles(root: string): ServerModule[] {
   return modules;
 }
 
+/** Path under the asset root, or null if the URL must not be served. */
+export function assetRelPath(pathname: string, spa = false): string | null {
+  if (pathname.includes("\0")) return null;
+  let file: string;
+  try {
+    file = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  if (file.includes("\0")) return null;
+  if (file === "/" || spa) file = "/index.html";
+  if (!file.startsWith("/") || file.split("/").includes("..")) return null;
+  return file.slice(1);
+}
+
 export function generateClientModule(
   transport: OxidejsActionTransport = "http",
   headers?: OxidejsActionHeaders,
@@ -104,7 +119,13 @@ export function generateClientStub(mod: Pick<ServerModule, "key" | "exports">): 
   const lines = [`import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`];
   for (const name of mod.exports) {
     lines.push(
-      `export const ${name} = (...args) => client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args);`,
+      `export const ${name} = (...args) => {
+  const opts = args.at(-1);
+  // ponytail: peel last { signal } only. A lone payload { signal: AbortSignal } is treated as CallOptions.
+  return opts && typeof opts === "object" && opts.signal instanceof AbortSignal && Object.keys(opts).length === 1
+    ? client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args.slice(0, -1), opts)
+    : client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args);
+};`,
     );
   }
   return `${lines.join("\n")}\n`;
@@ -128,7 +149,7 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     lines.push(`  ${JSON.stringify(mod.key)}: {`);
     for (const name of mod.exports) {
       lines.push(
-        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx.req, () => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []))),`,
+        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx, () => ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []))),`,
       );
     }
     lines.push(`  },`);
@@ -202,13 +223,21 @@ function __nav(request) {
   return (request.headers.get("accept") ?? "").includes("text/html");
 }
 function __cache(file) {
-  if (file === "/index.html") return "no-cache";
+  if (file === "index.html") return "no-cache";
   return /[-.][0-9a-f]{8,}.[a-z0-9]+$/i.test(file) ? "public, max-age=31536000, immutable" : undefined;
 }
-async function __asset(request, spa) {
-  let file = new URL(request.url).pathname;
-  if (file.includes("\\0") || file.split("/").includes("..")) return;
+function __rel(pathname, spa) {
+  if (pathname.includes("\0")) return;
+  let file;
+  try { file = decodeURIComponent(pathname); } catch { return; }
+  if (file.includes("\0")) return;
   if (file === "/" || spa) file = "/index.html";
+  if (!file.startsWith("/") || file.split("/").includes("..")) return;
+  return file.slice(1);
+}
+async function __asset(request, spa) {
+  const file = __rel(new URL(request.url).pathname, spa);
+  if (!file) return;
   try {
     const body = await readFile(join(__assets, file));
     const headers = { "content-type": __types[extname(file)] ?? "application/octet-stream" };
@@ -245,10 +274,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (Array.isArray(value)) for (const item of value) headers.append(key, item);
       else headers.set(key, value);
     }
+    const ac = new AbortController();
+    if (req.destroyed) ac.abort();
+    else req.once("close", () => ac.abort());
     const method = req.method ?? "GET";
     const chunks = [];
     if (method !== "GET" && method !== "HEAD") for await (const chunk of req) chunks.push(chunk);
-    const init = { method, headers };
+    const init = { method, headers, signal: ac.signal };
     if (chunks.length) init.body = Buffer.concat(chunks);
     const response = await app.fetch(new Request(url, init));
     res.statusCode = response.status;
@@ -284,12 +316,16 @@ const __ws = handleWs(actions, { path: ${JSON.stringify(ACTION_PATH)} });
 `
       : `import { handle } from "tacho/transport/fetch";
 import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)} });
+const __fetch = Symbol.for("oxidejs.fetch");
+const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)}, createContext: (req) => req[__fetch] ?? {} });
 `
     : "";
   const actionGate =
     hasActions && !ws
-      ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) return __rpc(request);
+      ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) {
+      request[__fetch] = { env, fetchCtx: ctx };
+      return __rpc(request);
+    }
     `
       : "";
   return `export * from ${JSON.stringify(userWorkerAbs)};
@@ -378,16 +414,17 @@ export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {
       headers.set(key, value);
     }
   }
+  const ac = new AbortController();
+  if (req.destroyed) ac.abort();
+  else req.once("close", () => ac.abort());
   const method = req.method ?? "GET";
-  if (method === "GET" || method === "HEAD") {
-    return new Request(url, { method, headers });
-  }
+  const init: RequestInit = { method, headers, signal: ac.signal };
+  if (method === "GET" || method === "HEAD") return new Request(url, init);
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   }
   const body = Buffer.concat(chunks);
-  const init: RequestInit = { method, headers };
   if (body.length > 0) init.body = body;
   return new Request(url, init);
 }

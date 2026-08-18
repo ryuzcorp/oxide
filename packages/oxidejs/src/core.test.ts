@@ -242,3 +242,20 @@ describe("copyPublicDir", () => {
     expect(fs.existsSync(path.join(root, "dist", "client", "favicon.ico"))).toBe(false);
   });
 });
+
+describe("assertContained", () => {
+  test("rejects paths that escape outDir", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    const out = path.join(root, "dist");
+    fs.mkdirSync(out, { recursive: true });
+    expect(() => resolveOptions({ clientDir: "../outside" }, root)).not.toThrow();
+    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
+    expect(() => resolveOptions({ clientDir: "../outside" }, root)).toThrow(
+      "clientDir must resolve inside outDir",
+    );
+    expect(() => resolveOptions({ clientDir: "/tmp" }, root)).toThrow(
+      "clientDir must resolve inside outDir",
+    );
+  });
+});

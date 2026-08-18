@@ -72,6 +72,14 @@ describe("factory shape", () => {
         addWatchFile() {},
       };
       expect(load.call(serverCtx, file)).toBeUndefined();
+      const transform = plugin.transform as (this: object, code: string, id: string) => unknown;
+      const leaked = transform.call(
+        ctx,
+        `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
+        file,
+      );
+      expect(String(leaked)).not.toContain("leak-me");
+      expect(String(leaked)).toContain('client["secret"]["ping"]');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

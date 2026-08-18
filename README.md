@@ -42,10 +42,10 @@ It guides you. It doesn't frame you.
 
 ## Packages
 
-| Package                     | What it is                                                                                                 |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [oxidejs](packages/oxidejs) | Vite/Rsbuild plugin. One build → `dist/server.js` and optional `dist/client/`. Actions from `*.server.ts`. |
-| [tacho](packages/tacho)     | Typed JSON-RPC. The wire those actions ride on. Also usable on its own.                                    |
+| Package                     | Purpose                                                                 |
+| --------------------------- | ----------------------------------------------------------------------- |
+| [oxidejs](packages/oxidejs) | Turns Vite or Rsbuild into a backend. One plugin, one folder to deploy. |
+| [tacho](packages/tacho)     | Typed JSON-RPC. The wire those actions ride on. Also usable on its own. |
 
 Need RPC without the plugin? Use [tacho](packages/tacho). `typeof router` is the client.
 

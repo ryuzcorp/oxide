@@ -14,6 +14,7 @@ import {
 } from "./index";
 import { createClient } from "./client/http";
 import { createClient as createWsClient } from "./client/ws";
+import { fileHeaders, injectFiles, safeFileName } from "./file";
 import { handle } from "./transport/fetch";
 import { handle as handleWs } from "./transport/ws";
 
@@ -214,6 +215,14 @@ describe("spec matrix", () => {
       expect(res.headers.get("Allow")).toBe("POST");
     }
   });
+
+  test("18 OPTIONS and HEAD are not POST", async () => {
+    for (const method of ["OPTIONS", "HEAD"]) {
+      const res = await fetchHandler(new Request("http://x/rpc", { method }));
+      expect(res.status).toBe(405);
+      expect(res.headers.get("Allow")).toBe("POST");
+    }
+  });
 });
 
 test("id type preserved (string vs number)", async () => {
@@ -229,6 +238,10 @@ test("notification errors are silent", async () => {
 test("path option 404s other paths", async () => {
   const h = handle(app, { path: "/rpc" });
   expect((await h(new Request("http://x/other", { method: "POST", body: "{}" }))).status).toBe(404);
+  expect((await h(new Request("http://x/rpc/", { method: "POST", body: "{}" }))).status).toBe(404);
+  expect((await h(new Request("http://x/rpc%2f", { method: "POST", body: "{}" }))).status).toBe(
+    404,
+  );
   expect(
     (
       await h(
@@ -411,6 +424,14 @@ describe("dispatch", () => {
     expect(resolveProcedure(app, "ping")?.__rpc).toBe(true);
   });
 
+  test("resolveProcedure ignores prototype and constructor walks", () => {
+    expect(resolveProcedure(app, "__proto__")).toBeUndefined();
+    expect(resolveProcedure(app, "constructor")).toBeUndefined();
+    expect(resolveProcedure(app, "toString")).toBeUndefined();
+    expect(resolveProcedure(app, "user.__proto__.ping")).toBeUndefined();
+    expect(resolveProcedure(app, "rpc.discover")).toBeUndefined();
+  });
+
   test("output schema parses the result", async () => {
     const str = schema((v) =>
       typeof v === "string" ? { value: v } : { issues: [{ message: "str" }] },
@@ -576,6 +597,17 @@ describe("http client", () => {
 });
 
 describe("fetch transport", () => {
+  test("bad multipart is a parse error, not a 500", async () => {
+    const form = new FormData();
+    form.set("rpc", "{");
+    const res = await fetchHandler(new Request("http://x/rpc", { method: "POST", body: form }));
+    expect(await res.json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32700, message: "Parse error" },
+      id: null,
+    });
+  });
+
   test("createContext throw is a JSON-RPC error", async () => {
     const seen: unknown[] = [];
     const h = handle(app, {
@@ -935,6 +967,42 @@ describe("files", () => {
     expect(got.copy).toBeInstanceOf(File);
     expect(got.copy.name).toBe("out.txt");
     expect(await got.copy.text()).toBe("out");
+  });
+
+  test("injectFiles refuses prototype paths and missing keys", () => {
+    const file = new File(["x"], "x.txt");
+    const before = Object.prototype.hasOwnProperty;
+    const target = { file: null as File | null };
+    expect(injectFiles(target, [{ path: ["__proto__", "polluted"], file }])).toEqual({
+      file: null,
+    });
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty).toBe(before);
+    expect(injectFiles(target, [{ path: ["constructor"], file }])).toEqual({ file: null });
+    expect(injectFiles(target, [{ path: ["missing"], file }])).toEqual({ file: null });
+    expect(injectFiles(target, [{ path: ["file"], file }])).toEqual({ file });
+  });
+
+  test("download filename cannot break Content-Disposition", async () => {
+    expect(safeFileName('evil\r\nSet-Cookie: a=1".txt')).toBe("evil__Set-Cookie: a=1_.txt");
+    expect(safeFileName("../../etc/passwd")).toBe("passwd");
+    const nasty = tacho()({
+      download: tacho().run(
+        () => new File(["x"], 'hi\r\nSet-Cookie: a=1".bin', { type: "text/plain" }),
+      ),
+    });
+    const res = await handle(nasty)(
+      new Request("http://x/rpc", {
+        method: "POST",
+        body: JSON.stringify({ jsonrpc: "2.0", method: "download", id: 1 }),
+      }),
+    );
+    const disposition = res.headers.get("content-disposition") ?? "";
+    expect(disposition).not.toMatch(/\r|\n/);
+    expect(disposition).toBe('attachment; filename="hi__Set-Cookie: a=1_.bin"');
+    expect(fileHeaders(new File(["x"], 'hi\r\nSet-Cookie: a=1".bin'))["content-disposition"]).toBe(
+      disposition,
+    );
   });
 });
 

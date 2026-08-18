@@ -5,13 +5,18 @@ sidebar:
 description: Handle a request in your server entry, or skip it and let static files take over.
 ---
 
-Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response.
+Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx` — the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
 
 ```ts twoslash src/server.ts
 export default {
-  fetch(request: Request) {
+  fetch(
+    request: Request,
+    env?: { SECRET?: string },
+    ctx?: { waitUntil?(p: Promise<unknown>): void },
+  ) {
     if (new URL(request.url).pathname === "/api/ok") {
-      return new Response("ok");
+      ctx?.waitUntil?.(Promise.resolve());
+      return new Response(env?.SECRET ?? "ok");
     }
   },
 };

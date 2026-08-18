@@ -47,7 +47,7 @@ oxide({
 
 ## Server actions
 
-Install `tacho` if you use actions. Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. Return `undefined` from `src/server.ts` to fall through to static files. No `*.server.ts` → the bundle does not import tacho.
+Install `tacho` if you use actions. Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No `*.server.ts` → the bundle does not import tacho.
 
 ```ts
 // src/test.server.ts
@@ -73,7 +73,17 @@ export default {
 };
 ```
 
-`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck.
+`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch:
+
+```ts
+import type { Action } from "oxidejs";
+import { ticks as ticksFn } from "./test.server";
+
+const ticks = ticksFn as Action<typeof ticksFn>;
+const ac = new AbortController();
+const stream = await ticks(10, { signal: ac.signal });
+ac.abort();
+```
 
 `vite dev` and `rsbuild dev` serve `/_action` via middleware. `oxide({ actions: "ws" })` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actionHeaders` are static headers on the shared HTTP client.
 
