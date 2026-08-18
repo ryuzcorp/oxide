@@ -87,7 +87,7 @@ export function applyViteEnvironments(
         },
       },
     },
-    resolve: celld ? { conditions: ["worker"], noExternal: true } : { noExternal: true },
+    resolve: celld ? { conditions: ["worker"], noExternal: true } : { noExternal: ["tacho"] },
     ssr: celld
       ? { target: "webworker", noExternal: true, external: [/^cloudflare:/] }
       : { noExternal: ["tacho"] },
