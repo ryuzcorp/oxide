@@ -33,9 +33,17 @@ export interface ViteEnvironmentConfig {
     ssr?: boolean;
     manifest?: boolean;
     input?: ViteInput;
-    rolldownOptions?: { input?: ViteInput };
+    rolldownOptions?: {
+      input?: ViteInput;
+      external?: (string | RegExp)[];
+      output?: {
+        format?: string;
+        entryFileNames?: string;
+      };
+    };
     rollupOptions?: {
       input?: ViteInput;
+      external?: (string | RegExp)[];
       output?: {
         format?: string;
         entryFileNames?: string;
@@ -43,7 +51,7 @@ export interface ViteEnvironmentConfig {
     };
   };
   resolve?: { conditions?: string[]; noExternal?: boolean | string[] };
-  ssr?: { target?: string; noExternal?: boolean | string[] };
+  ssr?: { target?: string; noExternal?: boolean | string[]; external?: (string | RegExp)[] };
 }
 
 export function applyViteEnvironments(
@@ -56,14 +64,23 @@ export function applyViteEnvironments(
   config.environments ??= {};
 
   const celld = opts.preset === "celld";
-  config.environments["server"] = {
+  config.environments["ssr"] = {
     consumer: "server",
     build: {
       outDir: opts.outDir,
       emptyOutDir: true,
       ssr: true,
+      rolldownOptions: {
+        input: VIRTUAL_WORKER_ID,
+        external: celld ? [/^cloudflare:/] : [],
+        output: {
+          format: "es",
+          entryFileNames: "server.js",
+        },
+      },
       rollupOptions: {
         input: VIRTUAL_WORKER_ID,
+        external: celld ? [/^cloudflare:/] : [],
         output: {
           format: "es",
           entryFileNames: "server.js",
@@ -71,7 +88,9 @@ export function applyViteEnvironments(
       },
     },
     resolve: celld ? { conditions: ["worker"], noExternal: true } : { noExternal: true },
-    ssr: celld ? { target: "webworker", noExternal: true } : { noExternal: true },
+    ssr: celld
+      ? { target: "webworker", noExternal: true, external: [/^cloudflare:/] }
+      : { noExternal: true },
   };
 
   config.build ??= {};
@@ -88,7 +107,7 @@ export function applyViteEnvironments(
         manifest: true,
       },
     };
-    config.environments["server"]!.build!.emptyOutDir = false;
+    config.environments["ssr"]!.build!.emptyOutDir = false;
     config.build.outDir ??= clientOutDir;
     config.build.manifest ??= true;
   } else {
@@ -97,7 +116,7 @@ export function applyViteEnvironments(
     config.build.outDir ??= opts.outDir;
     config.build.emptyOutDir ??= true;
     config.builder.buildApp ??= async (builder) => {
-      const server = builder.environments["server"];
+      const server = builder.environments["ssr"];
       if (server) await builder.build(server);
     };
   }

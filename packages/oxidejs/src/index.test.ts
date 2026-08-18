@@ -95,16 +95,16 @@ describe("factory shape", () => {
       expect(config.environments?.["client"]?.build?.outDir).toBe(
         path.join(resolved.outDir, "client"),
       );
-      expect(config.environments?.["server"]?.consumer).toBe("server");
-      expect(config.environments?.["server"]?.build?.ssr).toBe(true);
-      expect(config.environments?.["server"]?.build?.outDir).toBe(resolved.outDir);
-      expect(config.environments?.["server"]?.build?.emptyOutDir).toBe(false);
-      expect(config.environments?.["server"]?.build?.rollupOptions?.input).toBe(VIRTUAL_WORKER_ID);
-      expect(config.environments?.["server"]?.build?.rollupOptions?.output?.entryFileNames).toBe(
+      expect(config.environments?.["ssr"]?.consumer).toBe("server");
+      expect(config.environments?.["ssr"]?.build?.ssr).toBe(true);
+      expect(config.environments?.["ssr"]?.build?.outDir).toBe(resolved.outDir);
+      expect(config.environments?.["ssr"]?.build?.emptyOutDir).toBe(false);
+      expect(config.environments?.["ssr"]?.build?.rollupOptions?.input).toBe(VIRTUAL_WORKER_ID);
+      expect(config.environments?.["ssr"]?.build?.rollupOptions?.output?.entryFileNames).toBe(
         "server.js",
       );
-      expect(config.environments?.["server"]?.resolve).toEqual({ noExternal: true });
-      expect(config.environments?.["server"]?.ssr).toEqual({ noExternal: true });
+      expect(config.environments?.["ssr"]?.resolve).toEqual({ noExternal: true });
+      expect(config.environments?.["ssr"]?.ssr).toEqual({ noExternal: true });
       expect(config.build?.outDir).toBe(path.join(resolved.outDir, "client"));
       expect(config.build?.manifest).toBe(true);
     } finally {
@@ -118,8 +118,8 @@ describe("factory shape", () => {
     expect(vite.environments?.["client"]).toBeUndefined();
     expect(vite.appType).toBe("custom");
     expect(typeof vite.builder?.buildApp).toBe("function");
-    expect(vite.environments?.["server"]?.build?.outDir).toBe(resolved.outDir);
-    expect(vite.environments?.["server"]?.build?.emptyOutDir).toBe(true);
+    expect(vite.environments?.["ssr"]?.build?.outDir).toBe(resolved.outDir);
+    expect(vite.environments?.["ssr"]?.build?.emptyOutDir).toBe(true);
     expect(vite.build?.outDir).toBe(resolved.outDir);
     const rsbuild = applyRsbuildEnvironments({}, resolved);
     expect(rsbuild.environments?.["web"]).toBeUndefined();
@@ -129,13 +129,14 @@ describe("factory shape", () => {
   test("celld preset targets webworker", () => {
     const resolved = resolveOptions({ preset: "celld", wrangler }, "/tmp/project");
     const config = applyViteEnvironments({}, resolved);
-    expect(config.environments?.["server"]?.resolve).toEqual({
+    expect(config.environments?.["ssr"]?.resolve).toEqual({
       conditions: ["worker"],
       noExternal: true,
     });
-    expect(config.environments?.["server"]?.ssr).toEqual({
+    expect(config.environments?.["ssr"]?.ssr).toEqual({
       target: "webworker",
       noExternal: true,
+      external: [/^cloudflare:/],
     });
   });
 

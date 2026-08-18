@@ -44,7 +44,8 @@ function actionMiddleware(loadRouter: () => Promise<unknown>) {
       return;
     }
     void (async () => {
-      const { handle } = await import("tacho/transport/fetch");
+      const tachoFetch = "tacho/transport/fetch";
+      const { handle } = await import(/* @vite-ignore */ tachoFetch);
       const response = await handle(await loadRouter(), { path: ACTION_PATH })(
         await nodeToWebRequest(req),
       );
@@ -66,24 +67,27 @@ function attachActionUpgrade(
   loadRouter: () => Promise<unknown>,
 ) {
   if (!httpServer) return;
-  void Promise.all([import("tacho/transport/ws"), import("crossws/adapters/node")]).then(
-    ([{ handle }, { default: crossws }]) => {
-      httpServer.on("upgrade", (req, socket, head) => {
-        if ((req.url ?? "").split("?")[0] !== ACTION_PATH) return;
-        void loadRouter()
-          .then((router) =>
-            crossws({ hooks: handle(router, { path: ACTION_PATH }) }).handleUpgrade(
-              req,
-              socket as never,
-              head,
-            ),
-          )
-          .catch(() => {
-            socket.destroy();
-          });
-      });
-    },
-  );
+  const tachoWs = "tacho/transport/ws";
+  const crosswsNode = "crossws/adapters/node";
+  void Promise.all([
+    import(/* @vite-ignore */ tachoWs),
+    import(/* @vite-ignore */ crosswsNode),
+  ]).then(([{ handle }, { default: crossws }]) => {
+    httpServer.on("upgrade", (req, socket, head) => {
+      if ((req.url ?? "").split("?")[0] !== ACTION_PATH) return;
+      void loadRouter()
+        .then((router) =>
+          crossws({ hooks: handle(router, { path: ACTION_PATH }) }).handleUpgrade(
+            req,
+            socket as never,
+            head,
+          ),
+        )
+        .catch(() => {
+          socket.destroy();
+        });
+    });
+  });
 }
 
 function previewMiddleware(file: string) {
@@ -241,9 +245,9 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
   };
 };
 
-export const oxidejs = createUnplugin(unpluginFactory);
+export const oxidejs = /* @__PURE__ */ createUnplugin(unpluginFactory);
 
-export const vite = oxidejs.vite;
+export const vite = /* @__PURE__ */ (() => oxidejs.vite)();
 
 export default oxidejs;
 export { useCtx, useEnv, useFetchCtx, useRequest } from "./context";

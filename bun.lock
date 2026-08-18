@@ -75,8 +75,8 @@
         "crossws",
       ],
     },
-    "templates/ilha": {
-      "name": "template-ilha",
+    "templates/tasks": {
+      "name": "@oxidejs/template-ilha",
       "dependencies": {
         "@ilha/router": "^0.8.12",
         "ilha": "^0.10.2",
@@ -89,14 +89,19 @@
         "vite": "^8.2.1",
       },
     },
-    "templates/xsaf": {
-      "name": "template-xsaf",
+    "templates/tasks-celld": {
+      "name": "template-celld-tasks",
       "dependencies": {
+        "@ilha/router": "^0.8.12",
+        "ilha": "^0.10.2",
         "tacho": "^0.4.0",
+        "unstorage": "^2.0.0-alpha.7",
       },
       "devDependencies": {
-        "@cloudflare/workers-types": "^5.20260815.1",
+        "@cloudflare/workers-types": "^5.20260818.1",
+        "oxidejs": "0.1.0",
         "typescript": "^6",
+        "vite": "^8.2.1",
       },
     },
   },
@@ -253,7 +258,7 @@
 
     "@clack/prompts": ["@clack/prompts@1.7.0", "", { "dependencies": { "@clack/core": "1.4.3", "fast-string-width": "^3.0.2", "fast-wrap-ansi": "^0.2.0", "sisteransi": "^1.0.5" } }, "sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A=="],
 
-    "@cloudflare/workers-types": ["@cloudflare/workers-types@5.20260815.1", "", {}, "sha512-btpW8rEgeJKcxDlBWKxzjLLUHxzUWqXZY8O+DmM6NcSHadUQN5I71z6Q/yAKCTJyGS7adBpXzlsZSFbosLnECQ=="],
+    "@cloudflare/workers-types": ["@cloudflare/workers-types@5.20260818.1", "", {}, "sha512-a89taQDbqb7Ni+xAVSsiOSd5wQPcbBJBnZgIG3EujVdDcdQkGVwab3xa2e9z29uqtMQb/P2gYDeDcNXcBRSWQQ=="],
 
     "@data-slot/core": ["@data-slot/core@0.2.166", "", {}, "sha512-/DuzMFIqiefdjheX5fMhaqs4YPp0/t+/pN9EgnB2jLSDk8384WkBCPGq76T/Ypb0MjVlHFiexKDnx9+k+bdcjw=="],
 
@@ -500,6 +505,8 @@
     "@oxfmt/binding-win32-ia32-msvc": ["@oxfmt/binding-win32-ia32-msvc@0.63.0", "", { "os": "win32", "cpu": "ia32" }, "sha512-XjrO5FJ5Wl9vsAxtCP1G/eaeT6y1K2s9CICUHGE42cEjou32/J6S+B1KnrOAboj6E7uhJnwPbRSvznWcxNdA0g=="],
 
     "@oxfmt/binding-win32-x64-msvc": ["@oxfmt/binding-win32-x64-msvc@0.63.0", "", { "os": "win32", "cpu": "x64" }, "sha512-sgsHCQy432OTQH4Ikk3tZptp3GqwnhwUDuY0loBH41zyHWfMZY9v8Dy78wsnSofHejvFozZGgJgBB1A0LQRwMQ=="],
+
+    "@oxidejs/template-ilha": ["@oxidejs/template-ilha@workspace:templates/tasks"],
 
     "@oxlint/binding-android-arm-eabi": ["@oxlint/binding-android-arm-eabi@1.78.0", "", { "os": "android", "cpu": "arm" }, "sha512-Bu819lmAfZMUHErrpe0cEWj3iaefuUODHSU8+UbXy67V/r7/7f4K3FL0NmbD85E+wiFLDYuhP8Zlv0XnVeXshw=="],
 
@@ -2353,9 +2360,7 @@
 
     "tar": ["tar@7.5.22", "", { "dependencies": { "@isaacs/fs-minipass": "^4.0.0", "chownr": "^3.0.0", "minipass": "^7.1.2", "minizlib": "^3.1.0", "yallist": "^5.0.0" } }, "sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA=="],
 
-    "template-ilha": ["template-ilha@workspace:templates/ilha"],
-
-    "template-xsaf": ["template-xsaf@workspace:templates/xsaf"],
+    "template-celld-tasks": ["template-celld-tasks@workspace:templates/tasks-celld"],
 
     "tiny-inflate": ["tiny-inflate@1.0.3", "", {}, "sha512-pkY1fj1cKHb2seWDy0B16HeWyczlJA9/WW3u3c4z/NiWDsO3DOU5D7nhTLE9CF0yXv/QZFY7sEJmj24dK+Rrqw=="],
 

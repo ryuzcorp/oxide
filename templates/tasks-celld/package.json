@@ -1,0 +1,24 @@
+{
+  "name": "template-celld-tasks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "celld deploy dist",
+    "celld": "celld"
+  },
+  "dependencies": {
+    "@ilha/router": "^0.8.12",
+    "ilha": "^0.10.2",
+    "tacho": "^0.4.0",
+    "unstorage": "^2.0.0-alpha.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260818.1",
+    "oxidejs": "0.1.0",
+    "typescript": "^6",
+    "vite": "^8.2.1"
+  }
+}
