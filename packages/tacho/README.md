@@ -135,7 +135,9 @@ JSON_RPC_ERROR.INTERNAL_ERROR; // -32603
 APP_ERROR_RANGE; // { min: -32099, max: -32000 }
 ```
 
-Plain `Error` becomes `INTERNAL_ERROR` (`-32603`) with the message kept, no stack.
+Plain `Error` becomes `INTERNAL_ERROR` (`-32603`) with a generic message. No stack or original message is leaked. Only `RpcError` messages are forwarded to the client.
+
+> **Security:** `RpcError.data` is serialized to the wire. Never put secrets, stack traces, or internal state in it.
 
 ## Fetch
 
@@ -153,11 +155,14 @@ serve({
 });
 ```
 
-| option          |                                                           |
-| --------------- | --------------------------------------------------------- |
-| `path`          | Other paths → 404.                                        |
-| `createContext` | Merged onto `{ req }`. Throw → JSON-RPC `INTERNAL_ERROR`. |
-| `onError`       | Called when `createContext` or the stream throws.         |
+| option          |                                                            |
+| --------------- | ---------------------------------------------------------- |
+| `path`          | Other paths -> 404.                                        |
+| `createContext` | Merged onto `{ req }`. Throw -> JSON-RPC `INTERNAL_ERROR`. |
+| `onError`       | Called when `createContext` or the stream throws.          |
+| `maxBodySize`   | Max request body in bytes. Default: `1_048_576` (1 MB).    |
+| `maxBatchSize`  | Max items in a batch request. Default: `20`.               |
+| `serializer`    | Custom serializer (e.g. superjson, msgpack). See below.    |
 
 ## HTTP client
 
@@ -178,12 +183,38 @@ await client.user.get({ id: "1" });
 await client.ping(undefined, { signal: AbortSignal.timeout(1_000) });
 ```
 
-| option    |                                                            |
-| --------- | ---------------------------------------------------------- |
-| `url`     | POST target.                                               |
-| `headers` | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
-| `signal`  | Default abort. Per-call: `client.ping(input, { signal })`. |
-| `fetch`   | Custom `fetch`.                                            |
+| option       |                                                            |
+| ------------ | ---------------------------------------------------------- |
+| `url`        | POST target.                                               |
+| `headers`    | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
+| `signal`     | Default abort. Per-call: `client.ping(input, { signal })`. |
+| `fetch`      | Custom `fetch`.                                            |
+| `serializer` | Custom serializer.                                         |
+
+## Custom Serializers
+
+To use a custom serializer (like `superjson` or `msgpack`), pass it to `handle()` and `createClient()`.
+
+```ts
+import superjson from "superjson";
+import type { Serializer } from "tacho";
+
+const serializer: Serializer = {
+  stringify: (val) => superjson.stringify(val),
+  parse: (val) => superjson.parse(val as string),
+  contentType: "application/superjson", // optional, defaults to application/json
+};
+
+// Server
+serve({
+  fetch: handle(router, { serializer }),
+});
+
+// Client
+const client = createClient<Router>({ url: "...", serializer });
+```
+
+Binary serializers like `msgpack` just work. Pass `Uint8Array` to/from `parse` and `stringify`. Note: binary serialization is not compatible with SSE streams (`async function*`).
 
 ## Files
 
@@ -221,6 +252,8 @@ Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `even
 ## WebSocket
 
 Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as fetch.
+
+> **Security:** The WS handler does not authenticate connections by default. Use `createContext` to verify credentials on every message, or guard the upgrade path itself. An unauthenticated socket can call any procedure.
 
 ```ts
 import { handle } from "tacho/transport/ws";

@@ -63,18 +63,34 @@ export function injectFiles(json: unknown, files: FileRef[]): unknown {
   return json;
 }
 
-export function toForm(rpc: unknown, files: FileRef[]): FormData {
+export function toForm(
+  rpc: unknown,
+  files: FileRef[],
+  stringify: (val: any) => any = JSON.stringify,
+): FormData {
   const form = new FormData();
-  form.set("rpc", JSON.stringify(rpc));
+  const serialized = stringify(rpc);
+  form.set("rpc", typeof serialized === "string" ? serialized : new Blob([serialized]));
   form.set("maps", JSON.stringify(files.map((item) => item.path)));
   files.forEach((item, i) => form.set(String(i), item.file));
   return form;
 }
 
-export async function fromForm(form: FormData): Promise<{ rpc: unknown; files: FileRef[] }> {
+export async function fromForm(
+  form: FormData,
+  parse: (val: any) => any = JSON.parse,
+): Promise<{ rpc: unknown; files: FileRef[] }> {
   try {
-    const rpc = JSON.parse(String(form.get("rpc")));
-    const maps = JSON.parse(String(form.get("maps") ?? "[]")) as Path[];
+    const rpcField = form.get("rpc");
+    const rawRpc =
+      rpcField instanceof Blob ? new Uint8Array(await rpcField.arrayBuffer()) : String(rpcField);
+    const rpc = parse(rawRpc);
+    const raw = JSON.parse(String(form.get("maps") ?? "[]"));
+    if (!Array.isArray(raw)) throw new SyntaxError("maps must be an array");
+    const maps = raw.filter(
+      (p): p is Path =>
+        Array.isArray(p) && p.every((s) => typeof s === "string" || typeof s === "number"),
+    );
     const files = maps.map((path, i) => ({ path, file: form.get(String(i)) as Blob }));
     return { rpc, files };
   } catch {

@@ -5,6 +5,8 @@ description: Serve your procedures over a WebSocket and keep one connection for 
 
 Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as [HTTP](/tacho/transport/http). Streams are not supported - a stream procedure is `INTERNAL_ERROR`.
 
+> **Security:** The WS handler does not authenticate connections by default. Use `createContext` to verify credentials on every message, or guard the upgrade path itself. An unauthenticated socket can call any procedure.
+
 ```ts twoslash
 // @noErrors
 import { handle } from "tacho/transport/ws";
@@ -44,8 +46,9 @@ await ws.ping();
 ws.close();
 ```
 
-| option      |                                         |
-| ----------- | --------------------------------------- |
-| `url`       | WebSocket URL.                          |
-| `protocols` | Passed to `WebSocket`.                  |
-| `WebSocket` | Custom constructor. Defaults to global. |
+| option       |                                         |
+| ------------ | --------------------------------------- |
+| `url`        | WebSocket URL.                          |
+| `protocols`  | Passed to `WebSocket`.                  |
+| `WebSocket`  | Custom constructor. Defaults to global. |
+| `serializer` | Custom serializer.                      |

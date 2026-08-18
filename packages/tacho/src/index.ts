@@ -48,6 +48,12 @@ export class RpcError extends Error {
   }
 }
 
+export type Serializer = {
+  stringify: (val: unknown) => any;
+  parse: (val: any) => unknown;
+  contentType?: string;
+};
+
 export type Context = Record<string, unknown>;
 
 export type Middleware<C extends Context> = (opts: {
@@ -214,7 +220,7 @@ function normalizeError(err: unknown) {
   }
   return {
     code: JSON_RPC_ERROR.INTERNAL_ERROR,
-    message: err instanceof Error ? err.message : "Internal error",
+    message: "Internal error",
   };
 }
 
@@ -274,11 +280,7 @@ export async function runOne(
   if (!procedure) {
     return reply(
       notification,
-      errorResponse(
-        JSON_RPC_ERROR.METHOD_NOT_FOUND,
-        `Method not found: ${raw.method}`,
-        raw.id ?? null,
-      ),
+      errorResponse(JSON_RPC_ERROR.METHOD_NOT_FOUND, "Method not found", raw.id ?? null),
     );
   }
 

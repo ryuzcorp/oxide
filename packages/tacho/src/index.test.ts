@@ -55,6 +55,7 @@ const call = (body: unknown, init?: RequestInit & { url?: string }) =>
   fetchHandler(
     new Request(init?.url ?? "http://x/rpc", {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: typeof body === "string" ? body : JSON.stringify(body),
       ...init,
     }),
@@ -84,7 +85,7 @@ describe("spec matrix", () => {
   test("4 unknown method", async () => {
     expect(await (await call({ jsonrpc: "2.0", method: "nope", id: 1 })).json()).toEqual({
       jsonrpc: "2.0",
-      error: { code: -32601, message: "Method not found: nope" },
+      error: { code: -32601, message: "Method not found" },
       id: 1,
     });
   });
@@ -117,11 +118,11 @@ describe("spec matrix", () => {
     expect(body).not.toHaveProperty("result");
   });
 
-  test("8 plain Error → INTERNAL_ERROR, message kept, no stack", async () => {
+  test("8 plain Error → INTERNAL_ERROR, no message leak, no stack", async () => {
     const body = await (await call({ jsonrpc: "2.0", method: "boom", id: 1 })).json();
     expect(body).toEqual({
       jsonrpc: "2.0",
-      error: { code: -32603, message: "kaboom" },
+      error: { code: -32603, message: "Internal error" },
       id: 1,
     });
     expect(JSON.stringify(body)).not.toContain("stack");
@@ -180,7 +181,7 @@ describe("spec matrix", () => {
   test("14 rpc.internal reserved", async () => {
     expect(await (await call({ jsonrpc: "2.0", method: "rpc.internal", id: 1 })).json()).toEqual({
       jsonrpc: "2.0",
-      error: { code: -32601, message: "Method not found: rpc.internal" },
+      error: { code: -32601, message: "Method not found" },
       id: 1,
     });
   });
@@ -191,6 +192,43 @@ describe("spec matrix", () => {
       result: "ada",
       id: 1,
     });
+  });
+
+  test("16a rejects unsupported content-type", async () => {
+    const res = await fetchHandler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(415);
+    expect((await res.json()).error.message).toBe("Unsupported Content-Type");
+  });
+
+  test("16b rejects oversized batch", async () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({
+      jsonrpc: "2.0",
+      method: "ping",
+      id: i,
+    }));
+    const res = await call(items);
+    expect((await res.json()).error.message).toBe("Batch too large");
+  });
+
+  test("16c rejects oversized body", async () => {
+    const small = handle(app, { maxBodySize: 16 });
+    const res = await small(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "999999",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(413);
   });
 
   test("16 client proxy round-trip", async () => {
@@ -208,7 +246,27 @@ describe("spec matrix", () => {
     expect(_typed).toBe(client);
   });
 
-  test("17 non-POST → 405 Allow: POST", async () => {
+  test("17 custom serializer round-trip", async () => {
+    const customSerializer = {
+      stringify: (val: any) => "CUSTOM::" + JSON.stringify(val),
+      parse: (val: string) => JSON.parse(val.replace(/^CUSTOM::/, "")),
+      contentType: "application/custom-json",
+    };
+    const customApp = tacho()({ ping: tacho().run(() => "pong") });
+    const customHandle = handle(customApp, { serializer: customSerializer });
+    const client = createClient<typeof customApp>({
+      url: "http://x/rpc",
+      serializer: customSerializer,
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        expect(init?.headers).toMatchObject({ "content-type": "application/custom-json" });
+        expect(init?.body).toMatch(/^CUSTOM::/);
+        return customHandle(new Request("http://x/rpc", init));
+      }) as typeof fetch,
+    });
+    expect(await client.ping()).toBe("pong");
+  });
+
+  test("18 non-POST → 405 Allow: POST", async () => {
     for (const method of ["GET", "PUT", "DELETE", "PATCH"]) {
       const res = await fetchHandler(new Request("http://x/rpc", { method }));
       expect(res.status).toBe(405);
@@ -237,16 +295,45 @@ test("notification errors are silent", async () => {
 
 test("path option 404s other paths", async () => {
   const h = handle(app, { path: "/rpc" });
-  expect((await h(new Request("http://x/other", { method: "POST", body: "{}" }))).status).toBe(404);
-  expect((await h(new Request("http://x/rpc/", { method: "POST", body: "{}" }))).status).toBe(404);
-  expect((await h(new Request("http://x/rpc%2f", { method: "POST", body: "{}" }))).status).toBe(
-    404,
-  );
+  expect(
+    (
+      await h(
+        new Request("http://x/other", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await h(
+        new Request("http://x/rpc/", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      )
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await h(
+        new Request("http://x/rpc%2f", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      )
+    ).status,
+  ).toBe(404);
   expect(
     (
       await h(
         new Request("http://x/rpc", {
           method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
         }),
       )
@@ -280,7 +367,7 @@ test("client throws on rpc error and transport failure", async () => {
     throw new Error("expected");
   } catch (err: any) {
     expect(err).toBeInstanceOf(RpcError);
-    expect(err.message).toBe("kaboom");
+    expect(err.message).toBe("Internal error");
     expect(err.code).toBe(-32603);
   }
   const dead = createClient<typeof app>({
@@ -307,7 +394,7 @@ describe("websocket", () => {
         json: () => (typeof raw === "string" ? JSON.parse(raw) : raw),
       },
     );
-    return sent;
+    return sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s));
   };
 
   test("upgrade rejects other paths", () => {
@@ -334,7 +421,7 @@ describe("websocket", () => {
         },
       },
     );
-    expect(sent).toEqual([
+    expect(sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s))).toEqual([
       {
         jsonrpc: "2.0",
         error: { code: -32700, message: "Parse error" },
@@ -364,7 +451,7 @@ describe("websocket", () => {
             { text: () => data, json: () => JSON.parse(data) },
           )
           .then(() => {
-            for (const body of sent) emit("message", { data: JSON.stringify(body) });
+            for (const body of sent) emit("message", { data: body });
           });
       }
       close() {
@@ -385,7 +472,7 @@ describe("websocket", () => {
     await client.ready;
     expect(await client.ping()).toBe("pong");
     await expect(client.boom()).rejects.toMatchObject({
-      message: "kaboom",
+      message: "Internal error",
       code: -32603,
     });
     client.close();
@@ -568,7 +655,11 @@ describe("http client", () => {
         ac.abort();
         expect(seen?.aborted).toBe(true);
         return fetchHandler(
-          new Request("http://x/rpc", { method: "POST", body: init?.body ?? null }),
+          new Request("http://x/rpc", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: init?.body ?? null,
+          }),
         );
       }) as typeof fetch,
     });
@@ -587,7 +678,11 @@ describe("http client", () => {
         ac.abort();
         expect(seen?.aborted).toBe(true);
         return fetchHandler(
-          new Request("http://x/rpc", { method: "POST", body: init?.body ?? null }),
+          new Request("http://x/rpc", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: init?.body ?? null,
+          }),
         );
       }) as typeof fetch,
     });
@@ -619,6 +714,7 @@ describe("fetch transport", () => {
     const res = await h(
       new Request("http://x/rpc", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
       }),
     );
@@ -638,6 +734,7 @@ describe("fetch transport", () => {
     const res = await handle(whoApp)(
       new Request("http://x/rpc", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", method: "path", id: 1 }),
       }),
     );
@@ -653,7 +750,9 @@ describe("ws transport extras", () => {
       { context: {}, send: (data) => sent.push(data) },
       { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) },
     );
-    expect(sent).toEqual([{ jsonrpc: "2.0", result: "pong", id: 1 }]);
+    expect(sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s))).toEqual([
+      { jsonrpc: "2.0", result: "pong", id: 1 },
+    ]);
   });
 
   test("createContext + batch", async () => {
@@ -666,14 +765,16 @@ describe("ws transport extras", () => {
     await hooks.message(
       { context: { who: "ada" }, send: (data) => sent.push(data) },
       {
-        text: () => "",
-        json: () => [
-          { jsonrpc: "2.0", method: "who", id: 1 },
-          { jsonrpc: "2.0", method: "who" },
-        ],
+        text: () =>
+          JSON.stringify([
+            { jsonrpc: "2.0", method: "who", id: 1 },
+            { jsonrpc: "2.0", method: "who" },
+          ]),
       },
     );
-    expect(sent).toEqual([[{ jsonrpc: "2.0", result: "ada", id: 1 }]]);
+    expect(sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s))).toEqual([
+      [{ jsonrpc: "2.0", result: "ada", id: 1 }],
+    ]);
 
     const seen: unknown[] = [];
     const boom = handleWs(app, {
@@ -687,7 +788,9 @@ describe("ws transport extras", () => {
       { context: {}, send: (data) => failed.push(data) },
       { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) },
     );
-    expect(failed[0]).toMatchObject({ error: { code: -32603 } });
+    expect(failed.map((s) => (typeof s === "string" ? JSON.parse(s) : s))[0]).toMatchObject({
+      error: { code: -32603 },
+    });
     expect(seen[0]).toBeInstanceOf(Error);
   });
 });
@@ -785,6 +888,7 @@ describe("sse stream", () => {
     streamHandler(
       new Request("http://x/rpc", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
         ...init,
       }),
@@ -823,6 +927,7 @@ describe("sse stream", () => {
       handler(
         new Request("http://x/rpc", {
           method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", method, id: 1 }),
         }),
       );
@@ -882,7 +987,7 @@ describe("sse stream", () => {
       { context: {}, send: (data) => sent.push(data) },
       { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ticks", id: 1 }) },
     );
-    expect(sent).toEqual([
+    expect(sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s))).toEqual([
       {
         jsonrpc: "2.0",
         error: { code: -32603, message: "Streaming is not supported" },
@@ -994,6 +1099,7 @@ describe("files", () => {
     const res = await handle(nasty)(
       new Request("http://x/rpc", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", method: "download", id: 1 }),
       }),
     );

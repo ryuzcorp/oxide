@@ -1,9 +1,11 @@
-import { createProxyClient, rpcResult, type RPCClient } from "../index";
+import { createProxyClient, rpcResult, type RPCClient, type Serializer } from "../index";
 
 export type WsClientOptions = {
   url: string;
   protocols?: string | string[];
   WebSocket?: typeof WebSocket;
+  /** Custom serializer for the JSON-RPC payload (e.g. superjson, msgpack). */
+  serializer?: Serializer;
 };
 
 type Pending = {
@@ -15,8 +17,14 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
   close: (code?: number, reason?: string) => void;
   ready: Promise<void>;
 } {
+  const parse = opts.serializer?.parse ?? JSON.parse;
+  const stringify = opts.serializer?.stringify ?? JSON.stringify;
+
   const WS = opts.WebSocket ?? WebSocket;
   const socket = new WS(opts.url, opts.protocols);
+  if ("binaryType" in socket) {
+    socket.binaryType = "arraybuffer";
+  }
   const pending = new Map<number | string, Pending>();
   let nextId = 0;
 
@@ -27,10 +35,13 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
     });
   });
 
-  socket.addEventListener("message", (event) => {
+  socket.addEventListener("message", async (event) => {
     let body: unknown;
     try {
-      body = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      const data = event.data;
+      const raw =
+        typeof Blob !== "undefined" && data instanceof Blob ? await data.arrayBuffer() : data;
+      body = parse(raw as string);
     } catch {
       return;
     }
@@ -64,7 +75,7 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        socket.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+        socket.send(stringify({ jsonrpc: "2.0", method, params, id }));
       });
     },
     {
