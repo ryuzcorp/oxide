@@ -133,3 +133,34 @@ Same factory as Vite: client stubs, `/_action`, and `dist/server.js`.
 - No `wrangler dev` / workerd emulation
 - No automatic `celld deploy`
 - No Node-builtin polyfills — Vite `ssr.noExternal: true` is a hard-fail for stray Node imports
+
+## Security
+
+### Asset serving (`preset: "fetch"`)
+
+The generated server serves static files from `dist/client/` (or the `public/` directory merged into it). These guards are active:
+
+| Attack vector                      | Guard                                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments.                                                                                      |
+| **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`.                                                                  |
+| **Null byte** (`%00`, `\0`)        | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`.                                                   |
+| **Absolute path** (`/etc/passwd`)  | `__rel()` returns `null` for paths not starting with `/`.                                                                              |
+| **SPA fallback**                   | Unknown paths → `index.html`, never a directory listing.                                                                               |
+| **`clientDir` escape**             | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`.                                                        |
+| **Hashed assets**                  | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |
+
+The generated `__asset` function uses `path.join` — not `path.resolve` — so a leading `/` in the relative path stays inside the asset root.
+
+### Server actions (`*.server.ts`)
+
+- `*.server.ts` code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST `/_action`. The original source stays server-only.
+- `/_action` is POST-only. Non-POST requests return `405`.
+- Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
+- Unknown or missing content-types → `415`.
+- Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
+- Batch requests capped at 20 items (both HTTP and WebSocket transports).
+
+### Host header
+
+The generated dev server constructs `request.url` from `req.headers.host`. This is standard HTTP/1.1 behavior (same as Express, Hono, Koa, Node http). If your `src/server.ts` reads `request.url` to construct redirects, validate the host yourself — the framework cannot distinguish a legitimate host header from a malicious one. In production, your reverse proxy handles this.

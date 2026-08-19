@@ -24,25 +24,32 @@ const files = [
     name: "client.ts",
     html: highlight(
       `// Looks local. Runs on the server.
-import { create, list } from "./notes.server";
+// Your server code never reaches the browser.
+import { create, watch } from "./notes.server";
 
 const note = await create("Ship Oxide");
-const notes = await list();
-console.log(note, notes);
-// { id: "…", title: "Ship Oxide" } [{ id: "1", title: "Ship Oxide" }]`,
+console.log(note); // { id: "…", title: "Ship Oxide" }
+
+// A function that yields streams live updates to the browser.
+for await (const n of await watch()) console.log(n);`,
       "ts",
     ),
   },
   {
     name: "notes.server.ts",
     html: highlight(
-      `// Talk to a database or any external service here.
+      `// Your backend logic lives here. Talk to a database,
+// call an API — it stays on the server.
+import { useRequest } from "oxidejs";
+import type { ActionOptions } from "oxidejs";
+
 export async function create(title: string) {
   return { id: crypto.randomUUID(), title };
 }
 
-export async function list() {
-  return [{ id: "1", title: "Ship Oxide" }];
+export async function* watch(_opts?: ActionOptions) {
+  const req = useRequest(); // the inbound request
+  yield { id: "1", title: "Ship Oxide" };
 }`,
       "ts",
     ),
@@ -50,19 +57,28 @@ export async function list() {
   {
     name: "server.ts",
     html: highlight(
-      `import { handle } from "tacho/transport/fetch";
-import { tacho } from "tacho";
-
-const rpc = tacho();
-
-const app = rpc({
-  health: rpc.run(() => "ok" as const),
-});
-
+      `// Every request hits this first. Return nothing to let
+// static files take over — no extra setup needed.
 export default {
-  fetch: handle(app),
+  fetch(request: Request) {
+    if (new URL(request.url).pathname === "/api/ok")
+      return new Response("ok");
+  },
 };`,
       "ts",
+    ),
+  },
+  {
+    name: "index.html",
+    html: highlight(
+      `<!doctype html>
+<html lang="en">
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/client.ts"></script>
+  </body>
+</html>`,
+      "html",
     ),
   },
   {
@@ -135,8 +151,8 @@ export default defineConfig({
     <section class="relative mx-auto max-w-5xl px-6 pb-20">
       <Card>
         <CardHeader>
-          <CardTitle>Four files. That's the whole app.</CardTitle>
-          <CardDescription>A server, an action, a client, and the plugin.</CardDescription>
+          <CardTitle>A server, an action, a page, and the plugin.</CardTitle>
+          <CardDescription>That's the whole app. The plugin wires up your server actions for you.</CardDescription>
           <CardAction>
             <Button as="a" target="_blank" rel="noopener noreferrer" href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/tasks?file=src%2Ftasks.server.ts" size="sm" type="button" variant="secondary">Run</Button>
           </CardAction>
@@ -177,26 +193,28 @@ export default defineConfig({
     <div class="mt-10 grid gap-4 sm:grid-cols-3">
       <Card>
         <CardHeader>
-          <CardTitle>Single bundle</CardTitle>
+          <CardTitle>Server code stays put</CardTitle>
           <CardDescription>
-            One folder to deploy. A server, and a client if you have a page.
+            Write a function on the server, call it from the browser like it's
+            local. The code never ships to the client, and the types line up.
           </CardDescription>
         </CardHeader>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Server actions</CardTitle>
+          <CardTitle>Live updates</CardTitle>
           <CardDescription>
-            Import a server function. Call it like it's local.
+            Export a generator and the browser gets a live stream. Stop it
+            anytime with an abort signal.
           </CardDescription>
         </CardHeader>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Your host</CardTitle>
+          <CardTitle>Run it anywhere</CardTitle>
           <CardDescription>
-            Same plugin on a VPS or on Cloudflare. You pick the host, not a new
-            stack.
+            A VPS, or celld — a self-hosted alternative to Cloudflare Workers.
+            Vite or Rsbuild. Your tools, your call.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -210,7 +228,15 @@ export default defineConfig({
           Keep your bundler. Add one plugin.
         </h2>
         <p class="mt-4 text-muted-foreground leading-relaxed">
-          Vite or Rsbuild. Switch the import. Keep the rest.
+          Vite or Rsbuild. Switch the import. Keep the rest. One build, one
+          folder to ship:
+        </p>
+        <pre class="mt-4 rounded-lg border border-border bg-muted/50 p-4 font-mono text-[13px] leading-6 text-muted-foreground"><code>dist/
+├── client/        # if you have a page
+└── server.js      # your backend</code></pre>
+        <p class="mt-4 text-muted-foreground leading-relaxed">
+          Build it and run it with <code class="font-mono">vite build &amp;&amp; node dist/server.js</code>. Actions run on
+          <a class="underline-offset-4 hover:text-foreground hover:underline ml-1" href="/tacho/overview">tacho</a>, the RPC layer that ships with it.
         </p>
         <Button as="a" class="mt-6 pl-0" href="/oxide/quickstart" variant="link">
           Read the quickstart →

@@ -1018,6 +1018,38 @@ describe("sse stream", () => {
     expect(await boom.next()).toEqual({ value: 0, done: false });
     await expect(boom.next()).rejects.toMatchObject({ message: "nope", code: -32001 });
   });
+
+  test("circular reference in yielded value becomes error event, stream continues", async () => {
+    const c = tacho();
+    const a = c({
+      circ: c.run(async function* () {
+        const obj: { self?: unknown } = {};
+        obj.self = obj;
+        yield 0;
+        yield obj;
+        yield 1;
+        return "done";
+      }),
+    });
+    const h = handle(a);
+    const res = await h(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "circ", id: 1 }),
+      }),
+    );
+    const text = await res.text();
+    // First yield succeeds
+    expect(text).toContain('"result":0');
+    // Second yield (circular) becomes a safe error frame, not a crash
+    expect(text).toContain("error");
+    expect(text).toContain("Internal error");
+    // Third yield still arrives after the error
+    expect(text).toContain('"result":1');
+    // Done event still arrives
+    expect(text).toContain('"result":"done"');
+  });
 });
 
 describe("files", () => {
@@ -1367,6 +1399,70 @@ describe("security", () => {
     expect(result.error.message).toBe("Internal error");
     expect(JSON.stringify(result)).not.toContain("kaboom");
     expect(JSON.stringify(result)).not.toContain("stack");
+  });
+
+  test("ws transport rejects oversized batch", async () => {
+    const hooks = handleWs(app, { maxBatchSize: 2 });
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      {
+        text: () =>
+          JSON.stringify([
+            { jsonrpc: "2.0", method: "ping", id: 1 },
+            { jsonrpc: "2.0", method: "ping", id: 2 },
+            { jsonrpc: "2.0", method: "ping", id: 3 },
+          ]),
+      },
+    );
+    const result = JSON.parse(sent[0] as string);
+    expect(result.error.message).toBe("Batch too large");
+    // default cap is 20
+    const defaultHooks = handleWs(app);
+    const big: unknown[] = [];
+    const bigSent: unknown[] = [];
+    await defaultHooks.message(
+      { context: {}, send: (data) => bigSent.push(data) },
+      {
+        text: () =>
+          JSON.stringify(
+            Array.from({ length: 21 }, (_, i) => ({
+              jsonrpc: "2.0",
+              method: "ping",
+              id: i + 1,
+            })),
+          ),
+      },
+    );
+    const bigResult = JSON.parse(bigSent[0] as string);
+    expect(bigResult.error.message).toBe("Batch too large");
+    void big;
+  });
+
+  test("maxBodySize enforces actual body length, not just content-length header", async () => {
+    const limited = handle(app, { maxBodySize: 20 });
+    // No content-length header at all — the header check is bypassed,
+    // but the actual body is measured after reading.
+    const res = await limited(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(413);
+
+    // Small body under the limit still works
+    const tiny = JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }).slice(0, 10);
+    const ok = await limited(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: tiny,
+      }),
+    );
+    // slice(0,10) cuts the body — parse will fail, but not with 413
+    expect(ok.status).not.toBe(413);
   });
 
   // --- safeFileName header injection ---

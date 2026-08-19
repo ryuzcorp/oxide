@@ -313,6 +313,35 @@ const spec = toOpenRpc(router, {
 });
 ```
 
+## Security
+
+### Default guards
+
+| Guard                     | Default                                                     | What fails                                                                                                              |
+| ------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Method dispatch**       | `Object.hasOwn` walk                                        | `__proto__`, `constructor`, prototype chain segments → `METHOD_NOT_FOUND`                                               |
+| **HTTP method**           | POST only                                                   | GET / PUT / DELETE / PATCH → `405` + `Allow: POST`                                                                      |
+| **Content-Type**          | `application/json`                                          | `text/plain`, `application/xml` → `415`                                                                                 |
+| **Body size**             | 1 MB (`maxBodySize`)                                        | Oversized body → `413`. Measured on the _actual_ body, not just the `Content-Length` header.                            |
+| **Batch size**            | 20 (`maxBatchSize`)                                         | Fetch _and_ WS enforce the same cap. Oversized → `INVALID_REQUEST`.                                                     |
+| **Error info**            | Plain `Error` → generic `"Internal error"`                  | Original message, stack, and data are never serialized. `RpcError` exposes only `code`, `message`, and explicit `data`. |
+| **Procedure name**        | `rpc.*` reserved                                            | `rpc.discover` → `METHOD_NOT_FOUND`                                                                                     |
+| **Stream + batch**        | Rejected                                                    | `INVALID_REQUEST`                                                                                                       |
+| **Stream + notification** | No-op                                                       | `204`, generator never starts                                                                                           |
+| **Content-Disposition**   | `safeFileName` strips `\r`, `\n`, `"`, `\`, path separators | `fileHeaders` returns a safer `filename` value                                                                          |
+
+`handle()` returns a plain `(Request) => Response`. It does no rate limiting, no CORS, and no authentication — those are your server's job.
+
+### What you must guard
+
+- **CORS** — `handle()` does not set `Access-Control-*` headers. Wrap it when called cross-origin.
+- **Rate limiting** — No built-in. Use a middleware-like wrapper on `handle()` or an upstream reverse proxy.
+- **WebSocket authentication** — The WS handler's `upgrade()` only checks `path`. Authenticate via `createContext` or guard at the upgrade point from the server's WebSocket upgrade handler.
+
+### Custom serializers
+
+A custom `parse` / `stringify` is the full trust boundary — whatever the serializer writes to the wire, the client sees. If you use one, it is responsible for not leaking internals.
+
 ## Wire
 
 JSON-RPC 2.0, POST only.

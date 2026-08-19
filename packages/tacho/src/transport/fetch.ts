@@ -17,7 +17,22 @@ const SSE_HEADERS = {
 };
 
 function sseFrame(data: unknown, stringify: (val: any) => any, event?: string) {
-  return `${event ? `event: ${event}\n` : ""}data: ${stringify(data)}\n\n`;
+  let json: string;
+  try {
+    json = stringify(data);
+  } catch {
+    json = safeFrame(data);
+  }
+  return `${event ? `event: ${event}\n` : ""}data: ${json}\n\n`;
+}
+
+function safeFrame(data: unknown): string {
+  const id = data && typeof data === "object" ? ((data as { id?: JsonRpcId }).id ?? null) : null;
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    error: { code: JSON_RPC_ERROR.INTERNAL_ERROR, message: "Internal error" },
+    id,
+  });
 }
 
 function streamResponse(
@@ -147,6 +162,16 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
       ) {
         const isText = ct.includes("json") || ct.includes("text");
         const raw = isText ? await request.text() : new Uint8Array(await request.arrayBuffer());
+        if ((typeof raw === "string" ? raw.length : raw.byteLength) > maxBody) {
+          return reply(
+            {
+              jsonrpc: "2.0",
+              error: { code: JSON_RPC_ERROR.INVALID_REQUEST, message: "Payload too large" },
+              id: null,
+            },
+            413,
+          );
+        }
         body = parse(raw as string);
       } else {
         return reply(

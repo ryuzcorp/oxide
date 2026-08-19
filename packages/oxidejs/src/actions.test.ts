@@ -313,6 +313,92 @@ describe("codegen", () => {
     expect(code).toContain('new URL(request.url).pathname === "/_action"');
   });
 
+  test("generated __asset serves real files from a public/ dir", async () => {
+    // Build a fake dist/client like the plugin's build output
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-assets-"));
+    const client = path.join(root, "dist", "client");
+    fs.mkdirSync(client, { recursive: true });
+    fs.writeFileSync(path.join(client, "index.html"), "<html>home</html>");
+    fs.writeFileSync(path.join(client, "logo.png"), Buffer.from([1, 2, 3, 4]));
+    fs.mkdirSync(path.join(client, "nested"));
+    fs.writeFileSync(path.join(client, "nested", "deep.txt"), "deep-content");
+    // A secret file just outside the asset root — must never be reachable
+    fs.writeFileSync(path.join(root, "secret.txt"), "top-secret");
+
+    try {
+      const code = generateWorkerWrapper("/app/src/server.ts", {
+        preset: "fetch",
+        hasPublic: true,
+      });
+      // The asset block sits between the __assets const and the app object.
+      const start = code.indexOf("const __assets");
+      const end = code.indexOf("const app =");
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const assetBlock = code.slice(start, end);
+      // Strip the import lines and the __assets const; we inject those via scope.
+      const body = assetBlock
+        .replace(/^import .*\n/gm, "")
+        .replace(/^const __assets = .*;\n?/m, "");
+      const factory = new Function(
+        "readFile",
+        "extname",
+        "join",
+        "__assets",
+        `${body}\nreturn { __rel, __asset };`,
+      ) as (
+        readFile: (p: string) => Promise<Buffer>,
+        extname: typeof path.extname,
+        join: typeof path.join,
+        assets: string,
+      ) => {
+        __rel: (pathname: string, spa?: boolean) => string | undefined;
+        __asset: (request: Request, spa?: boolean) => Promise<Response | undefined>;
+      };
+      const { __asset } = factory(
+        (p: string) => import("node:fs/promises").then((m) => m.readFile(p)),
+        path.extname,
+        path.join,
+        client,
+      );
+
+      // Valid asset served with correct content-type
+      const index = await __asset(new Request("http://x/index.html"));
+      expect(index?.status).toBe(200);
+      expect(await index!.text()).toBe("<html>home</html>");
+      expect(index!.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(index!.headers.get("cache-control")).toBe("no-cache");
+
+      // Binary asset keeps its bytes and gets the right type
+      const png = await __asset(new Request("http://x/logo.png"));
+      expect(png?.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await png!.arrayBuffer())).toEqual(Buffer.from([1, 2, 3, 4]));
+
+      // Nested path
+      const deep = await __asset(new Request("http://x/nested/deep.txt"));
+      expect(await deep!.text()).toBe("deep-content");
+      expect(deep!.headers.get("content-type")).toBe("application/octet-stream");
+
+      // Missing file → undefined (caller returns 404)
+      expect(await __asset(new Request("http://x/missing.png"))).toBeUndefined();
+
+      // SPA fallback resolves unknown paths to index.html
+      const spa = await __asset(new Request("http://x/some/route"), true);
+      expect(await spa!.text()).toBe("<html>home</html>");
+
+      // Traversal and double-slash are blocked at the __rel gate
+      expect(await __asset(new Request("http://x/../secret.txt"))).toBeUndefined();
+      expect(await __asset(new Request("http://x/..%2fsecret.txt"))).toBeUndefined();
+      expect(await __asset(new Request("http://x//etc/passwd"))).toBeUndefined();
+      expect(await __asset(new Request("http://x/%2e%2e/secret.txt"))).toBeUndefined();
+      // SPA fallback maps traversal paths to index.html — never outside assets
+      const spaTraversal = await __asset(new Request("http://x/../secret.txt"), true);
+      expect(await spaTraversal!.text()).toBe("<html>home</html>");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("stubs client, not worker", () => {
     expect(shouldStubServerModule({ consumer: "client" })).toBe(true);
     expect(shouldStubServerModule({ consumer: "server" })).toBe(false);

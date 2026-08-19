@@ -12,12 +12,12 @@
   "dependencies": {
     "@ilha/router": "^0.8.12",
     "ilha": "^0.10.2",
-    "tacho": "^0.4.1",
+    "tacho": "^0.4.2",
     "unstorage": "^2.0.0-alpha.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260818.1",
-    "oxidejs": "^0.1.4",
+    "oxidejs": "^0.1.5",
     "typescript": "^6",
     "vite": "^8.2.1"
   }

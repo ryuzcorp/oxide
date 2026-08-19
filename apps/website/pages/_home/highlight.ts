@@ -1,9 +1,10 @@
 import { codeToHtml } from "rangi/core";
-import { bash, js, js_template_literals, jsdoc, regex, todo, ts } from "rangi/languages";
+import { bash, html, js, js_template_literals, jsdoc, regex, todo, ts } from "rangi/languages";
 import { cssVariables } from "rangi/themes";
 
 const languages = {
   bash,
+  html,
   js,
   js_template_literals,
   jsdoc,

@@ -24,6 +24,8 @@ export type WsHandleOptions<C extends Context> = {
   createContext?: (peer: Peer) => C | Promise<C>;
   path?: string;
   onError?: (err: unknown, peer: Peer) => void;
+  /** Max items in a JSON-RPC batch request. Default: 20. */
+  maxBatchSize?: number;
   /** Custom serializer for the JSON-RPC payload (e.g. superjson, msgpack). */
   serializer?: Serializer;
 };
@@ -47,8 +49,19 @@ async function dispatch(
   router: AnyRouter,
   raw: unknown,
   ctx: Context,
+  maxBatch: number,
 ): Promise<JsonRpcResponse | JsonRpcResponse[] | undefined> {
-  return Array.isArray(raw) ? runBatch(router, raw, ctx) : runOne(router, raw, ctx);
+  if (Array.isArray(raw)) {
+    if (raw.length > maxBatch) {
+      return {
+        jsonrpc: "2.0",
+        error: { code: JSON_RPC_ERROR.INVALID_REQUEST, message: "Batch too large" },
+        id: null,
+      };
+    }
+    return runBatch(router, raw, ctx);
+  }
+  return runOne(router, raw, ctx);
 }
 
 export function handle<R extends AnyRouter, C extends Context = {}>(
@@ -82,7 +95,7 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
           req: peer.request,
           ...((await opts.createContext?.(peer)) ?? ((peer.context ?? {}) as C)),
         };
-        const result = await dispatch(router, parsed.value, ctx);
+        const result = await dispatch(router, parsed.value, ctx, opts.maxBatchSize ?? 20);
         if (result !== undefined) peer.send(stringify(result));
       } catch (err) {
         opts.onError?.(err, peer);
