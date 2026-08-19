@@ -212,8 +212,105 @@ describe("codegen", () => {
     expect(assetRelPath("/app.js%00.txt")).toBeNull();
     expect(assetRelPath("app.js")).toBeNull();
     const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
-    expect(code).toContain("file.slice(1)");
+    expect(code).toContain("rel.startsWith");
     expect(code).toContain('file.split("/").includes("..")');
+  });
+
+  test("asset helper blocks double-slash absolute path escape", () => {
+    // //etc/passwd after slice(1) becomes /etc/passwd (absolute)
+    // path.resolve would escape the asset root
+    expect(assetRelPath("//etc/passwd")).toBeNull();
+    expect(assetRelPath("///etc/passwd")).toBeNull();
+    expect(assetRelPath("////etc/passwd")).toBeNull();
+  });
+
+  test("asset helper never returns an absolute path", () => {
+    const vectors = [
+      "/",
+      "/app.js",
+      "//x",
+      "///x",
+      "/foo/bar",
+      "/foo/../bar",
+      "/%2e%2e/x",
+      "/foo%00",
+      "/foo%5c..%5cbar",
+      "/foo%2f..%2fbar",
+      "/../../../etc/shadow",
+      "/..%2f..%2fetc%2fshadow",
+      "/..",
+      "/foo/..",
+      "/foo/.",
+    ];
+    for (const v of vectors) {
+      const result = assetRelPath(v);
+      if (result !== null) {
+        expect(result.startsWith("/")).toBe(false);
+        expect(result.split("/").includes("..")).toBe(false);
+      }
+    }
+  });
+
+  test("asset helper blocks null bytes pre and post decode", () => {
+    expect(assetRelPath("/foo\0bar")).toBeNull();
+    expect(assetRelPath("/foo%00bar")).toBeNull();
+    expect(assetRelPath("/%00")).toBeNull();
+  });
+
+  test("asset helper rejects relative paths without leading slash", () => {
+    expect(assetRelPath("app.js")).toBeNull();
+    expect(assetRelPath("../secret")).toBeNull();
+    expect(assetRelPath("")).toBeNull();
+  });
+
+  test("asset helper allows valid nested paths", () => {
+    expect(assetRelPath("/assets/js/app.js")).toBe("assets/js/app.js");
+    expect(assetRelPath("/img/logo.png")).toBe("img/logo.png");
+    expect(assetRelPath("/.vite/manifest.json")).toBe(".vite/manifest.json");
+  });
+
+  test("generated __rel matches assetRelPath for all attack vectors", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
+    // Extract the __rel function from generated code and evaluate it
+    const match = code.match(/function __rel\(pathname, spa\) \{[\s\S]*?\n\}/)?.[0];
+    expect(match).toBeTruthy();
+    const __rel = new Function(`${match}; return __rel;`)() as (
+      pathname: string,
+      spa?: boolean,
+    ) => string | undefined;
+
+    const vectors: [string, boolean | undefined][] = [
+      ["/app.js", undefined],
+      ["/", undefined],
+      ["/missing", true],
+      ["/../secret", undefined],
+      ["/%2e%2e/secret", undefined],
+      ["/foo/../../etc/passwd", undefined],
+      ["/app.js%00.txt", undefined],
+      ["app.js", undefined],
+      ["//etc/passwd", undefined],
+      ["///etc/passwd", undefined],
+      ["/foo\0bar", undefined],
+      ["/foo%00bar", undefined],
+      ["../secret", undefined],
+      ["", undefined],
+      ["/assets/js/app.js", undefined],
+      ["/.vite/manifest.json", undefined],
+    ];
+    for (const [pathname, spa] of vectors) {
+      const expected = assetRelPath(pathname, spa);
+      const actual = __rel(pathname, spa) ?? null;
+      expect(actual).toBe(expected);
+    }
+  });
+
+  test("generated server uses req.url safely with URL constructor", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
+    // The generated code uses new URL(request.url).pathname to extract the path,
+    // not raw string manipulation. This ensures URL parsing normalization.
+    expect(code).toContain("new URL(request.url).pathname");
+    // The action gate also uses pathname comparison, not raw string matching
+    expect(code).toContain('new URL(request.url).pathname === "/_action"');
   });
 
   test("stubs client, not worker", () => {

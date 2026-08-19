@@ -1153,3 +1153,240 @@ describe("toOpenRpc", () => {
     expect(spec.methods[0]?.result).toEqual({ name: "result", schema: { type: "string" } });
   });
 });
+
+describe("security", () => {
+  // --- prototype pollution via method dispatch ---
+
+  test("__proto__ method dispatch is rejected over fetch", async () => {
+    const body = await (await call({ jsonrpc: "2.0", method: "__proto__.toString", id: 1 })).json();
+    expect(body.error.code).toBe(JSON_RPC_ERROR.METHOD_NOT_FOUND);
+  });
+
+  test("constructor.constructor method dispatch is rejected", async () => {
+    const body = await (
+      await call({ jsonrpc: "2.0", method: "constructor.constructor", id: 1 })
+    ).json();
+    expect(body.error.code).toBe(JSON_RPC_ERROR.METHOD_NOT_FOUND);
+  });
+
+  test("prototype chain walks via nested segments are rejected", async () => {
+    for (const method of [
+      "__proto__",
+      "constructor",
+      "toString",
+      "hasOwnProperty",
+      "user.__proto__",
+      "__defineGetter__",
+      "__lookupGetter__",
+    ]) {
+      const body = await (await call({ jsonrpc: "2.0", method, id: 1 })).json();
+      expect(body.error.code).toBe(JSON_RPC_ERROR.METHOD_NOT_FOUND);
+    }
+  });
+
+  // --- error information leakage ---
+
+  test("plain Error never leaks message or stack", async () => {
+    const body = await (await call({ jsonrpc: "2.0", method: "boom", id: 1 })).json();
+    expect(body.error.message).toBe("Internal error");
+    expect(body.error.data).toBeUndefined();
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("kaboom");
+    expect(raw).not.toContain("stack");
+    expect(raw).not.toContain("at ");
+  });
+
+  test("RpcError exposes only code, message, and data", async () => {
+    const body = await (await call({ jsonrpc: "2.0", method: "appErr", id: 1 })).json();
+    const keys = Object.keys(body.error);
+    expect(keys.sort()).toEqual(["code", "data", "message"]);
+    expect(body.error).not.toHaveProperty("stack");
+  });
+
+  test("top-level catch returns generic Internal error, not implementation details", async () => {
+    // Send something that triggers the outer catch (createContext throwing)
+    const badHandler = handle(app, {
+      createContext: () => {
+        throw new Error("DB_PASSWORD=secret123");
+      },
+    });
+    const res = await badHandler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.message).toBe("Internal error");
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("DB_PASSWORD");
+    expect(raw).not.toContain("secret123");
+  });
+
+  // --- content-type enforcement ---
+
+  test("rejects text/plain content-type", async () => {
+    const res = await fetchHandler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(415);
+  });
+
+  test("rejects application/xml content-type", async () => {
+    const res = await fetchHandler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/xml" },
+        body: '<jsonrpc version="2.0"/>',
+      }),
+    );
+    expect(res.status).toBe(415);
+  });
+
+  // --- batch size limits ---
+
+  test("fetch transport enforces maxBatchSize", async () => {
+    const smallBatch = handle(app, { maxBatchSize: 2 });
+    const res = await smallBatch(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify([
+          { jsonrpc: "2.0", method: "ping", id: 1 },
+          { jsonrpc: "2.0", method: "ping", id: 2 },
+          { jsonrpc: "2.0", method: "ping", id: 3 },
+        ]),
+      }),
+    );
+    const body = await res.json();
+    expect(body.error.message).toBe("Batch too large");
+  });
+
+  test("default maxBatchSize rejects >20 items", async () => {
+    const batch = Array.from({ length: 21 }, (_, i) => ({
+      jsonrpc: "2.0",
+      method: "ping",
+      id: i + 1,
+    }));
+    const body = await (await call(batch)).json();
+    expect(body.error.message).toBe("Batch too large");
+  });
+
+  // --- body size limit (content-length check) ---
+
+  test("maxBodySize rejects when content-length exceeds limit", async () => {
+    const limited = handle(app, { maxBodySize: 50 });
+    const res = await limited(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "999999",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      }),
+    );
+    expect(res.status).toBe(413);
+  });
+
+  // --- malformed input resilience ---
+
+  test("null body returns parse error", async () => {
+    const body = await (await call("null")).json();
+    expect(body.error.code).toBe(JSON_RPC_ERROR.INVALID_REQUEST);
+  });
+
+  test("numeric body returns invalid request", async () => {
+    const body = await (await call("42")).json();
+    expect(body.error.code).toBe(JSON_RPC_ERROR.INVALID_REQUEST);
+  });
+
+  test("string body returns parse error or invalid request", async () => {
+    const body = await (await call('"hello"')).json();
+    expect(body.error.code).toBe(JSON_RPC_ERROR.INVALID_REQUEST);
+  });
+
+  test("deeply nested JSON does not crash (parse succeeds, method resolves normally)", async () => {
+    // 100 levels of nesting in params - should not crash the server
+    let nested: unknown = "leaf";
+    for (let i = 0; i < 100; i++) nested = { a: nested };
+    const body = await (
+      await call({ jsonrpc: "2.0", method: "ping", id: 1, params: [nested] })
+    ).json();
+    expect(body.result).toBe("pong");
+  });
+
+  // --- HTTP method enforcement ---
+
+  test("GET, PUT, DELETE, PATCH all return 405", async () => {
+    for (const method of ["GET", "PUT", "DELETE", "PATCH"]) {
+      const res = await fetchHandler(new Request("http://x/rpc", { method }));
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("POST");
+    }
+  });
+
+  // --- WebSocket security ---
+
+  test("ws transport rejects __proto__ method", async () => {
+    const hooks = handleWs(app);
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "__proto__.toString", id: 1 }) },
+    );
+    const result = JSON.parse(sent[0] as string);
+    expect(result.error.code).toBe(JSON_RPC_ERROR.METHOD_NOT_FOUND);
+  });
+
+  test("ws transport handles parse errors without crashing", async () => {
+    const hooks = handleWs(app);
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      { text: () => "{invalid json" },
+    );
+    const result = JSON.parse(sent[0] as string);
+    expect(result.error.code).toBe(JSON_RPC_ERROR.PARSE_ERROR);
+  });
+
+  test("ws transport error handler does not leak internals", async () => {
+    const hooks = handleWs(app);
+    const sent: unknown[] = [];
+    await hooks.message(
+      { context: {}, send: (data) => sent.push(data) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "boom", id: 1 }) },
+    );
+    const result = JSON.parse(sent[0] as string);
+    expect(result.error.message).toBe("Internal error");
+    expect(JSON.stringify(result)).not.toContain("kaboom");
+    expect(JSON.stringify(result)).not.toContain("stack");
+  });
+
+  // --- safeFileName header injection ---
+
+  test("safeFileName strips CRLF, quotes, backslashes, and path separators", () => {
+    expect(safeFileName("normal.txt")).toBe("normal.txt");
+    expect(safeFileName('file"inject.txt')).toBe("file_inject.txt");
+    expect(safeFileName("file\r\nCRLF.txt")).toBe("file__CRLF.txt");
+    expect(safeFileName("../../etc/passwd")).toBe("passwd");
+    expect(safeFileName("path\\to\\file.txt")).toBe("path_to_file.txt");
+    expect(safeFileName("")).toBe("download");
+    // CRLF header injection attempt
+    const injected = safeFileName("\r\nContent-Type: text/html\r\n\r\n<script>alert(1)</script>");
+    expect(injected).not.toMatch(/[\r\n"\\]/);
+  });
+
+  test("fileHeaders Content-Disposition is safe with adversarial filenames", () => {
+    const blob = new File(["x"], "\r\nHTTP/1.1 200\r\nX-Bad: true", { type: "text/plain" });
+    const headers = fileHeaders(blob);
+    expect(headers["content-disposition"]).not.toMatch(/[\r\n]/);
+    expect(headers["content-disposition"]).toContain('filename="');
+  });
+});

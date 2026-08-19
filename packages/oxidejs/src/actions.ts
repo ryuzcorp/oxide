@@ -94,7 +94,9 @@ export function assetRelPath(pathname: string, spa = false): string | null {
   if (file.includes("\0")) return null;
   if (file === "/" || spa) file = "/index.html";
   if (!file.startsWith("/") || file.split("/").includes("..")) return null;
-  return file.slice(1);
+  const rel = file.slice(1);
+  if (rel.startsWith("/")) return null;
+  return rel;
 }
 
 export function generateClientModule(
@@ -242,7 +244,9 @@ function __rel(pathname, spa) {
   if (file.includes("\0")) return;
   if (file === "/" || spa) file = "/index.html";
   if (!file.startsWith("/") || file.split("/").includes("..")) return;
-  return file.slice(1);
+  const rel = file.slice(1);
+  if (rel.startsWith("/")) return;
+  return rel;
 }
 async function __asset(request, spa) {
   const file = __rel(new URL(request.url).pathname, spa);
