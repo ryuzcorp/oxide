@@ -29,14 +29,14 @@ export const BuildSwitcher = ilha
     state.bundler(bundler);
   })
   .render(({ state, action }) => (
-    <div class="overflow-hidden rounded-xl border border-border bg-card">
-      <div class="flex items-center gap-1 border-border border-b px-3 py-2">
+    <div class="overflow-hidden rounded-none border border-border bg-card">
+      <div class="flex items-center justify-start gap-1 border-b border-border bg-transparent p-0">
         {(["vite", "rsbuild"] as const).map((bundler) => (
           <button
             class={
               state.bundler() === bundler
-                ? "rounded-md bg-muted px-2.5 py-1 font-medium text-foreground text-xs"
-                : "rounded-md px-2.5 py-1 text-muted-foreground text-xs hover:text-foreground"
+                ? "flex-none rounded-none border-b-2 border-primary bg-transparent px-3 py-2 font-mono font-medium text-xs text-foreground"
+                : "flex-none rounded-none border-b-2 border-transparent bg-transparent px-3 py-2 font-mono text-xs text-muted-foreground hover:text-foreground"
             }
             onclick={() => action.select(bundler)}
             type="button"
