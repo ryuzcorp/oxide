@@ -40,15 +40,13 @@ describe("factory shape", () => {
     expect(typeof plugin.rsbuild?.setup).toBe("function");
   });
 
-  test("client load stubs *.server.ts and blocks virtual actions", () => {
+  test("client load stubs *.server.tsx and blocks virtual actions", () => {
     const plugin = unpluginFactory({}, { framework: "vite" } as never);
     if (Array.isArray(plugin)) throw new Error("expected a single plugin");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-load-"));
-    const file = path.join(root, "secret.server.ts");
-    fs.writeFileSync(
-      file,
-      `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
-    );
+    const file = path.join(root, "secret.server.tsx");
+    const source = `import { useRequest } from "oxidejs";\nconst SECRET = "leak-me";\nexport async function ping() { return <div>{useRequest().url}{SECRET}</div> }\n`;
+    fs.writeFileSync(file, source);
     const load = plugin.load as (this: object, id: string) => unknown;
     const ctx = {
       environment: { config: { consumer: "client" } },
@@ -73,11 +71,7 @@ describe("factory shape", () => {
       };
       expect(load.call(serverCtx, file)).toBeUndefined();
       const transform = plugin.transform as (this: object, code: string, id: string) => unknown;
-      const leaked = transform.call(
-        ctx,
-        `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
-        file,
-      );
+      const leaked = transform.call(ctx, source, file);
       expect(String(leaked)).not.toContain("leak-me");
       expect(String(leaked)).toContain('client["secret"]["ping"]');
     } finally {

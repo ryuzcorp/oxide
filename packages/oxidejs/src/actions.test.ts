@@ -46,6 +46,21 @@ describe("parseExportedNames", () => {
 });
 
 describe("scanServerFiles", () => {
+  test("finds TypeScript and JavaScript server modules", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-actions-"));
+    for (const ext of ["ts", "tsx", "js", "jsx"]) {
+      fs.writeFileSync(
+        path.join(root, `${ext}.server.${ext}`),
+        "export async function ping() {}\n",
+      );
+    }
+    try {
+      expect(scanServerFiles(root).map((mod) => mod.key)).toEqual(["js", "jsx", "ts", "tsx"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("keys by filename and rejects collisions", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-actions-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });

@@ -34,7 +34,7 @@ vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` (if you have `*.server.ts`) → `src/server.ts` (`undefined` continues) → static file → `index.html` for navigations. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
+Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` (`undefined` continues) → static file → `index.html` for navigations. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
 
 ```ts
 oxide({
@@ -47,7 +47,7 @@ oxide({
 
 ## Server actions
 
-Install `tacho` if you use actions. Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No `*.server.ts` → the bundle does not import tacho.
+Install `tacho` if you use actions. Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import tacho.
 
 ```ts
 // src/test.server.ts
@@ -152,9 +152,9 @@ The generated server serves static files from `dist/client/` (or the `public/` d
 
 The generated `__asset` function uses `path.join` — not `path.resolve` — so a leading `/` in the relative path stays inside the asset root.
 
-### Server actions (`*.server.ts`)
+### Server actions (`*.server.{ts,tsx,js,jsx}`)
 
-- `*.server.ts` code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST `/_action`. The original source stays server-only.
+- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST `/_action`. The original source stays server-only.
 - `/_action` is POST-only. Non-POST requests return `405`.
 - Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
 - Unknown or missing content-types → `415`.

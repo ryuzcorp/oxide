@@ -23,11 +23,11 @@ export interface ServerModule {
 
 export function isServerFileId(id: string): boolean {
   const file = id.split("?")[0]?.replace(/\\/g, "/") ?? "";
-  return file.endsWith(".server.ts") || file.endsWith(".server.js");
+  return [".ts", ".tsx", ".js", ".jsx"].some((ext) => file.endsWith(`.server${ext}`));
 }
 
 export function moduleKey(absFile: string): string {
-  return path.basename(absFile).replace(/\.server\.(ts|js)$/i, "");
+  return path.basename(absFile).replace(/\.server\.(?:[jt]sx?)$/i, "");
 }
 
 export function parseExportedNames(source: string): string[] {
