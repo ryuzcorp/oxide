@@ -94,58 +94,17 @@ export default defineConfig({
   },
 ];
 
-// Neofetch-style system summary, shown beside the hero. Box is drawn in
-// frontmatter so the borders line up; rendered as HTML so keys, values,
-// corners and lines can each carry their own color.
-type SysInfo = [string, string, string?];
+type SysInfo = [key: string, value: string, href?: string, mobileValue?: string];
 
 const sysInfo: SysInfo[] = [
   ["runtime", "node / bun / deno"],
   ["bundler", "vite / rsbuild", "/oxide/quickstart"],
   ["entry", "src/server.ts", "/oxide/server-entry"],
   ["rpc", "tacho", "/tacho/overview"],
-  ["deploy", "vps / celld / cloudflare / vercel"],
+  ["deploy", "vps / celld / cloudflare / vercel", undefined, "vps / workers / vercel"],
 ];
-const mobileSysInfo: SysInfo[] = sysInfo.map(([key, value, href]) => [
-  key,
-  key === "deploy" ? "vps / workers / vercel" : value,
-  href,
-]);
-const makeSysBox = (info: SysInfo[]) => {
-  const maxKey = Math.max(...info.map(([key]) => key.length));
-  const maxVal = Math.max(...info.map(([, value]) => value.length));
-  const inner = maxKey + maxVal + 6;
-  const valWidth = inner - maxKey - 4;
-  let borderIndex = 0;
-  const border = (text: string, className: string) =>
-    [...text]
-      .map(
-        (char) =>
-          `<span class="sysbox-char ${className}" style="--i:${borderIndex++}">${char}</span>`,
-      )
-      .join("");
-  const cornerCls = "text-primary";
-  const lineCls = "text-muted-foreground/50";
-
-  return [
-    `${border("┌", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┐", cornerCls)}`,
-    `${border("│", lineCls)} <span class="text-primary">${"oxide 0.1".padEnd(inner - 2)}</span> ${border("│", lineCls)}`,
-    `${border("├", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┤", cornerCls)}`,
-    ...info.map(([key, value, href]) => {
-      const padding = " ".repeat(valWidth - value.length);
-      const renderedValue = href
-        ? `<a class="text-foreground underline decoration-current underline-offset-4 hover:text-primary" href="${href}">${value}</a>${padding}`
-        : `<span class="text-foreground">${value}</span>${padding}`;
-      return `${border("│", lineCls)} <span class="text-primary">${key.padEnd(maxKey)}</span>  ${renderedValue} ${border("│", lineCls)}`;
-    }),
-    `${border("└", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┘", cornerCls)}`,
-  ].join("\n");
-};
-const sysBoxHtml = makeSysBox(sysInfo);
-const mobileSysBoxHtml = makeSysBox(mobileSysInfo);
 
 const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
-const divider = "─".repeat(96);
 ---
 
 <PageLayout
@@ -223,22 +182,48 @@ const divider = "─".repeat(96);
           </p>
         </div>
 
-        <div class="sysbox w-full max-w-md justify-self-center lg:justify-self-end">
-          <pre
-            class="sysbox-mobile m-0 overflow-x-auto rounded-none bg-transparent p-0 font-mono text-xs leading-6 whitespace-pre lg:hidden"
-            set:html={mobileSysBoxHtml}
-          />
-          <pre
-            class="sysbox-desktop m-0 hidden overflow-x-auto rounded-none bg-transparent p-0 font-mono text-sm leading-6 whitespace-pre lg:block"
-            set:html={sysBoxHtml}
-          />
+        <div
+          class="sysbox-frame w-full max-w-md justify-self-center font-mono text-xs lg:justify-self-end lg:text-sm"
+        >
+          <div class="sysbox-row px-3 py-2 text-primary" style="--i:0">
+            oxide 0.1
+          </div>
+          <dl class="sysbox-divider m-0 py-2">
+            {
+              sysInfo.map(([key, value, href, mobileValue], index) => (
+                <div
+                  class="sysbox-row grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 px-3 py-1"
+                  style={`--i:${index + 1}`}
+                >
+                  <dt class="text-primary">{key}</dt>
+                  <dd class="m-0 min-w-0 text-foreground">
+                    {href ? (
+                      <a
+                        class="underline decoration-current underline-offset-4 hover:text-primary"
+                        href={href}
+                      >
+                        {value}
+                      </a>
+                    ) : mobileValue ? (
+                      <>
+                        <span class="lg:hidden">{mobileValue}</span>
+                        <span class="hidden lg:inline">{value}</span>
+                      </>
+                    ) : (
+                      value
+                    )}
+                  </dd>
+                </div>
+              ))
+            }
+          </dl>
         </div>
       </div>
     </section>
 
     <section class="relative mx-auto max-w-5xl px-4 pb-20 sm:px-6">
       <Card
-        class="terminal-win rounded-none border-border bg-card shadow-none gap-0 py-0"
+        class="ascii-card terminal-win rounded-none bg-card shadow-none gap-0 py-0"
       >
         <CardHeader class="border-b-2 border-border px-4 py-3">
           <CardTitle class="font-mono text-base uppercase tracking-wide">
@@ -295,9 +280,9 @@ const divider = "─".repeat(96);
     <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
       <span class="text-primary">[01] //</span> less plumbing. more shipping.
     </h2>
-    <pre aria-hidden="true" class="mt-3 w-full overflow-hidden font-mono text-[10px] leading-none whitespace-nowrap text-muted-foreground/40">{divider}</pre>
+    <div aria-hidden="true" class="ascii-divider mt-3"></div>
     <div class="mt-8 grid gap-4 sm:grid-cols-3">
-      <Card class="rounded-none border-2 border-border shadow-none">
+      <Card class="ascii-card rounded-none shadow-none">
         <CardHeader>
           <CardTitle class="font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> call server code directly
@@ -308,7 +293,7 @@ const divider = "─".repeat(96);
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card class="rounded-none border-2 border-border shadow-none">
+      <Card class="ascii-card rounded-none shadow-none">
         <CardHeader>
           <CardTitle class="font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> stream by yielding
@@ -319,7 +304,7 @@ const divider = "─".repeat(96);
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card class="rounded-none border-2 border-border shadow-none">
+      <Card class="ascii-card rounded-none shadow-none">
         <CardHeader>
           <CardTitle class="font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> deploy boring output
@@ -339,9 +324,9 @@ const divider = "─".repeat(96);
         <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
           <span class="text-primary">[02] //</span> one build. no backend side project.
         </h2>
-        <pre aria-hidden="true" class="mt-3 w-full overflow-hidden font-mono text-[10px] leading-none whitespace-nowrap text-muted-foreground/40">{divider}</pre>
+        <div aria-hidden="true" class="ascii-divider mt-3"></div>
         <pre
-          class="mt-5 overflow-x-auto border border-border bg-muted/40 p-4 font-mono text-sm leading-6 text-foreground"
+          class="ascii-card mt-5 overflow-x-auto bg-muted/40 p-4 font-mono text-sm leading-6 text-foreground"
         ><code><span class="text-primary">$</span> tree dist/
 dist/
 ├── client/        <span class="text-muted-foreground"># if you have a page</span>
@@ -364,7 +349,7 @@ dist/
   </section>
 
   <section class="landing-tone mx-auto max-w-5xl px-4 pb-24 sm:px-6">
-    <Card class="rounded-none border-2 border-border shadow-none">
+    <Card class="ascii-card rounded-none shadow-none">
       <CardHeader>
         <CardTitle class="font-mono text-base uppercase tracking-wide">
           <span class="text-primary">[03] $</span> ship something
@@ -413,11 +398,8 @@ dist/
 <script>
   const pendingCta = document.querySelector<HTMLElement>(".sysbox-cta-pending");
   const readyCta = document.querySelector<HTMLElement>(".sysbox-cta-ready");
-  const sysbox = document.querySelector<HTMLElement>(
-    matchMedia("(min-width:64rem)").matches ? ".sysbox-desktop" : ".sysbox-mobile",
-  );
-  const lastCharacter = sysbox?.querySelector<HTMLElement>(
-    ".sysbox-char:last-of-type",
+  const lastRow = document.querySelector<HTMLElement>(
+    ".sysbox-row:last-child",
   );
   const showPrimary = () => {
     pendingCta?.classList.add("pointer-events-none", "opacity-0");
@@ -429,18 +411,20 @@ dist/
   };
 
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) showPrimary();
-  else lastCharacter?.addEventListener("animationend", showPrimary, { once: true });
+  else lastRow?.addEventListener("animationend", showPrimary, { once: true });
 </script>
 
 <style>
   .landing-tone {
     --blume-foreground: #0a0a0a;
     --blume-muted-foreground: #525252;
+    --ascii-border: #666;
   }
 
   :global([data-theme="dark"]) .landing-tone {
     --blume-foreground: #fafafa;
     --blume-muted-foreground: #bdbdbd;
+    --ascii-border: #525252;
   }
 
   .terminal-win,
@@ -468,10 +452,79 @@ dist/
     gap: 0;
   }
 
-  :global(.sysbox-char) {
+  .sysbox-frame,
+  :global(.ascii-card) {
+    position: relative;
+    border: 0;
+    border-inline: 1px solid var(--ascii-border);
+    box-shadow: none;
+  }
+
+  .sysbox-frame::before,
+  .sysbox-frame::after,
+  :global(.ascii-card)::before,
+  :global(.ascii-card)::after {
+    position: absolute;
+    right: 0;
+    left: 0;
+    z-index: 1;
+    height: 1px;
+    background: repeating-linear-gradient(
+      90deg,
+      var(--ascii-border) 0 16px,
+      transparent 16px 22px
+    );
+    box-shadow:
+      inset 16px 0 var(--ascii-border),
+      inset -16px 0 var(--ascii-border);
+    content: "";
+    pointer-events: none;
+  }
+
+  .sysbox-frame::before,
+  :global(.ascii-card)::before {
+    top: 0;
+  }
+
+  .sysbox-frame::after,
+  :global(.ascii-card)::after {
+    bottom: 0;
+  }
+
+  .sysbox-divider {
+    position: relative;
+  }
+
+  .sysbox-divider::before,
+  .ascii-divider {
+    background: repeating-linear-gradient(
+      90deg,
+      var(--ascii-border) 0 16px,
+      transparent 16px 22px
+    );
+    box-shadow:
+      inset 16px 0 var(--ascii-border),
+      inset -16px 0 var(--ascii-border);
+  }
+
+  .sysbox-divider::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 1px;
+    content: "";
+    pointer-events: none;
+  }
+
+  .ascii-divider {
+    height: 1px;
+  }
+
+  .sysbox-row {
     opacity: 0;
     animation: sysbox-render 250ms ease-out forwards;
-    animation-delay: calc(100ms + var(--i) * 12ms);
+    animation-delay: calc(100ms + var(--i) * 90ms);
   }
 
   @keyframes sysbox-render {
@@ -481,7 +534,7 @@ dist/
   }
 
   @media (prefers-reduced-motion: reduce) {
-    :global(.sysbox-char) {
+    .sysbox-row {
       opacity: 1;
       animation: none;
     }
