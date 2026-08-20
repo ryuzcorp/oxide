@@ -97,11 +97,11 @@ export default defineConfig({
 // Neofetch-style system summary, shown beside the hero. Box is drawn in
 // frontmatter so the borders line up; rendered as HTML so keys, values,
 // corners and lines can each carry their own color.
-const sysInfo: [string, string][] = [
+const sysInfo: [string, string, string?][] = [
   ["runtime", "node / bun / deno"],
-  ["bundler", "vite / rsbuild"],
-  ["entry", "src/server.ts"],
-  ["rpc", "tacho"],
+  ["bundler", "vite / rsbuild", "/oxide/quickstart"],
+  ["entry", "src/server.ts", "/oxide/server-entry"],
+  ["rpc", "tacho", "/tacho/overview"],
   ["deploy", "vps / celld / cloudflare / vercel"],
 ];
 const maxKey = Math.max(...sysInfo.map(([k]) => k.length));
@@ -111,16 +111,30 @@ const inner = maxKey + maxVal + width;
 const cornerCls = "text-primary";
 const lineCls = "text-muted-foreground/50";
 const valWidth = inner - maxKey - 4;
+let borderIndex = 0;
+const border = (text: string, className: string) =>
+  [...text]
+    .map(
+      (char) =>
+        `<span class="sysbox-char ${className}" style="--i:${borderIndex++}">${char}</span>`,
+    )
+    .join("");
 const sysBoxHtml = [
-  `<span class="${cornerCls}">┌</span><span class="${lineCls}">${"─".repeat(inner)}</span><span class="${cornerCls}">┐</span>`,
-  `<span class="${lineCls}">│</span> <span class="text-primary font-semibold">${"oxide 0.1".padEnd(inner - 2)}</span> <span class="${lineCls}">│</span>`,
-  `<span class="${cornerCls}">├</span><span class="${lineCls}">${"─".repeat(inner)}</span><span class="${cornerCls}">┤</span>`,
-  ...sysInfo.map(
-    ([k, v]) =>
-      `<span class="${lineCls}">│</span> <span class="text-primary">${k.padEnd(maxKey)}</span>  <span class="text-foreground">${v.padEnd(valWidth)}</span> <span class="${lineCls}">│</span>`,
-  ),
-  `<span class="${cornerCls}">└</span><span class="${lineCls}">${"─".repeat(inner)}</span><span class="${cornerCls}">┘</span>`,
+  `${border("┌", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┐", cornerCls)}`,
+  `${border("│", lineCls)} <span class="text-primary">${"oxide 0.1".padEnd(inner - 2)}</span> ${border("│", lineCls)}`,
+  `${border("├", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┤", cornerCls)}`,
+  ...sysInfo.map(([k, v, href]) => {
+    const padding = " ".repeat(valWidth - v.length);
+    const renderedValue = href
+      ? `<a class="text-foreground underline decoration-current underline-offset-4 hover:text-primary" href="${href}">${v}</a>${padding}`
+      : `<span class="text-foreground">${v}</span>${padding}`;
+    return `${border("│", lineCls)} <span class="text-primary">${k.padEnd(maxKey)}</span>  ${renderedValue} ${border("│", lineCls)}`;
+  }),
+  `${border("└", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┘", cornerCls)}`,
 ].join("\n");
+
+const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
+const divider = "─".repeat(96);
 ---
 
 <PageLayout
@@ -132,7 +146,7 @@ const sysBoxHtml = [
   analytics={config.analytics}
   navigation={data.navigation}
   page={{
-    title: "Oxide - The backend unframework",
+    title: "Oxide — Ship the backend, skip the framework",
     description: config.description,
     route: "/",
   }}
@@ -142,45 +156,65 @@ const sysBoxHtml = [
   siteUrl={config.site}
   ogEnabled={config.og.enabled}
   ogImage="/opengraph-image.png"
-  ogImageAlt="Oxide — The backend unframework"
+  ogImageAlt="Oxide — Ship the backend, skip the framework"
   ogImageSize={{ width: 1200, height: 630 }}
 >
-  <div class="hero-bg relative overflow-hidden">
-    <section class="relative mx-auto max-w-5xl px-4 pt-20 pb-16 sm:px-6 sm:pt-24">
+  <div class="landing-tone hero-bg relative overflow-hidden">
+    <section class="relative mx-auto max-w-5xl px-4 pt-12 pb-16 sm:px-6 sm:pt-16">
       <div class="grid items-center gap-12 lg:grid-cols-2">
         <div>
           <h1
-            class="font-mono text-lg text-foreground tracking-tight sm:text-xl"
+            class="font-mono text-lg text-foreground"
           >
             <span class="text-primary">oxide</span><span class="text-muted-foreground"
               >@build</span
             >:<span class="text-muted-foreground">~</span>
-            <span class="font-semibold">the backend unframework</span>
+            <span>ship the backend, skip the framework</span
+            ><span
+              aria-hidden="true"
+              class="ml-2 inline-block h-4 w-2 animate-pulse bg-primary align-middle"
+            />
           </h1>
-          <p class="mt-4 max-w-107 font-mono text-sm text-muted-foreground leading-relaxed">
-            Ship a backend from the bundler you already use. Call the server from
-            the client like a function. No server to wire, no API to write.
+          <p class="mt-4 max-w-108 font-mono text-sm leading-6 text-muted-foreground">
+            Turn Vite or Rsbuild into a full-stack build. Import server functions
+            in client code with end-to-end types, then deploy one server bundle anywhere.
           </p>
           <div class="mt-8 flex flex-wrap items-center gap-3">
-            <Button as="a" href="/getting-started" size="lg" class="rounded-none">Get started</Button>
+            <span class="inline-grid">
+              <Button
+                as="a"
+                href="/getting-started"
+                size="lg"
+                class={`${btn} sysbox-cta-pending [grid-area:1/1] transition-opacity duration-300 motion-reduce:transition-none`}
+                variant="outline"
+              >Start building</Button>
+              <Button
+                as="a"
+                href="/getting-started"
+                size="lg"
+                class={`${btn} sysbox-cta-ready [grid-area:1/1] pointer-events-none opacity-0 transition-opacity duration-300 motion-reduce:transition-none`}
+                aria-hidden="true"
+                tabindex="-1"
+              >Start building</Button>
+            </span>
             <Button
               as="a"
               href={repoUrl}
               rel="noreferrer"
               size="lg"
               target="_blank"
-              class="rounded-none"
-              variant="outline">View on GitHub</Button
+              class={btn}
+              variant="outline">Read the source</Button
             >
           </div>
           <p class="mt-6 font-mono text-xs text-muted-foreground/80">
-            1 plugin · 1 build · 0 servers to configure
+            <span class="text-primary">[ok]</span> 1 plugin · 1 build · 1 deployable tree
           </p>
         </div>
 
         <div class="sysbox w-full max-w-md justify-self-center lg:justify-self-end">
           <pre
-            class="m-0 overflow-x-auto rounded-none bg-transparent p-0 font-mono text-[12px] lg:text-[14px] leading-6"
+            class="m-0 overflow-x-auto rounded-none bg-transparent p-0 font-mono text-xs leading-6 lg:text-sm"
             set:html={sysBoxHtml}
           />
         </div>
@@ -191,15 +225,15 @@ const sysBoxHtml = [
       <Card
         class="terminal-win rounded-none border-border bg-card shadow-none gap-0 py-0"
       >
-        <CardHeader class="border-b border-border px-4 py-3">
-          <CardTitle class="font-mono text-sm">
-            Opinionated but not complicated.
+        <CardHeader class="border-b-2 border-border px-4 py-3">
+          <CardTitle class="font-mono text-base uppercase tracking-wide">
+            server code in. deployable app out.
           </CardTitle>
-          <CardDescription class="font-mono text-xs">
-            All you need is a plugin and a server entry. Everything else - optional.
+          <CardDescription class="font-mono text-sm leading-6 text-muted-foreground">
+            Five files. No controllers, client SDK, or second build pipeline.
           </CardDescription>
           <CardAction>
-            <Button as="a" target="_blank" rel="noopener noreferrer" href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/tasks?file=src%2Ftasks.server.ts" size="sm" type="button" variant="secondary" class="rounded-none">▶ run</Button>
+            <Button as="a" target="_blank" rel="noopener noreferrer" href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/tasks?file=src%2Ftasks.server.ts" size="sm" type="button" variant="secondary" class="rounded-none border-2 font-mono uppercase tracking-wide">▶ run</Button>
           </CardAction>
         </CardHeader>
         <CardContent class="p-0">
@@ -224,107 +258,116 @@ const sysBoxHtml = [
               files.map((file) => (
                 <TabsContent value={file.name} class="m-0">
                   <div
-                    class="overflow-x-auto px-4 py-4 font-mono text-[13px] leading-7 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
+                    class="overflow-x-auto px-4 py-4 font-mono text-sm leading-6 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
                     set:html={file.html}
                   />
                 </TabsContent>
               ))
             }
           </Tabs>
+          <div
+            class="flex items-center gap-2 border-t-2 border-border px-4 py-2 font-mono text-xs text-muted-foreground"
+          >
+            <span class="text-primary">[ok]</span>
+            {files.length} files · tacho rpc · sse streams
+          </div>
         </CardContent>
       </Card>
     </section>
   </div>
 
-  <section class="mx-auto max-w-5xl px-4 pb-20 sm:px-6">
-    <h2 class="font-mono text-sm text-muted-foreground">
-      <span class="text-primary">//</span> it guides you. it doesn't frame you.
+  <section class="landing-tone mx-auto max-w-5xl px-4 pb-20 sm:px-6">
+    <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
+      <span class="text-primary">[01] //</span> less plumbing. more shipping.
     </h2>
+    <pre aria-hidden="true" class="mt-3 w-full overflow-hidden font-mono text-[10px] leading-none whitespace-nowrap text-muted-foreground/40">{divider}</pre>
     <div class="mt-8 grid gap-4 sm:grid-cols-3">
-      <Card class="rounded-none border-border shadow-none">
+      <Card class="rounded-none border-2 border-border shadow-none">
         <CardHeader>
-          <CardTitle class="font-mono text-base">
-            <span class="text-primary">▸</span> server code stays put
+          <CardTitle class="font-mono text-base uppercase tracking-wide">
+            <span class="text-primary">▸</span> call server code directly
           </CardTitle>
-          <CardDescription class="font-mono text-xs leading-relaxed">
-            Write a function on the server, call it from the browser like it's
-            local. The code never ships to the client, and the types line up.
+          <CardDescription class="font-mono text-sm leading-6">
+            Import a <code>*.server.ts</code> function in the browser. Oxide turns
+            the call into typed RPC and keeps the implementation on the server.
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card class="rounded-none border-border shadow-none">
+      <Card class="rounded-none border-2 border-border shadow-none">
         <CardHeader>
-          <CardTitle class="font-mono text-base">
-            <span class="text-primary">▸</span> live updates
+          <CardTitle class="font-mono text-base uppercase tracking-wide">
+            <span class="text-primary">▸</span> stream by yielding
           </CardTitle>
-          <CardDescription class="font-mono text-xs leading-relaxed">
-            Export a generator and the browser gets a live stream. Stop it
-            anytime with an abort signal.
+          <CardDescription class="font-mono text-sm leading-6">
+            Export an async generator to stream updates over SSE. Consume it with
+            <code>for await</code> and cancel it with an abort signal.
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card class="rounded-none border-border shadow-none">
+      <Card class="rounded-none border-2 border-border shadow-none">
         <CardHeader>
-          <CardTitle class="font-mono text-base">
-            <span class="text-primary">▸</span> run it anywhere
+          <CardTitle class="font-mono text-base uppercase tracking-wide">
+            <span class="text-primary">▸</span> deploy boring output
           </CardTitle>
-          <CardDescription class="font-mono text-xs leading-relaxed">
-            A VPS, or celld — a self-hosted alternative to Cloudflare Workers.
-            Vite or Rsbuild. Your tools, your call.
+          <CardDescription class="font-mono text-sm leading-6">
+            Get one ESM server bundle plus optional client assets. Run it on a VPS,
+            celld, Cloudflare, or Vercel.
           </CardDescription>
         </CardHeader>
       </Card>
     </div>
   </section>
 
-  <section class="mx-auto max-w-5xl px-4 pb-20 sm:px-6">
+  <section class="landing-tone mx-auto max-w-5xl px-4 pb-20 sm:px-6">
     <div class="grid items-start gap-10 lg:grid-cols-2">
       <div>
-        <h2 class="font-mono text-sm text-muted-foreground">
-          <span class="text-primary">//</span> keep your bundler. add one plugin.
+        <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
+          <span class="text-primary">[02] //</span> one build. no backend side project.
         </h2>
+        <pre aria-hidden="true" class="mt-3 w-full overflow-hidden font-mono text-[10px] leading-none whitespace-nowrap text-muted-foreground/40">{divider}</pre>
         <pre
-          class="mt-5 overflow-x-auto border border-border bg-muted/40 p-4 font-mono text-[13px] leading-6 text-muted-foreground"
+          class="mt-5 overflow-x-auto border border-border bg-muted/40 p-4 font-mono text-sm leading-6 text-foreground"
         ><code><span class="text-primary">$</span> tree dist/
 dist/
-├── client/        <span class="text-muted-foreground/70"># if you have a page</span>
-└── server.js      <span class="text-muted-foreground/70"># your backend</span></code></pre>
-        <p class="mt-4 font-mono text-sm text-muted-foreground leading-relaxed">
-          Build it and run it with <code class="font-mono text-foreground"
-            >vite build &amp;&amp; node dist/server.js</code
-          >. Actions run on
-          <a class="underline-offset-4 hover:text-foreground hover:underline ml-1" href="/tacho/overview">tacho</a>, the RPC layer that ships with it.
+├── client/        <span class="text-muted-foreground"># if you have a page</span>
+└── server.js      <span class="text-muted-foreground"># your backend</span></code></pre>
+        <p class="mt-4 font-mono text-sm leading-6 text-muted-foreground">
+          Build once with <code class="font-mono text-foreground"
+            >vite build</code
+          >. Oxide emits the browser assets and a server you can run with
+          <code class="font-mono text-foreground">node dist/server.js</code>. Server
+          actions ride on <a class="underline-offset-4 hover:text-foreground hover:underline" href="/tacho/overview">tacho</a>, its typed RPC layer.
         </p>
-        <Button as="a" class="mt-6 pl-0 font-mono" href="/oxide/quickstart" variant="link">
-          read the quickstart →
+        <Button as="a" class="mt-6 pl-0 font-mono uppercase tracking-wide" href="/oxide/quickstart" variant="link">
+          build your first app →
         </Button>
       </div>
-      <div class="space-y-4">
+      <div class="landing-code space-y-4">
         <BuildSwitcher client:visible />
       </div>
     </div>
   </section>
 
-  <section class="mx-auto max-w-5xl px-4 pb-24 sm:px-6">
-    <Card class="rounded-none border-border shadow-none">
+  <section class="landing-tone mx-auto max-w-5xl px-4 pb-24 sm:px-6">
+    <Card class="rounded-none border-2 border-border shadow-none">
       <CardHeader>
-        <CardTitle class="font-mono text-base">
-          <span class="text-primary">$</span> init
+        <CardTitle class="font-mono text-base uppercase tracking-wide">
+          <span class="text-primary">[03] $</span> ship something
         </CardTitle>
-        <CardDescription class="font-mono text-xs leading-relaxed">
-          Install Oxide, add the plugin, write an action. Your backend can start
-          this small.
+        <CardDescription class="font-mono text-sm leading-6">
+          Add one plugin. Write one server function. Call it from the browser.
+          Your backend is ready to ship.
         </CardDescription>
       </CardHeader>
       <CardFooter>
-        <Button as="a" href="/getting-started" size="lg" class="rounded-none">Get started</Button>
+        <Button as="a" href="/getting-started" size="lg" class={btn}>Start building</Button>
       </CardFooter>
     </Card>
   </section>
 
   <footer
     slot="footer"
-    class="border-border border-t px-4 py-8 text-muted-foreground text-sm sm:px-6"
+    class="landing-tone border-border border-t px-4 py-8 text-muted-foreground text-sm sm:px-6"
   >
     <div
       class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3"
@@ -334,9 +377,9 @@ dist/
         <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noreferrer" target="_blank">ilha</a>
       </span>
       <div class="flex h-5 items-center gap-3 font-mono">
-        <Button as="a" href="/getting-started" variant="link">docs</Button>
+        <Button as="a" href="/getting-started" variant="link" class="font-mono uppercase tracking-wide">docs</Button>
         <Separator orientation="vertical" />
-        <Button as="a" href={repoUrl} rel="noreferrer" target="_blank" variant="link"
+        <Button as="a" href={repoUrl} rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
           >github</Button
         >
       </div>
@@ -344,8 +387,77 @@ dist/
   </footer>
 </PageLayout>
 
+<script>
+  const pendingCta = document.querySelector<HTMLElement>(".sysbox-cta-pending");
+  const readyCta = document.querySelector<HTMLElement>(".sysbox-cta-ready");
+  const lastCharacter = document.querySelector<HTMLElement>(
+    ".sysbox-char:last-of-type",
+  );
+  const showPrimary = () => {
+    pendingCta?.classList.add("pointer-events-none", "opacity-0");
+    pendingCta?.setAttribute("aria-hidden", "true");
+    pendingCta?.setAttribute("tabindex", "-1");
+    readyCta?.classList.remove("pointer-events-none", "opacity-0");
+    readyCta?.removeAttribute("aria-hidden");
+    readyCta?.removeAttribute("tabindex");
+  };
+
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) showPrimary();
+  else lastCharacter?.addEventListener("animationend", showPrimary, { once: true });
+</script>
+
 <style>
+  .landing-tone {
+    --blume-foreground: #0a0a0a;
+    --blume-muted-foreground: #525252;
+  }
+
+  :global([data-theme="dark"]) .landing-tone {
+    --blume-foreground: #fafafa;
+    --blume-muted-foreground: #bdbdbd;
+  }
+
+  .terminal-win,
+  .landing-code {
+    --shj-bg: transparent;
+    --shj-fg: var(--blume-foreground);
+    --shj-numbers: var(--blume-muted-foreground);
+    --shj-cmnt: var(--blume-muted-foreground);
+    --shj-bracket: var(--blume-muted-foreground);
+    --shj-kwd: var(--blume-accent);
+    --shj-oper: var(--blume-accent);
+    --shj-esc: var(--blume-accent);
+    --shj-class: var(--blume-accent);
+    --shj-num: var(--blume-accent);
+    --shj-bool: var(--blume-accent);
+    --shj-type: var(--blume-accent);
+    --shj-section: var(--blume-accent);
+    --shj-func: var(--blume-accent);
+    --shj-var: var(--blume-foreground);
+    --shj-str: var(--blume-foreground);
+    --shj-insert: var(--blume-accent);
+  }
+
   .terminal-win :global([data-slot="card-content"]) {
     gap: 0;
+  }
+
+  :global(.sysbox-char) {
+    opacity: 0;
+    animation: sysbox-render 250ms ease-out forwards;
+    animation-delay: calc(100ms + var(--i) * 12ms);
+  }
+
+  @keyframes sysbox-render {
+    to {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.sysbox-char) {
+      opacity: 1;
+      animation: none;
+    }
   }
 </style>
