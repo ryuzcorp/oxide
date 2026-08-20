@@ -97,41 +97,52 @@ export default defineConfig({
 // Neofetch-style system summary, shown beside the hero. Box is drawn in
 // frontmatter so the borders line up; rendered as HTML so keys, values,
 // corners and lines can each carry their own color.
-const sysInfo: [string, string, string?][] = [
+type SysInfo = [string, string, string?];
+
+const sysInfo: SysInfo[] = [
   ["runtime", "node / bun / deno"],
   ["bundler", "vite / rsbuild", "/oxide/quickstart"],
   ["entry", "src/server.ts", "/oxide/server-entry"],
   ["rpc", "tacho", "/tacho/overview"],
   ["deploy", "vps / celld / cloudflare / vercel"],
 ];
-const maxKey = Math.max(...sysInfo.map(([k]) => k.length));
-const maxVal = Math.max(...sysInfo.map(([, v]) => v.length));
-const width = 6;
-const inner = maxKey + maxVal + width;
-const cornerCls = "text-primary";
-const lineCls = "text-muted-foreground/50";
-const valWidth = inner - maxKey - 4;
-let borderIndex = 0;
-const border = (text: string, className: string) =>
-  [...text]
-    .map(
-      (char) =>
-        `<span class="sysbox-char ${className}" style="--i:${borderIndex++}">${char}</span>`,
-    )
-    .join("");
-const sysBoxHtml = [
-  `${border("┌", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┐", cornerCls)}`,
-  `${border("│", lineCls)} <span class="text-primary">${"oxide 0.1".padEnd(inner - 2)}</span> ${border("│", lineCls)}`,
-  `${border("├", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┤", cornerCls)}`,
-  ...sysInfo.map(([k, v, href]) => {
-    const padding = " ".repeat(valWidth - v.length);
-    const renderedValue = href
-      ? `<a class="text-foreground underline decoration-current underline-offset-4 hover:text-primary" href="${href}">${v}</a>${padding}`
-      : `<span class="text-foreground">${v}</span>${padding}`;
-    return `${border("│", lineCls)} <span class="text-primary">${k.padEnd(maxKey)}</span>  ${renderedValue} ${border("│", lineCls)}`;
-  }),
-  `${border("└", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┘", cornerCls)}`,
-].join("\n");
+const mobileSysInfo: SysInfo[] = sysInfo.map(([key, value, href]) => [
+  key,
+  key === "deploy" ? "vps / workers / vercel" : value,
+  href,
+]);
+const makeSysBox = (info: SysInfo[]) => {
+  const maxKey = Math.max(...info.map(([key]) => key.length));
+  const maxVal = Math.max(...info.map(([, value]) => value.length));
+  const inner = maxKey + maxVal + 6;
+  const valWidth = inner - maxKey - 4;
+  let borderIndex = 0;
+  const border = (text: string, className: string) =>
+    [...text]
+      .map(
+        (char) =>
+          `<span class="sysbox-char ${className}" style="--i:${borderIndex++}">${char}</span>`,
+      )
+      .join("");
+  const cornerCls = "text-primary";
+  const lineCls = "text-muted-foreground/50";
+
+  return [
+    `${border("┌", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┐", cornerCls)}`,
+    `${border("│", lineCls)} <span class="text-primary">${"oxide 0.1".padEnd(inner - 2)}</span> ${border("│", lineCls)}`,
+    `${border("├", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┤", cornerCls)}`,
+    ...info.map(([key, value, href]) => {
+      const padding = " ".repeat(valWidth - value.length);
+      const renderedValue = href
+        ? `<a class="text-foreground underline decoration-current underline-offset-4 hover:text-primary" href="${href}">${value}</a>${padding}`
+        : `<span class="text-foreground">${value}</span>${padding}`;
+      return `${border("│", lineCls)} <span class="text-primary">${key.padEnd(maxKey)}</span>  ${renderedValue} ${border("│", lineCls)}`;
+    }),
+    `${border("└", cornerCls)}${border("─".repeat(inner), lineCls)}${border("┘", cornerCls)}`,
+  ].join("\n");
+};
+const sysBoxHtml = makeSysBox(sysInfo);
+const mobileSysBoxHtml = makeSysBox(mobileSysInfo);
 
 const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
 const divider = "─".repeat(96);
@@ -214,7 +225,11 @@ const divider = "─".repeat(96);
 
         <div class="sysbox w-full max-w-md justify-self-center lg:justify-self-end">
           <pre
-            class="m-0 overflow-x-auto rounded-none bg-transparent p-0 font-mono text-xs leading-6 lg:text-sm"
+            class="sysbox-mobile m-0 overflow-x-auto rounded-none bg-transparent p-0 font-mono text-xs leading-6 lg:hidden"
+            set:html={mobileSysBoxHtml}
+          />
+          <pre
+            class="sysbox-desktop m-0 hidden overflow-x-auto rounded-none bg-transparent p-0 font-mono text-sm leading-6 lg:block"
             set:html={sysBoxHtml}
           />
         </div>
@@ -370,17 +385,25 @@ dist/
     class="landing-tone border-border border-t px-4 py-8 text-muted-foreground text-sm sm:px-6"
   >
     <div
-      class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3"
+      class="mx-auto flex max-w-5xl flex-col items-center justify-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left"
     >
       <span class="font-mono">
         oxide · built by the team behind{" "}
         <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noreferrer" target="_blank">ilha</a>
       </span>
-      <div class="flex h-5 items-center gap-3 font-mono">
+      <div class="flex h-5 items-center justify-center gap-3 font-mono">
         <Button as="a" href="/getting-started" variant="link" class="font-mono uppercase tracking-wide">docs</Button>
         <Separator orientation="vertical" />
         <Button as="a" href={repoUrl} rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
           >github</Button
+        >
+        <Separator orientation="vertical" />
+        <Button as="a" href="https://x.com/oxidejs" rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
+          >x.com</Button
+        >
+        <Separator orientation="vertical" />
+        <Button as="a" href="https://discord.gg/WnVTMCTz74" rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
+          >discord</Button
         >
       </div>
     </div>
@@ -390,7 +413,10 @@ dist/
 <script>
   const pendingCta = document.querySelector<HTMLElement>(".sysbox-cta-pending");
   const readyCta = document.querySelector<HTMLElement>(".sysbox-cta-ready");
-  const lastCharacter = document.querySelector<HTMLElement>(
+  const sysbox = document.querySelector<HTMLElement>(
+    matchMedia("(min-width:64rem)").matches ? ".sysbox-desktop" : ".sysbox-mobile",
+  );
+  const lastCharacter = sysbox?.querySelector<HTMLElement>(
     ".sysbox-char:last-of-type",
   );
   const showPrimary = () => {
