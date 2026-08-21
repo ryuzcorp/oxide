@@ -2,127 +2,188 @@
 title: Server Actions
 sidebar:
   icon: zap
-description: Write a function on the server and call it from the browser - types stay in sync, the function never ships to the client.
+description: Run a marked function on the server and call it from browser code with the same TypeScript types.
 ---
 
-Server actions ride on [tacho](/tacho/overview). Install it next to `oxidejs`:
+A server action is a function that runs on your server but can be imported and called from browser code. Oxide turns that browser import into a small RPC request. The function body and its server-only imports never enter the client bundle.
+
+Oxide actions use [tacho](/tacho/overview). Install it next to `oxidejs`:
 
 ```package-install
 npm i tacho
 ```
 
-Files named `*.server.ts` / `*.server.js` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and [Vite](https://vite.dev/) SSR (`import.meta.env.SSR === true`) keep the real functions. Method names are `<file>.<fn>` (`test.ping`).
+## Create your first action
+
+Put server-only code in a file named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx`. Wrap every remotely callable export in `action()`:
 
 ```ts twoslash src/test.server.ts
-export async function ping() {
+import { action } from "oxidejs";
+
+export const ping = action(async () => {
   return "pong" as const;
-}
+});
 ```
+
+Then import and call it from client code:
 
 ```ts twoslash src/client.ts
 // @filename: test.server.ts
-export async function ping() {
-  return "pong" as const;
-}
+import { action } from "oxidejs";
+export const ping = action(async () => "pong" as const);
 // ---cut---
 // @filename: client.ts
 import { ping } from "./test.server";
 
-const result = await ping();
+const result = await ping(); // "pong"
 ```
 
-`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. `vite dev` and `rsbuild dev` serve `/_action` via middleware. Changing a `*.server.ts` file reloads that handler on both.
+Oxide replaces that client import with a tacho stub. By default, the stub sends a POST request to `/__oxide/action`. The remote method name is `<file>.<export>`; the example above calls `test.ping`.
 
-```ts twoslash src/stream.ts
-// @filename: test.server.ts
-export async function* ticks(n: number) {
-  for (let i = 0; i < n; i++) yield i;
-}
+## What is exposed?
+
+Only exports written as `export const name = action(...)` become RPC methods. Other values and helpers stay server-only:
+
+```ts twoslash src/users.server.ts
+import { action } from "oxidejs";
+
+const normalizeName = (name: string) => name.trim();
+
+export const saveName = action(async (name: string) => {
+  return normalizeName(name);
+});
+
+export const serverOnlyLabel = "not remotely callable";
 ```
 
-## Abort
+This explicit marker prevents an exported helper from accidentally becoming a public endpoint. `action()` does not validate input or authorize users. Treat action arguments as untrusted data, validate them, and check the current user before reading or changing private data.
 
-Pass `{ signal }` last on any action — stream or unary. Types come from the real `*.server.ts`, so declare the last argument there:
+## Stream values
+
+Wrap an `async function*` to stream values over [tacho SSE](/tacho/sse-streaming):
+
+```ts twoslash src/ticks.server.ts
+import { action } from "oxidejs";
+
+export const ticks = action(async function* (count: number) {
+  for (let i = 0; i < count; i++) yield i;
+});
+```
+
+```ts twoslash src/client-stream.ts
+// @filename: ticks.server.ts
+import { action } from "oxidejs";
+export const ticks = action(async function* (count: number) {
+  for (let i = 0; i < count; i++) yield i;
+});
+// ---cut---
+// @filename: client-stream.ts
+import { ticks } from "./ticks.server";
+
+const stream = await ticks(3);
+for await (const value of stream) console.log(value);
+```
+
+Breaking the `for await` loop or calling `await stream.return()` cleans up the server generator. Tacho does not reconnect a dropped stream automatically because repeating the POST could run action side effects twice.
+
+## Cancel a call
+
+Pass `{ signal }` as the final argument. Declare the optional argument in the real server function so TypeScript knows it exists:
 
 ```ts twoslash src/abort.ts
 // @filename: test.server.ts
+import { action } from "oxidejs";
 import type { ActionOptions } from "oxidejs";
 
-export async function ping(_opts?: ActionOptions) {
-  return "pong" as const;
-}
-export async function* ticks(n: number, _opts?: ActionOptions) {
-  for (let i = 0; i < n; i++) yield i;
-}
+export const ping = action(
+  async (_options?: ActionOptions) => "pong" as const,
+);
+export const ticks = action(async function* (
+  count: number,
+  _options?: ActionOptions,
+) {
+  for (let i = 0; i < count; i++) yield i;
+});
 // ---cut---
 // @filename: abort.ts
 import { ping, ticks } from "./test.server";
 
-const ac = new AbortController();
-const stream = await ticks(10, { signal: ac.signal });
-await ping({ signal: ac.signal });
-ac.abort();
+const controller = new AbortController();
+const stream = await ticks(10, { signal: controller.signal });
+await ping({ signal: controller.signal });
+controller.abort();
 ```
 
-`useRequest().signal` follows that abort. Breaking a `for await` also cancels.
+Inside the action, `useRequest().signal` follows the same abort.
 
-## useRequest
+## Read request context
 
-Call `useRequest()` inside an action for the inbound `Request`. It throws outside `/_action`.
+### `useRequest()`
+
+`useRequest()` returns the inbound `Request`. It throws when called outside an action:
 
 ```ts twoslash src/who.server.ts
-import { useRequest } from "oxidejs";
+import { action, useRequest } from "oxidejs";
 
-export async function who() {
+export const who = action(async () => {
   return useRequest().headers.get("x-user");
-}
+});
 ```
 
-## useCtx
+### `useCtx()`
 
-`useCtx()` is tacho `ctx`: `{ req }` plus anything middleware or `createContext` added.
+`useCtx()` returns tacho context: `{ req }` plus values added by middleware or `createContext`:
 
 ```ts twoslash src/me.server.ts
-import { useCtx } from "oxidejs";
+import { action, useCtx } from "oxidejs";
 
-export async function me() {
+export const me = action(async () => {
   return useCtx<{ req: Request; user?: string }>().user;
-}
+});
 ```
 
-## useEnv and useFetchCtx
+### `useEnv()` and `useFetchCtx()`
 
-On [`preset: "celld"`](/oxide/configuration#preset), `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. They are `undefined` on the Node fetch preset.
+With [`preset: "celld"`](/oxide/configuration#preset), these return the Worker `env` and execution context from `fetch(request, env, ctx)`. They are `undefined` on the Node fetch preset.
 
-```ts twoslash src/secret.server.ts
-import { useEnv, useFetchCtx } from "oxidejs";
+```ts twoslash src/env.server.ts
+import { action, useEnv, useFetchCtx } from "oxidejs";
 
-type Env = { SECRET: string };
+type Env = { API_URL: string };
 
-export async function secret() {
+export const hasApi = action(async () => {
   useFetchCtx()?.waitUntil?.(Promise.resolve());
-  return useEnv<Env>()?.SECRET;
-}
+  return Boolean(useEnv<Env>()?.API_URL);
+});
 ```
 
-## Transport
+Do not return secrets from an action. Anything returned by an action is sent to the caller.
 
-Stubs share one tacho client. Pass static headers with [`actionHeaders`](/oxide/configuration#actionheaders). Functions cannot ship to the browser.
+## Change the transport or path
+
+HTTP is the default. The endpoint is `/__oxide/action`, and same-origin protection is on:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
 
 oxide({
-  actionHeaders: { authorization: "Bearer x" },
+  actions: {
+    path: "/rpc",
+    sameOrigin: true,
+  },
 });
 ```
 
-[`actions: "ws"`](/oxide/configuration#actions) upgrades `/_action` to a WebSocket. Install `crossws`. It does not work with [`preset: "celld"`](/oxide/configuration#preset).
+Use `transport: "ws"` for WebSocket actions. Install `crossws`; WebSockets do not work with [`preset: "celld"`](/oxide/configuration#preset).
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
 
 oxide({
-  actions: "ws",
+  actions: { transport: "ws", path: "/rpc" },
 });
 ```
+
+Set `sameOrigin: false` only when you intentionally accept calls from another origin and provide your own CORS, CSRF, and authentication rules.
+
+For static HTTP headers, use [`actionHeaders`](/oxide/configuration#actionheaders). Remember that values are shipped to the browser, so never place a private server secret there.

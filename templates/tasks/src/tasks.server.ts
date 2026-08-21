@@ -1,4 +1,4 @@
-import { useRequest } from "oxidejs";
+import { action, useRequest } from "oxidejs";
 import type { ActionOptions } from "oxidejs";
 import { createStorage } from "unstorage";
 
@@ -13,17 +13,17 @@ const g = globalThis as typeof globalThis & {
 };
 const storage = (g.__ilhaTasks ??= createStorage<string>());
 
-export async function add(text: string, _opts?: ActionOptions) {
+export const add = action(async (text: string, _opts?: ActionOptions) => {
   const id = crypto.randomUUID();
   await storage.setItem(id, text);
   return { id, text };
-}
+});
 
-export async function remove(id: string, _opts?: ActionOptions) {
+export const remove = action(async (id: string, _opts?: ActionOptions) => {
   await storage.removeItem(id);
-}
+});
 
-export async function* list(_opts?: ActionOptions) {
+export const list = action(async function* (_opts?: ActionOptions) {
   const signal = useRequest().signal;
   const snapshot: Task[] = [];
   for (const id of await storage.getKeys()) {
@@ -56,4 +56,4 @@ export async function* list(_opts?: ActionOptions) {
     signal.removeEventListener("abort", onAbort);
     await unwatch();
   }
-}
+});

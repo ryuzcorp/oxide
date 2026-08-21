@@ -49,7 +49,7 @@ async function* readSse(
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
       let sep: number;
       while ((sep = buf.indexOf("\n\n")) !== -1) {
         const event = parseSse(buf.slice(0, sep), parse);
@@ -99,9 +99,7 @@ export function createClient<R>(opts: ClientOptions): RPCClient<R> {
               body: serialized,
             }),
       };
-      if (packed.files.length && headers) {
-        init.headers = headers;
-      }
+      if (packed.files.length && headers) init.headers = headers;
       const response = await (opts.fetch ?? fetch)(opts.url, init);
       const ct = response.headers.get("content-type") ?? "";
       if (ct.includes("text/event-stream")) {
@@ -132,9 +130,7 @@ export function createClient<R>(opts: ClientOptions): RPCClient<R> {
       } catch {
         body = undefined;
       }
-      if (!body) {
-        throw new Error(`RPC transport error: ${response.status} ${response.statusText}`);
-      }
+      if (!body) throw new Error(`RPC transport error: ${response.status} ${response.statusText}`);
       return rpcResult(body);
     } catch (err) {
       cleanup();

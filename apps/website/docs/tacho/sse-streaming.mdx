@@ -2,10 +2,14 @@
 title: SSE Streaming
 sidebar:
   icon: radio-tower
-description: Stream values from the server as they happen, and read them with the same client call.
+description: Yield values over time from an HTTP procedure and consume them with for await.
 ---
 
-Return an `async function*` from `.run()`. The [HTTP](/tacho/transport/http) client is the same call; `for await` the result. [WebSocket](/tacho/transport/websocket) and batch reject streams. Notifications to a stream procedure are 204 and do not start the generator.
+A normal procedure returns one result. A streaming procedure can yield many results while it stays open. Tacho sends those values as Server-Sent Events (SSE) over the [HTTP transport](/tacho/transport/http).
+
+## Create a stream
+
+Use an `async function*` with `.run()`:
 
 ```ts twoslash
 import { tacho } from "tacho";
@@ -14,13 +18,15 @@ import { z } from "zod";
 const rpc = tacho();
 
 export const router = rpc({
-  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({
-    input,
-  }) {
-    for (let i = 0; i < input.n; i++) yield { i };
-  }),
+  ticks: rpc
+    .input(z.object({ count: z.number() }))
+    .run(async function* ({ input }) {
+      for (let i = 0; i < input.count; i++) yield { value: i };
+    }),
 });
 ```
+
+The HTTP client call resolves to an async generator. Read it with `for await`:
 
 ```ts twoslash
 import { createClient } from "tacho/client/http";
@@ -29,43 +35,89 @@ import { z } from "zod";
 
 const rpc = tacho();
 const router = rpc({
-  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({
-    input,
-  }) {
-    for (let i = 0; i < input.n; i++) yield { i };
-  }),
+  ticks: rpc
+    .input(z.object({ count: z.number() }))
+    .run(async function* ({ input }) {
+      for (let i = 0; i < input.count; i++) yield { value: i };
+    }),
 });
 const client = createClient<typeof router>({
-  url: "http://localhost:3000",
+  url: "http://localhost:3000/rpc",
 });
 // ---cut---
-const ticks = await client.ticks({ n: 3 });
-for await (const t of ticks) console.log(t.i);
-await ticks.return();
+const stream = await client.ticks({ count: 3 });
+for await (const tick of stream) {
+  console.log(tick.value);
+}
 ```
 
-Pass `{ signal }` as the second argument to abort the fetch. `await ticks.return()` also cancels.
+WebSocket and batch calls reject streaming procedures. A notification returns `204` and does not start the generator.
+
+## Stop and clean up
+
+Call `return()` when you stop before the stream finishes. Tacho forwards cancellation so the server generator can run its `finally` block:
 
 ```ts twoslash
 import { createClient } from "tacho/client/http";
 import { tacho } from "tacho";
-import { z } from "zod";
 
 const rpc = tacho();
 const router = rpc({
-  ticks: rpc.input(z.object({ n: z.number() })).run(async function* ({
-    input,
-  }) {
-    for (let i = 0; i < input.n; i++) yield { i };
+  ticks: rpc.run(async function* () {
+    yield 1;
+    yield 2;
   }),
 });
 const client = createClient<typeof router>({
-  url: "http://localhost:3000",
+  url: "http://localhost:3000/rpc",
 });
 // ---cut---
-const ac = new AbortController();
-const ticks = await client.ticks({ n: 3 }, { signal: ac.signal });
-ac.abort();
+const stream = await client.ticks();
+console.log(await stream.next());
+await stream.return(undefined);
 ```
 
-Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `event: done`. Throw is `event: error`.
+You can also abort with a signal:
+
+```ts twoslash
+import { createClient } from "tacho/client/http";
+import { tacho } from "tacho";
+
+const rpc = tacho();
+const router = rpc({
+  ticks: rpc.run(async function* () {
+    yield 1;
+  }),
+});
+const client = createClient<typeof router>({
+  url: "http://localhost:3000/rpc",
+});
+// ---cut---
+const controller = new AbortController();
+const stream = await client.ticks(undefined, {
+  signal: controller.signal,
+});
+controller.abort();
+```
+
+## Keep idle streams alive
+
+Some proxies close quiet connections. Set `heartbeatMs` on the server handler to send SSE comment frames while no values are available:
+
+```ts
+handle(router, { heartbeatMs: 15_000 });
+```
+
+Streaming responses also set `Cache-Control: no-store` and `X-Accel-Buffering: no` so browsers and common proxies do not cache or buffer the event stream.
+
+The client accepts both LF and standards-compliant CRLF SSE line endings.
+
+## Network interruptions
+
+A dropped connection ends the stream. Tacho does not retry automatically because retrying the POST would start the procedure again and could repeat database writes, emails, or other side effects.
+
+If your app needs resume support, design stable event IDs and server-side replay storage for that specific stream. Reconnect from application code only after deciding how duplicate and missing events are handled.
+
+## Wire format
+
+Each yielded value is a `data:` event containing `{ jsonrpc, id, result }`. A generator return becomes `event: done`; a thrown error becomes `event: error`.

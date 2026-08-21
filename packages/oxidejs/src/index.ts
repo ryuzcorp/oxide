@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  ACTION_PATH,
   generateActionsModule,
   generateClientModule,
   generateClientStub,
@@ -37,18 +36,19 @@ type ConnectReq = IncomingMessage;
 type ConnectRes = ServerResponse;
 type ConnectNext = (err?: unknown) => void;
 
-function actionMiddleware(loadRouter: () => Promise<unknown>) {
+function actionMiddleware(loadRouter: () => Promise<unknown>, path: string, sameOrigin: boolean) {
   return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
-    if ((req.url ?? "").split("?")[0] !== ACTION_PATH) {
+    if ((req.url ?? "").split("?")[0] !== path) {
       next();
       return;
     }
     void (async () => {
       const tachoFetch = "tacho/transport/fetch";
       const { handle } = await import(/* @vite-ignore */ tachoFetch);
-      const response = await handle(await loadRouter(), { path: ACTION_PATH })(
-        await nodeToWebRequest(req),
-      );
+      const response = await handle(await loadRouter(), {
+        path,
+        ...(sameOrigin ? { sameOrigin: true } : {}),
+      })(await nodeToWebRequest(req));
       await sendWebResponseFrom(req, res, response);
     })().catch(next);
   };
@@ -65,6 +65,8 @@ function attachActionUpgrade(
     | null
     | undefined,
   loadRouter: () => Promise<unknown>,
+  path: string,
+  sameOrigin: boolean,
 ) {
   if (!httpServer) return;
   const tachoWs = "tacho/transport/ws";
@@ -74,10 +76,10 @@ function attachActionUpgrade(
     import(/* @vite-ignore */ crosswsNode),
   ]).then(([{ handle }, { default: crossws }]) => {
     httpServer.on("upgrade", (req, socket, head) => {
-      if ((req.url ?? "").split("?")[0] !== ACTION_PATH) return;
+      if ((req.url ?? "").split("?")[0] !== path) return;
       void loadRouter()
         .then((router) =>
-          crossws({ hooks: handle(router, { path: ACTION_PATH }) }).handleUpgrade(
+          crossws({ hooks: handle(router, { path, sameOrigin }) }).handleUpgrade(
             req,
             socket as never,
             head,
@@ -143,9 +145,16 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
     },
     load(id, extra?: { ssr?: boolean }) {
       if (id === RESOLVED_VIRTUAL_CLIENT_ID) {
+        const transport =
+          resolved?.actions ??
+          (typeof options?.actions === "string" || options?.actions === undefined
+            ? (options?.actions as "http" | "ws" | undefined)
+            : options.actions.transport) ??
+          "http";
         return generateClientModule(
-          resolved?.actions ?? options?.actions ?? "http",
+          transport,
           resolved?.actionHeaders ?? options?.actionHeaders,
+          resolved?.actionPath,
         );
       }
       if (id === RESOLVED_VIRTUAL_ACTIONS_ID || id === RESOLVED_VIRTUAL_WORKER_ID) {
@@ -172,6 +181,8 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           hasPublic: resolved.hasPublic,
           hasActions: modules.length > 0,
           actions: resolved.actions,
+          actionPath: resolved.actionPath,
+          actionSameOrigin: resolved.actionSameOrigin,
         });
       }
       if (isServerFileId(id) && pluginShouldStub(this, extra)) {
@@ -208,8 +219,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
           return mod.default;
         };
-        if (resolved?.actions === "ws") attachActionUpgrade(server.httpServer, loadRouter);
-        else server.middlewares.use(actionMiddleware(loadRouter));
+        if (resolved?.actions === "ws")
+          attachActionUpgrade(
+            server.httpServer,
+            loadRouter,
+            resolved.actionPath,
+            resolved.actionSameOrigin,
+          );
+        else
+          server.middlewares.use(
+            actionMiddleware(loadRouter, resolved!.actionPath, resolved!.actionSameOrigin),
+          );
       },
       configurePreviewServer(server) {
         if (resolved?.preset !== "fetch") return;
@@ -228,8 +248,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
             const root = resolved?.root ?? process.cwd();
             return (await loadActions(root)).default;
           };
-          if (resolved?.actions === "ws") attachActionUpgrade(server.httpServer, loadRouter);
-          else server.middlewares.use(actionMiddleware(loadRouter));
+          if (resolved?.actions === "ws")
+            attachActionUpgrade(
+              server.httpServer,
+              loadRouter,
+              resolved.actionPath,
+              resolved.actionSameOrigin,
+            );
+          else
+            server.middlewares.use(
+              actionMiddleware(loadRouter, resolved!.actionPath, resolved!.actionSameOrigin),
+            );
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {
           if (resolved?.preset !== "fetch") return;
@@ -250,7 +279,7 @@ export const oxidejs = /* @__PURE__ */ createUnplugin(unpluginFactory);
 export const vite = /* @__PURE__ */ (() => oxidejs.vite)();
 
 export default oxidejs;
-export { useCtx, useEnv, useFetchCtx, useRequest } from "./context";
+export { action, useCtx, useEnv, useFetchCtx, useRequest } from "./context";
 export type { ActionContext, ActionOptions, ExecutionContext } from "./context";
 export type {
   OxidejsActionHeaders,

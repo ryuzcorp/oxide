@@ -1,9 +1,14 @@
 ---
 title: HTTP
-description: Serve your procedures over HTTP and call them from a typed client.
+description: Expose a router as one POST endpoint and call it through a typed client.
 ---
 
-`handle(router, opts?)` from `tacho/transport/fetch` is `(Request) => Promise<Response>`. POST only. Puts `req` on context. CORS is not built in - wrap `handle()`.
+The HTTP transport has two parts:
+
+1. `handle(router)` turns your router into a standard `(Request) => Promise<Response>` handler.
+2. `createClient<Router>()` creates a typed client that sends JSON-RPC POST requests to that handler.
+
+## Server
 
 ```ts twoslash
 // @noErrors
@@ -17,26 +22,45 @@ const router = rpc({ ping: rpc.run(() => "pong" as const) });
 serve({
   fetch: handle(router, {
     path: "/rpc",
-    createContext: (req) => ({
-      user: req.headers.get("x-user") ?? undefined,
+    sameOrigin: true,
+    createContext: (request) => ({
+      user: request.headers.get("x-user") ?? undefined,
     }),
-    onError: (err, req) => console.error(req.url, err),
+    onError: (error, request) => console.error(request.url, error),
   }),
 });
 ```
 
-| option          |                                                           |
-| --------------- | --------------------------------------------------------- |
-| `path`          | Other paths → 404.                                        |
-| `createContext` | Merged onto `{ req }`. Throw → JSON-RPC `INTERNAL_ERROR`. |
-| `onError`       | Called when `createContext` or the stream throws.         |
-| `maxBodySize`   | Max request body in bytes. Default: `1_048_576` (1 MB).   |
-| `maxBatchSize`  | Max items in a batch request. Default: `20`.              |
-| `serializer`    | Custom serializer (e.g. `superjson`).                     |
+Tacho accepts POST only. A request to another configured path returns `404`; another HTTP method returns `405` with `Allow: POST`.
 
-Non-POST → `405` + `Allow: POST`. Notification (no `id`) → `204`.
+| Option          | Meaning                                                                |
+| --------------- | ---------------------------------------------------------------------- |
+| `path`          | Serve RPC only at this pathname. Other paths return `404`.             |
+| `createContext` | Add values to `{ req }` before the procedure runs.                     |
+| `onError`       | Observe context or stream errors on the server.                        |
+| `maxBodySize`   | Maximum actual request size. Default: `1_048_576` bytes (1 MB).        |
+| `maxBatchSize`  | Maximum calls in one JSON-RPC batch. Default: `20`.                    |
+| `serializer`    | Replace JSON with a compatible serializer such as `superjson`.         |
+| `sameOrigin`    | Reject cross-origin and cross-site browser requests. Default: `false`. |
+| `heartbeatMs`   | Send SSE comment heartbeats at this interval. Disabled by default.     |
 
-`createClient` from `tacho/client/http` is a typed proxy over POST.
+The body limit applies to JSON and multipart uploads even when `Content-Length` is missing or incorrect.
+
+### Cookie authentication and CSRF
+
+Enable `sameOrigin` when browsers authenticate with cookies:
+
+```ts
+handle(router, { path: "/rpc", sameOrigin: true });
+```
+
+This rejects cross-origin form posts and browser fetches before a procedure runs. Requests with no browser origin headers, such as curl or server-to-server calls, remain allowed.
+
+Tacho does not add CORS or authenticate users. If another origin must call your API, leave `sameOrigin` off and wrap `handle()` with your own allowlist, authentication, and CSRF rules.
+
+## Client
+
+`createClient` returns a proxy whose methods match the router type:
 
 ```ts twoslash
 import { createClient } from "tacho/client/http";
@@ -45,10 +69,10 @@ import { tacho } from "tacho";
 const rpc = tacho();
 const router = rpc({ ping: rpc.run(() => "pong" as const) });
 type Router = typeof router;
-const token = "secret";
+const token = "example-token";
 // ---cut---
 const client = createClient<Router>({
-  url: "http://localhost:3000",
+  url: "http://localhost:3000/rpc",
   headers: () => ({ authorization: `Bearer ${token}` }),
   signal: AbortSignal.timeout(5_000),
 });
@@ -57,12 +81,14 @@ await client.ping();
 await client.ping(undefined, { signal: AbortSignal.timeout(1_000) });
 ```
 
-| option       |                                                            |
-| ------------ | ---------------------------------------------------------- |
-| `url`        | POST target.                                               |
-| `headers`    | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
-| `signal`     | Default abort. Per-call: `client.ping(input, { signal })`. |
-| `fetch`      | Custom `fetch`.                                            |
-| `serializer` | Custom serializer.                                         |
+| Option       | Meaning                                                     |
+| ------------ | ----------------------------------------------------------- |
+| `url`        | Full RPC endpoint URL.                                      |
+| `headers`    | Headers object, or an async function returning headers.     |
+| `signal`     | Default abort signal. A call can provide its own signal.    |
+| `fetch`      | Custom `fetch` implementation for tests or another runtime. |
+| `serializer` | The same custom serializer used by the server.              |
 
-`async function*` over this transport is [SSE](/tacho/sse-streaming). `File` / `Blob` in params or returns is [Files](/tacho/files).
+A notification has no JSON-RPC `id`; the server runs it and responds with `204`.
+
+For `async function*`, continue to [SSE streaming](/tacho/sse-streaming). For `File` and `Blob`, see [Files](/tacho/files).

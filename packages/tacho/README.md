@@ -155,14 +155,16 @@ serve({
 });
 ```
 
-| option          |                                                            |
-| --------------- | ---------------------------------------------------------- |
-| `path`          | Other paths -> 404.                                        |
-| `createContext` | Merged onto `{ req }`. Throw -> JSON-RPC `INTERNAL_ERROR`. |
-| `onError`       | Called when `createContext` or the stream throws.          |
-| `maxBodySize`   | Max request body in bytes. Default: `1_048_576` (1 MB).    |
-| `maxBatchSize`  | Max items in a batch request. Default: `20`.               |
-| `serializer`    | Custom serializer (e.g. superjson, msgpack). See below.    |
+| option          |                                                                |
+| --------------- | -------------------------------------------------------------- |
+| `path`          | Other paths -> 404.                                            |
+| `createContext` | Merged onto `{ req }`. Throw -> JSON-RPC `INTERNAL_ERROR`.     |
+| `onError`       | Called when `createContext` or the stream throws.              |
+| `maxBodySize`   | Max request body in bytes. Default: `1_048_576` (1 MB).        |
+| `maxBatchSize`  | Max items in a batch request. Default: `20`.                   |
+| `serializer`    | Custom serializer (e.g. superjson, msgpack). See below.        |
+| `sameOrigin`    | Reject cross-origin requests (CSRF defense). Default: `false`. |
+| `heartbeatMs`   | Emit SSE heartbeat comments every `value` ms. Default: none.   |
 
 ## HTTP client
 
@@ -247,13 +249,15 @@ for await (const t of ticks) console.log(t.i);
 await ticks.return();
 ```
 
-Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `event: done`. Throw is `event: error`.
+Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `event: done`. Throw is `event: error`. Streams set `Cache-Control: no-store` and `X-Accel-Buffering: no`. Passing `heartbeatMs` to `handle()` emits `: ping` comment frames to keep idle connections alive.
+
+Dropped streams end. Tacho does not reconnect automatically because replaying the POST could run procedure side effects twice. Resume needs application-specific event IDs and server-side state.
 
 ## WebSocket
 
-Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as fetch.
+Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as fetch. `sameOrigin` rejects cross-origin browser upgrades; `maxMessageSize` defaults to 1 MB.
 
-> **Security:** The WS handler does not authenticate connections by default. Use `createContext` to verify credentials on every message, or guard the upgrade path itself. An unauthenticated socket can call any procedure.
+> **Security:** The WS handler does not authenticate connections by default. Use `createContext` to verify credentials on every message. An unauthenticated socket can call any procedure.
 
 ```ts
 import { handle } from "tacho/transport/ws";
@@ -331,6 +335,8 @@ const spec = toOpenRpc(router, {
 | **Content-Disposition**   | `safeFileName` strips `\r`, `\n`, `"`, `\`, path separators | `fileHeaders` returns a safer `filename` value                                                                          |
 
 `handle()` returns a plain `(Request) => Response`. It does no rate limiting, no CORS, and no authentication — those are your server's job.
+
+> **CSRF** — set `sameOrigin: true` to reject cross-origin / cross-site requests. It checks `Sec-Fetch-Site`, then `Origin`. Requests with neither (server-to-server, curl) are allowed.
 
 ### What you must guard
 

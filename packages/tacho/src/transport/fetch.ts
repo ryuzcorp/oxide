@@ -13,7 +13,8 @@ import { extractFiles, fileHeaders, fromForm, injectFiles, toForm } from "../fil
 
 const SSE_HEADERS = {
   "content-type": "text/event-stream",
-  "cache-control": "no-cache",
+  "cache-control": "no-store",
+  "x-accel-buffering": "no",
 };
 
 function sseFrame(data: unknown, stringify: (val: any) => any, event?: string) {
@@ -41,8 +42,10 @@ function streamResponse(
   request: Request,
   stringify: (val: any) => any,
   onError?: (err: unknown, req: Request) => void,
+  heartbeatMs?: number,
 ) {
   const encoder = new TextEncoder();
+  const frame = (data: unknown, event?: string) => sseFrame(data, stringify, event);
   return new Response(
     new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -50,17 +53,23 @@ function streamResponse(
           void gen.return(undefined);
         };
         request.signal.addEventListener("abort", abort, { once: true });
+        const heartbeat =
+          heartbeatMs && heartbeatMs > 0
+            ? setInterval(() => {
+                try {
+                  controller.enqueue(encoder.encode(": ping\n\n"));
+                } catch {
+                  // closed
+                }
+              }, heartbeatMs)
+            : undefined;
         try {
           while (!request.signal.aborted) {
             const { value, done } = await gen.next();
             if (request.signal.aborted) break;
             controller.enqueue(
               encoder.encode(
-                sseFrame(
-                  { jsonrpc: "2.0", result: value ?? null, id },
-                  stringify,
-                  done ? "done" : undefined,
-                ),
+                frame({ jsonrpc: "2.0", result: value ?? null, id }, done ? "done" : undefined),
               ),
             );
             if (done) break;
@@ -77,14 +86,14 @@ function streamResponse(
                   message: "Internal error",
                 };
           try {
-            controller.enqueue(
-              encoder.encode(sseFrame({ jsonrpc: "2.0", error, id }, stringify, "error")),
-            );
+            controller.enqueue(encoder.encode(frame({ jsonrpc: "2.0", error, id }, "error")));
           } catch {
             // closed
           }
         } finally {
+          if (heartbeat) clearInterval(heartbeat);
           request.signal.removeEventListener("abort", abort);
+          await gen.return(undefined).catch(() => {});
           controller.close();
         }
       },
@@ -106,7 +115,48 @@ export type HandleOptions<C extends Context> = {
   maxBatchSize?: number;
   /** Custom serializer for the JSON-RPC payload (e.g. superjson, msgpack). */
   serializer?: Serializer;
+  /** Reject cross-origin requests (CSRF defense for cookie-authenticated RPC). Default: false. */
+  sameOrigin?: boolean;
+  /** Emit SSE heartbeat comments at this interval in ms. 0/undefined disables. Default: none. */
+  heartbeatMs?: number;
 };
+
+function isSameOrigin(request: Request): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return true; // non-browser client, no ambient cookies
+  try {
+    return new URL(origin).host === (request.headers.get("host") ?? new URL(request.url).host);
+  } catch {
+    return false;
+  }
+}
+
+async function readBody(request: Request, maxBytes: number): Promise<Uint8Array | undefined> {
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
 
 export function handle<R extends AnyRouter, C extends Context = {}>(
   router: R,
@@ -134,6 +184,16 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
         headers: { Allow: "POST" },
       });
     }
+    if (opts.sameOrigin && !isSameOrigin(request)) {
+      return reply(
+        {
+          jsonrpc: "2.0",
+          error: { code: JSON_RPC_ERROR.INVALID_REQUEST, message: "Forbidden" },
+          id: null,
+        },
+        403,
+      );
+    }
 
     const maxBody = opts.maxBodySize ?? 1_048_576;
     const cl = Number(request.headers.get("content-length"));
@@ -151,29 +211,11 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
     let body: unknown;
     try {
       const ct = request.headers.get("content-type") ?? "";
-      if (ct.includes("multipart/form-data")) {
-        const { rpc, files } = await fromForm(await request.formData(), parse);
-        const envelope = rpc as { params?: unknown };
-        envelope.params = injectFiles(envelope.params, files);
-        body = envelope;
-      } else if (
-        ct.includes(contentType) ||
-        (contentType === "application/json" && ct.includes("application/json"))
+      if (
+        !ct.includes("multipart/form-data") &&
+        !ct.includes(contentType) &&
+        !(contentType === "application/json" && ct.includes("application/json"))
       ) {
-        const isText = ct.includes("json") || ct.includes("text");
-        const raw = isText ? await request.text() : new Uint8Array(await request.arrayBuffer());
-        if ((typeof raw === "string" ? raw.length : raw.byteLength) > maxBody) {
-          return reply(
-            {
-              jsonrpc: "2.0",
-              error: { code: JSON_RPC_ERROR.INVALID_REQUEST, message: "Payload too large" },
-              id: null,
-            },
-            413,
-          );
-        }
-        body = parse(raw as string);
-      } else {
         return reply(
           {
             jsonrpc: "2.0",
@@ -185,6 +227,32 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
           },
           415,
         );
+      }
+      const raw = await readBody(request, maxBody);
+      if (!raw) {
+        return reply(
+          {
+            jsonrpc: "2.0",
+            error: { code: JSON_RPC_ERROR.INVALID_REQUEST, message: "Payload too large" },
+            id: null,
+          },
+          413,
+        );
+      }
+      if (ct.includes("multipart/form-data")) {
+        const formRequest = new Request(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: raw.buffer as ArrayBuffer,
+        });
+        const { rpc, files } = await fromForm(await formRequest.formData(), parse);
+        const envelope = rpc as { params?: unknown };
+        envelope.params = injectFiles(envelope.params, files);
+        body = envelope;
+      } else {
+        const input =
+          ct.includes("json") || ct.includes("text") ? new TextDecoder().decode(raw) : raw;
+        body = parse(input as string);
       }
     } catch {
       return reply({
@@ -219,6 +287,7 @@ export function handle<R extends AnyRouter, C extends Context = {}>(
           request,
           stringify,
           opts.onError,
+          opts.heartbeatMs,
         );
       }
       if (result && "result" in result) {

@@ -32,6 +32,20 @@ describe("resolveOptions", () => {
     expect(resolved.hasClient).toBe(false);
     expect(resolved.hasPublic).toBe(false);
     expect(resolved.actions).toBe("http");
+    expect(resolved.actionPath).toBe("/__oxide/action");
+    expect(resolved.actionSameOrigin).toBe(true);
+  });
+
+  test("resolves custom action path and explicit cross-origin opt-out", () => {
+    const resolved = resolveOptions(
+      { actions: { path: "/rpc", sameOrigin: false } },
+      process.cwd(),
+    );
+    expect(resolved.actionPath).toBe("/rpc");
+    expect(resolved.actionSameOrigin).toBe(false);
+    expect(() => resolveOptions({ actions: { path: "rpc?bad" } }, process.cwd())).toThrow(
+      "actions.path",
+    );
   });
 
   test("detects public/", () => {

@@ -315,7 +315,7 @@ export async function runBatch(router: AnyRouter, items: unknown[], ctx: Context
     return errorResponse(JSON_RPC_ERROR.INVALID_REQUEST, "Invalid Request", null);
   }
   const results = await Promise.all(
-    items.map((item) => runOne(router, item, ctx, { stream: true })),
+    items.map((item) => runOne(router, item, { ...ctx }, { stream: true })),
   );
   if (results.some(isRpcStream)) {
     await Promise.all(

@@ -2,27 +2,35 @@
 title: Configuration
 sidebar:
   icon: settings
-description: Choose how the app is built and where it lands - a Node server, or a self-hosted worker.
+description: Choose the build target, output folders, and server-action transport.
 ---
 
-| Option                                      | Default                  | Notes                                  |
-| ------------------------------------------- | ------------------------ | -------------------------------------- |
-| [`preset`](#preset)                         | `"fetch"`                | `"fetch"` or `"celld"`                 |
-| [`workerEntry`](#workerentry)               | `src/server.ts`          | Relative to project root               |
-| [`outDir`](#outdir)                         | `dist`                   | Output root                            |
-| [`clientDir`](#clientdir)                   | `client`                 | Must stay inside `outDir`              |
-| [`wrangler.name`](#wrangler)                | required if `emitConfig` |                                        |
-| [`wrangler.compatibility_date`](#wrangler)  | required if `emitConfig` |                                        |
-| [`wrangler.compatibility_flags`](#wrangler) | -                        | optional                               |
-| [`wrangler.durable_objects`](#wrangler)     | -                        | optional                               |
-| [`wrangler.migrations`](#wrangler)          | -                        | optional                               |
-| [`wrangler.services`](#wrangler)            | -                        | optional                               |
-| [`wrangler.vars`](#wrangler)                | -                        | optional                               |
-| [`emitConfig`](#emitconfig)                 | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`   |
-| [`actions`](#actions)                       | `"http"`                 | `"ws"` needs `crossws`; not with celld |
-| [`actionHeaders`](#actionheaders)           | -                        | Static headers on the HTTP client      |
+Pass options to `oxide()` in your Vite or Rsbuild config. You can start with `oxide()` and add options only when your app needs them.
 
-`main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
+| Option                                      | Default                  | What it controls                                            |
+| ------------------------------------------- | ------------------------ | ----------------------------------------------------------- |
+| [`preset`](#preset)                         | `"fetch"`                | Node-style fetch server or celld worker output              |
+| [`workerEntry`](#workerentry)               | `src/server.ts`          | Server entry file                                           |
+| [`outDir`](#outdir)                         | `dist`                   | Build output folder                                         |
+| [`clientDir`](#clientdir)                   | `client`                 | Client folder inside `outDir`                               |
+| [`wrangler.name`](#wrangler)                | required if `emitConfig` | Worker name                                                 |
+| [`wrangler.compatibility_date`](#wrangler)  | required if `emitConfig` | Worker compatibility date                                   |
+| [`wrangler.compatibility_flags`](#wrangler) | -                        | Optional worker flags                                       |
+| [`wrangler.durable_objects`](#wrangler)     | -                        | Optional Durable Object config                              |
+| [`wrangler.migrations`](#wrangler)          | -                        | Optional migrations                                         |
+| [`wrangler.services`](#wrangler)            | -                        | Optional service bindings                                   |
+| [`wrangler.vars`](#wrangler)                | -                        | Optional variables                                          |
+| [`emitConfig`](#emitconfig)                 | `true` on `celld`        | Whether to write `wrangler.jsonc`                           |
+| [`actions`](#actions)                       | `"http"`                 | Action transport, endpoint path, and same-origin protection |
+| [`actionHeaders`](#actionheaders)           | -                        | Public static headers added by the browser action client    |
+
+`main` is always `./server.js`. Oxide adds `assets` only when the project has an `index.html`. Unknown Wrangler keys fail the build instead of being silently ignored.
+
+## preset
+
+Use `"fetch"` for the default Node-compatible server. It serves built client files, copies `public/`, and gives hashed assets a long immutable cache lifetime.
+
+Use `"celld"` for celld, a self-hosted alternative to Cloudflare Workers. This preset writes worker configuration and leaves asset serving to the `ASSETS` binding.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -33,50 +41,72 @@ oxide({
 });
 ```
 
-## preset
-
-`"fetch"` or `"celld"`. fetch serves static files from Node, copies `public/` next to the client, and sets `Cache-Control: immutable` on hashed assets. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers, and skips asset serving.
-
 ## workerEntry
 
-Default `src/server.ts`. Path to the server entry, relative to the project root. See [Server entry](/oxide/server-entry).
+The default is `src/server.ts`. This is the file Oxide imports as your server. See [Server entry](/oxide/server-entry).
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({ workerEntry: "src/api.ts" });
+```
 
 ## outDir
 
-Default `dist`. Root of the build output.
+The default is `dist`. Oxide writes `server.js` and any client build under this folder.
 
 ## clientDir
 
-Default `client`. Client subdirectory under [`outDir`](#outdir). Must stay inside the output root.
+The default is `client`, producing `dist/client/`. It must stay inside [`outDir`](#outdir); Oxide rejects paths that escape the output folder.
 
 ## wrangler
 
-Fields merged into the generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is on. `name` and `compatibility_date` are required. Unknown keys fail at build time.
+These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself.
 
 ## emitConfig
 
-Defaults to on for `"celld"`, off for `"fetch"`. Set `false` to skip writing `wrangler.jsonc`.
+This defaults to `true` for `"celld"` and `false` for `"fetch"`. Set it to `false` when another tool owns the worker config.
 
 ## actions
 
-`"http"` (default) or `"ws"`. WebSocket upgrades `/_action`. Install `crossws`. It does not work with [`preset: "celld"`](#preset).
+The short form chooses a transport:
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({ actions: "http" }); // default
+```
+
+The object form also configures the URL path and same-origin protection:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
 
 oxide({
-  actions: "ws",
+  actions: {
+    transport: "http",
+    path: "/__oxide/action",
+    sameOrigin: true,
+  },
 });
 ```
+
+- `transport` is `"http"` by default. `"ws"` needs `crossws` and is unavailable with [`preset: "celld"`](#preset).
+- `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
+- `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
+
+Turn `sameOrigin` off only when cross-origin RPC is intentional. You must then provide the appropriate authentication, CORS, and CSRF policy.
 
 ## actionHeaders
 
-Static headers inlined into the shared HTTP action client. Ignored when [`actions`](#actions) is `"ws"`. Functions cannot ship to the browser.
+These static headers are embedded in the shared HTTP action client and are visible in browser code. Use them for public values, not private server credentials.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
 
 oxide({
-  actionHeaders: { authorization: "Bearer x" },
+  actionHeaders: { "x-client-version": "1" },
 });
 ```
+
+For login tokens, prefer cookies with same-origin protection or compute authorization in your own client/transport integration. Functions cannot be embedded in `actionHeaders`.

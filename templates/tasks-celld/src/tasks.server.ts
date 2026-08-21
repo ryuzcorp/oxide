@@ -1,4 +1,4 @@
-import { useEnv, useRequest } from "oxidejs";
+import { action, useEnv, useRequest } from "oxidejs";
 import type { Env } from "./env";
 import type { Task } from "./server";
 
@@ -24,18 +24,18 @@ function emit(event: TaskEvent) {
   for (const fn of listeners) fn(event);
 }
 
-export async function add(text: string) {
+export const add = action(async (text: string) => {
   const task = await getDO().addTask(text);
   emit({ type: "set", task });
   return task;
-}
+});
 
-export async function remove(id: string) {
+export const remove = action(async (id: string) => {
   await getDO().removeTask(id);
   emit({ type: "remove", id });
-}
+});
 
-export async function* list() {
+export const list = action(async function* () {
   const signal = useRequest().signal;
   const tasks = await getDO().getTasks();
   yield { type: "snapshot", tasks } satisfies TaskEvent;
@@ -63,4 +63,4 @@ export async function* list() {
     signal.removeEventListener("abort", onAbort);
     listeners.delete(onEvent);
   }
-}
+});

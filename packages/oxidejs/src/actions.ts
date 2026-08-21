@@ -9,11 +9,11 @@ export const VIRTUAL_WORKER_ID = "virtual:oxide/worker";
 export const RESOLVED_VIRTUAL_WORKER_ID = `\0${VIRTUAL_WORKER_ID}`;
 export const VIRTUAL_CLIENT_ID = "virtual:oxide/client";
 export const RESOLVED_VIRTUAL_CLIENT_ID = `\0${VIRTUAL_CLIENT_ID}`;
-export const ACTION_PATH = "/_action";
+export const ACTION_PATH = "/__oxide/action";
 
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
-const EXPORT_RE =
-  /^\s*export\s+(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)|^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=/gm;
+/** Only `export const name = action(...)` become remote RPC actions. Everything else stays server-local. */
+const EXPORT_RE = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?action\s*\(/gm;
 
 export interface ServerModule {
   abs: string;
@@ -33,7 +33,7 @@ export function moduleKey(absFile: string): string {
 export function parseExportedNames(source: string): string[] {
   const names = new Set<string>();
   for (const match of source.matchAll(EXPORT_RE)) {
-    const name = match[1] ?? match[2];
+    const name = match[1];
     if (name) names.add(name);
   }
   return [...names];
@@ -102,15 +102,16 @@ export function assetRelPath(pathname: string, spa = false): string | null {
 export function generateClientModule(
   transport: OxidejsActionTransport = "http",
   headers?: OxidejsActionHeaders,
+  path: string = ACTION_PATH,
 ): string {
   if (transport === "ws") {
     return `import { createClient } from "tacho/client/ws";
 const __proto = typeof location === "undefined" ? "ws:" : location.protocol === "https:" ? "wss:" : "ws:";
 const __host = typeof location === "undefined" ? "localhost" : location.host;
-export const client = createClient({ url: __proto + "//" + __host + ${JSON.stringify(ACTION_PATH)} });
+export const client = createClient({ url: __proto + "//" + __host + ${JSON.stringify(path)} });
 `;
   }
-  const opts: { url: string; headers?: OxidejsActionHeaders } = { url: ACTION_PATH };
+  const opts: { url: string; headers?: OxidejsActionHeaders } = { url: path };
   if (headers) opts.headers = headers;
   return `import { createClient } from "tacho/client/http";
 export const client = createClient(${JSON.stringify(opts)});
@@ -137,7 +138,8 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
   const lines = [
     `import { AsyncLocalStorage } from "node:async_hooks";`,
     `import { tacho } from "tacho";`,
-    `const __als = globalThis.__oxidejsRequest ??= new AsyncLocalStorage();`,
+    `const __alsKey = Symbol.for("oxidejs.requestContext");`,
+    `const __als = globalThis[__alsKey] ??= new AsyncLocalStorage();`,
   ];
   const aliases = modules.map((mod, i) => {
     const alias = `__m${i}`;
@@ -216,10 +218,14 @@ export function generateWorkerWrapper(
     hasPublic?: boolean;
     hasActions?: boolean;
     actions?: OxidejsActionTransport;
+    actionPath?: string;
+    actionSameOrigin?: boolean;
   } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
   const clientDir = opts.clientDir ?? "client";
+  const actionPath = opts.actionPath ?? ACTION_PATH;
+  const sameOrigin = opts.actionSameOrigin ?? false;
   const serveAssets = preset === "fetch" && (opts.hasClient === true || opts.hasPublic === true);
   const hasActions = opts.hasActions !== false;
   const ws = hasActions && opts.actions === "ws";
@@ -311,7 +317,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   import("crossws/adapters/node").then(({ default: crossws }) => {
     const ws = crossws({ hooks: __ws });
     server.on("upgrade", (req, socket, head) => {
-      if (req.url?.split("?")[0] === ${JSON.stringify(ACTION_PATH)}) ws.handleUpgrade(req, socket, head);
+      if (req.url?.split("?")[0] === ${JSON.stringify(actionPath)}) ws.handleUpgrade(req, socket, head);
     });
   });`
       : ""
@@ -324,17 +330,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     ? ws
       ? `import { handle as handleWs } from "tacho/transport/ws";
 import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __ws = handleWs(actions, { path: ${JSON.stringify(ACTION_PATH)} });
+const __ws = handleWs(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``} });
 `
       : `import { handle } from "tacho/transport/fetch";
 import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __fetch = Symbol.for("oxidejs.fetch");
-const __rpc = handle(actions, { path: ${JSON.stringify(ACTION_PATH)}, createContext: (req) => req[__fetch] ?? {} });
+const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``}, createContext: (req) => req[__fetch] ?? {} });
 `
     : "";
   const actionGate =
     hasActions && !ws
-      ? `if (new URL(request.url).pathname === ${JSON.stringify(ACTION_PATH)}) {
+      ? `if (new URL(request.url).pathname === ${JSON.stringify(actionPath)}) {
       request[__fetch] = { env, fetchCtx: ctx };
       return __rpc(request);
     }

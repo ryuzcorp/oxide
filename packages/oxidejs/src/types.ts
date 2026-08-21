@@ -12,6 +12,17 @@ export interface OxidejsWranglerOptions {
 
 export type OxidejsActionTransport = "http" | "ws";
 
+/** `actions` config: transport string, or an object with `transport`, `path`, `sameOrigin`. */
+export type OxidejsActions =
+  | OxidejsActionTransport
+  | {
+      transport?: OxidejsActionTransport;
+      /** Endpoint path for actions. Default: `/__oxide/action`. */
+      path?: string;
+      /** Reject cross-origin action requests (CSRF defense). Default: true. */
+      sameOrigin?: boolean;
+    };
+
 /** Static headers inlined into the shared action client. Functions cannot ship to the browser. */
 export type OxidejsActionHeaders = Record<string, string> | [string, string][];
 
@@ -34,8 +45,8 @@ export interface OxidejsOptions {
   /** Skip config emission. Defaults to false for celld, true for fetch. */
   emitConfig?: boolean;
 
-  /** Transport for `*.server.ts` stubs. Default: "http". */
-  actions?: OxidejsActionTransport;
+  /** Transport and path for `*.server.ts` stubs. Default: `"http"` at `/__oxide/action`. */
+  actions?: OxidejsActions;
 
   /** Extra headers on the shared HTTP action client. Ignored when `actions` is "ws". */
   actionHeaders?: OxidejsActionHeaders;
@@ -57,5 +68,9 @@ export interface ResolvedOptions {
   /** True when `<root>/public` exists. Copied next to client assets on fetch. */
   hasPublic: boolean;
   actions: OxidejsActionTransport;
+  /** Endpoint path for actions. Default: `/__oxide/action`. */
+  actionPath: string;
+  /** Reject cross-origin action requests (CSRF defense). Default: true. */
+  actionSameOrigin: boolean;
   actionHeaders: OxidejsActionHeaders | undefined;
 }

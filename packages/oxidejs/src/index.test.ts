@@ -25,7 +25,7 @@ describe("factory shape", () => {
     expect(typeof unpluginFactory).toBe("function");
   });
 
-  test("shared hooks include transform; both adapters wire config and /_action", () => {
+  test("shared hooks include transform; both adapters wire config and /__oxide/action", () => {
     const plugin = unpluginFactory({}, { framework: "vite" } as never);
     if (Array.isArray(plugin)) throw new Error("expected a single plugin");
     expect(plugin.name).toBe("oxidejs");
@@ -45,7 +45,7 @@ describe("factory shape", () => {
     if (Array.isArray(plugin)) throw new Error("expected a single plugin");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-load-"));
     const file = path.join(root, "secret.server.tsx");
-    const source = `import { useRequest } from "oxidejs";\nconst SECRET = "leak-me";\nexport async function ping() { return <div>{useRequest().url}{SECRET}</div> }\n`;
+    const source = `import { action, useRequest } from "oxidejs";\nconst SECRET = "leak-me";\nexport const ping = action(async () => <div>{useRequest().url}{SECRET}</div>)\n`;
     fs.writeFileSync(file, source);
     const load = plugin.load as (this: object, id: string) => unknown;
     const ctx = {

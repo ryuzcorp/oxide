@@ -397,12 +397,30 @@ describe("websocket", () => {
     return sent.map((s) => (typeof s === "string" ? JSON.parse(s) : s));
   };
 
-  test("upgrade rejects other paths", () => {
-    const gated = handleWs(app, { path: "/rpc" });
+  test("upgrade rejects other paths and cross-origin requests", () => {
+    const gated = handleWs(app, { path: "/rpc", sameOrigin: true });
     const denied = gated.upgrade(new Request("http://x/other"));
     expect(denied).toBeInstanceOf(Response);
     expect((denied as Response).status).toBe(404);
-    expect(gated.upgrade(new Request("http://x/rpc"))).toBeUndefined();
+    expect(
+      gated.upgrade(new Request("http://x/rpc", { headers: { origin: "http://evil.com" } })),
+    ).toMatchObject({ status: 403 });
+    expect(
+      gated.upgrade(new Request("http://x/rpc", { headers: { origin: "http://x" } })),
+    ).toBeUndefined();
+  });
+
+  test("rejects oversized messages before parsing", async () => {
+    const limited = handleWs(app, { maxMessageSize: 8 });
+    const sent: string[] = [];
+    await limited.message(
+      { context: {}, send: (data) => sent.push(String(data)) },
+      { text: () => JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) },
+    );
+    expect(JSON.parse(sent[0]!).error).toMatchObject({
+      code: JSON_RPC_ERROR.INVALID_REQUEST,
+      message: "Payload too large",
+    });
   });
 
   test("request, notification, parse error", async () => {
@@ -897,6 +915,8 @@ describe("sse stream", () => {
   test("yields then done", async () => {
     const res = await post({ jsonrpc: "2.0", method: "ticks", id: 1 });
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
     expect(await res.text()).toBe(
       [
         'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
@@ -1465,6 +1485,17 @@ describe("security", () => {
     expect(ok.status).not.toBe(413);
   });
 
+  test("maxBodySize bounds multipart without Content-Length", async () => {
+    const form = new FormData();
+    form.set("rpc", JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }));
+    form.set("maps", "[]");
+    form.set("file", new File(["x".repeat(512)], "large.txt"));
+    const res = await handle(app, { maxBodySize: 64 })(
+      new Request("http://x/rpc", { method: "POST", body: form }),
+    );
+    expect(res.status).toBe(413);
+  });
+
   // --- safeFileName header injection ---
 
   test("safeFileName strips CRLF, quotes, backslashes, and path separators", () => {
@@ -1484,5 +1515,79 @@ describe("security", () => {
     const headers = fileHeaders(blob);
     expect(headers["content-disposition"]).not.toMatch(/[\r\n]/);
     expect(headers["content-disposition"]).toContain('filename="');
+  });
+});
+
+describe("same-origin protection", () => {
+  const app = tacho()({ ping: tacho().run(() => "pong") });
+  const body = JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 });
+  const call = (handler: ReturnType<typeof handle>, headers: Record<string, string>) =>
+    handler(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body,
+      }),
+    );
+
+  test("rejects cross-site and cross-origin POSTs when sameOrigin: true", async () => {
+    const handler = handle(app, { sameOrigin: true });
+    expect((await call(handler, { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await call(handler, { "sec-fetch-site": "same-site" })).status).toBe(403);
+    expect((await call(handler, { "sec-fetch-site": "same-origin" })).status).toBe(200);
+    expect((await call(handler, { origin: "http://evil.com" })).status).toBe(403);
+    expect((await call(handler, { origin: "http://x" })).status).toBe(200);
+    // no Origin / Sec-Fetch-Site (curl, server-to-server) is allowed
+    expect((await call(handler, {})).status).toBe(200);
+  });
+
+  test("sameOrigin defaults to off", async () => {
+    const open = handle(app);
+    expect((await call(open, { "sec-fetch-site": "cross-site" })).status).toBe(200);
+  });
+});
+
+describe("sse client extras", () => {
+  test("client parses CRLF SSE frames", async () => {
+    const sse = [
+      'id: 1\r\ndata: {"jsonrpc":"2.0","result":0,"id":1}\r\n\r\n',
+      'id: 2\r\nevent: done\r\ndata: {"jsonrpc":"2.0","result":1,"id":1}\r\n\r\n',
+    ].join("");
+    const client = createClient({
+      url: "http://x/rpc",
+      fetch: (async () =>
+        new Response(sse, {
+          headers: { "content-type": "text/event-stream" },
+        })) as unknown as typeof fetch,
+    }) as unknown as { ticks: () => Promise<AsyncGenerator<unknown>> };
+    const gen = await client.ticks();
+    expect(await gen.next()).toEqual({ value: 0, done: false });
+    expect(await gen.next()).toEqual({ value: 1, done: true });
+  });
+
+  test("heartbeat emits comment frames", async () => {
+    const app = tacho()({
+      wait: tacho().run(async function* () {
+        yield 0;
+        await new Promise(() => {});
+      }),
+    });
+    const res = await handle(app, { heartbeatMs: 5 })(
+      new Request("http://x/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "wait", id: 1 }),
+      }),
+    );
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    for (let i = 0; i < 50 && !text.includes(": ping"); i++) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    expect(text).toContain(": ping");
+    await reader.cancel();
   });
 });

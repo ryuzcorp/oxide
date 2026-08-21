@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type {
+  OxidejsActions,
   OxidejsActionTransport,
   OxidejsOptions,
   OxidejsPreset,
   OxidejsWranglerOptions,
   ResolvedOptions,
 } from "./types";
+import { ACTION_PATH } from "./actions";
 
 export const CELLD_ALLOWED_KEYS = [
   "name",
@@ -117,6 +119,31 @@ function hasHtmlEntry(root: string, config?: unknown): boolean {
   });
 }
 
+function resolveActions(raw: OxidejsActions | undefined): {
+  transport: OxidejsActionTransport;
+  path: string;
+  sameOrigin: boolean;
+} {
+  if (raw === undefined || typeof raw === "string") {
+    const transport = raw ?? "http";
+    if (transport !== "http" && transport !== "ws") {
+      throw new Error(`oxidejs: unknown actions transport "${String(transport)}"`);
+    }
+    return { transport, path: ACTION_PATH, sameOrigin: true };
+  }
+  const transport = raw.transport ?? "http";
+  if (transport !== "http" && transport !== "ws") {
+    throw new Error(`oxidejs: unknown actions transport "${String(transport)}"`);
+  }
+  const path = raw.path ?? ACTION_PATH;
+  if (!path.startsWith("/") || path.includes("?")) {
+    throw new Error(
+      `oxidejs: actions.path must start with "/" and contain no query string (got "${path}")`,
+    );
+  }
+  return { transport, path, sameOrigin: raw.sameOrigin ?? true };
+}
+
 export function resolveOptions(
   raw: OxidejsOptions | undefined,
   root: string,
@@ -126,10 +153,11 @@ export function resolveOptions(
   if (preset !== "fetch" && preset !== "celld") {
     throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
   }
-  const actions: OxidejsActionTransport = raw?.actions ?? "http";
-  if (actions !== "http" && actions !== "ws") {
-    throw new Error(`oxidejs: unknown actions transport "${String(actions)}"`);
-  }
+  const {
+    transport: actions,
+    path: actionPath,
+    sameOrigin: actionSameOrigin,
+  } = resolveActions(raw?.actions);
   if (actions === "ws" && preset === "celld") {
     throw new Error('oxidejs: actions: "ws" is not supported with preset: "celld"');
   }
@@ -164,6 +192,8 @@ export function resolveOptions(
     hasClient,
     hasPublic,
     actions,
+    actionPath,
+    actionSameOrigin,
     actionHeaders: raw?.actionHeaders,
   };
 }

@@ -2,10 +2,16 @@
 title: Files
 sidebar:
   icon: file
-description: Send a file up, or return one as a download - mix it with regular data.
+description: Upload File or Blob values with normal input data, or return a downloadable file.
 ---
 
-`File` and `Blob` are first-class. Mix them with objects. [HTTP](/tacho/transport/http) switches to multipart when needed; JSON stays JSON. A lone returned `File` is a download (`Content-Disposition`).
+Tacho can move `File` and `Blob` values through the HTTP transport. You keep them inside the same typed input and output objects as regular data.
+
+When input contains a file, the HTTP client uses multipart form data automatically. Calls without files stay JSON. You do not need to build `FormData` yourself.
+
+## Upload a file
+
+Define the file as part of the procedure input and validate it like any other untrusted value:
 
 ```ts twoslash server.ts
 import { tacho } from "tacho";
@@ -15,11 +21,16 @@ const rpc = tacho();
 
 export const router = rpc({
   upload: rpc
-    .input(z.object({ file: z.instanceof(File), note: z.string() }))
-    .run(({ input }) => input.file.name),
-  download: rpc.run(
-    () => new File(["hello"], "hello.txt", { type: "text/plain" }),
-  ),
+    .input(
+      z.object({
+        file: z.instanceof(File),
+        note: z.string().max(200),
+      }),
+    )
+    .run(({ input }) => ({
+      name: input.file.name,
+      size: input.file.size,
+    })),
 });
 
 export type Router = typeof router;
@@ -29,30 +40,63 @@ export type Router = typeof router;
 // @filename: server.ts
 import { tacho } from "tacho";
 import { z } from "zod";
-
 const rpc = tacho();
 export const router = rpc({
   upload: rpc
     .input(z.object({ file: z.instanceof(File), note: z.string() }))
-    .run(({ input }) => input.file.name),
-  download: rpc.run(
-    () => new File(["hello"], "hello.txt", { type: "text/plain" }),
-  ),
+    .run(({ input }) => ({
+      name: input.file.name,
+      size: input.file.size,
+    })),
 });
 export type Router = typeof router;
 // ---cut---
 // @filename: client.ts
 import { createClient } from "tacho/client/http";
-import type { Router } from "./server";
+import type { Router as ServerRouter } from "./server";
 
-const client = createClient<Router>({
-  url: "http://localhost:3000",
+const client = createClient<ServerRouter>({
+  url: "http://localhost:3000/rpc",
 });
 
-await client.upload({
-  file: new File(["hi"], "hi.txt"),
-  note: "ok",
+const result = await client.upload({
+  file: new File(["hello"], "greeting.txt", { type: "text/plain" }),
+  note: "profile attachment",
 });
-const file = await client.download();
-await file.text();
 ```
+
+The server's `maxBodySize` applies to the complete multipart request, including file bytes, even when `Content-Length` is missing. The default is 1 MB:
+
+```ts
+handle(router, { maxBodySize: 5 * 1024 * 1024 }); // 5 MB
+```
+
+Choose a limit that fits your use case. For large media, direct object-storage uploads are usually a better fit than buffering through RPC.
+
+## Download a file
+
+Return one `File` to send it as a direct download:
+
+```ts twoslash
+import { tacho } from "tacho";
+
+const rpc = tacho();
+
+export const router = rpc({
+  download: rpc.run(() => {
+    return new File(["hello"], "hello.txt", { type: "text/plain" });
+  }),
+});
+```
+
+The HTTP client resolves to a browser `File`:
+
+```ts
+const file = await client.download();
+console.log(file.name);
+console.log(await file.text());
+```
+
+Tacho sanitizes the filename used in `Content-Disposition`. You must still authorize the download before reading private data and avoid placing secrets in error messages or metadata.
+
+Files can also be nested inside a larger result. In that case, Tacho returns multipart data and rebuilds the typed object on the client.

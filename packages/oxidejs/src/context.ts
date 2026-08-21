@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const ALS_KEY = "__oxidejsRequest";
+const ALS_KEY = Symbol.for("oxidejs.requestContext");
 
 export type ExecutionContext = {
   waitUntil?(promise: Promise<unknown>): void;
@@ -15,13 +15,12 @@ export type ActionContext = {
   [key: string]: unknown;
 };
 
-type AlsGlobal = typeof globalThis & {
-  [ALS_KEY]?: AsyncLocalStorage<ActionContext>;
-};
+type AlsGlobal = typeof globalThis & { [key: symbol]: unknown };
 
 function als(): AsyncLocalStorage<ActionContext> {
   const g = globalThis as AlsGlobal;
-  return (g[ALS_KEY] ??= new AsyncLocalStorage<ActionContext>());
+  return (g[ALS_KEY] ??=
+    new AsyncLocalStorage<ActionContext>()) as AsyncLocalStorage<ActionContext>;
 }
 
 function store(): ActionContext {
@@ -30,12 +29,12 @@ function store(): ActionContext {
   return current;
 }
 
-/** Current tacho `ctx`. Throws outside `*.server.ts` running over `/_action`. */
+/** Current tacho `ctx`. Throws outside `*.server.ts` running over `/__oxide/action`. */
 export function useCtx<C extends ActionContext = ActionContext>(): C {
   return store() as C;
 }
 
-/** Current action `Request`. Throws outside `*.server.ts` running over `/_action`. */
+/** Current action `Request`. Throws outside `*.server.ts` running over `/__oxide/action`. */
 export function useRequest(): Request {
   return store().req;
 }
@@ -56,3 +55,12 @@ export function runWithRequest<T>(req: Request, fn: () => T, extra?: ActionConte
 
 /** Optional last argument on a `*.server.ts` export so the client can pass `{ signal }`. */
 export type ActionOptions = { signal?: AbortSignal };
+
+/**
+ * Marks a `*.server.ts` export as a remote RPC action. Identity: returns `fn` unchanged.
+ * Only exports wrapped in `action()` become callable over the wire; other exports stay
+ * server-local. Wrap async functions and async generators.
+ */
+export function action<T>(fn: T): T {
+  return fn;
+}

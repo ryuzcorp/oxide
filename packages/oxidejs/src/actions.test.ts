@@ -19,22 +19,25 @@ import {
 import { useCtx, useEnv, useFetchCtx, useRequest } from "./context";
 
 describe("parseExportedNames", () => {
-  test("finds functions, generators, and consts", () => {
+  test("finds only action-marked exports (functions, generators, consts)", () => {
     expect(
       parseExportedNames(`
-        export async function ping() { return "pong" }
-        export function echo(x: string) { return x }
-        export async function* ticks() { yield 0 }
-        export const add = async (a: number, b: number) => a + b
+        export const ping = action(async () => "pong")
+        export const echo = action((x: string) => x)
+        export const ticks = action(async function* () { yield 0 })
+        export const add = action(async (a: number, b: number) => a + b)
+        export async function hidden() { return "server-only" }
+        export const helper = async () => "server-only"
       `),
     ).toEqual(["ping", "echo", "ticks", "add"]);
   });
 
-  test("skips types, defaults, and re-exports", () => {
+  test("skips non-actions, types, defaults, and re-exports", () => {
     expect(
       parseExportedNames(`
         export type Ping = string
         export interface Echo { x: string }
+        export async function island() {}
         export default function nope() {}
         export { ping } from "./other"
         export * from "./all"
@@ -64,14 +67,20 @@ describe("scanServerFiles", () => {
   test("keys by filename and rejects collisions", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-actions-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "src", "test.server.ts"), "export async function ping() {}\n");
+    fs.writeFileSync(
+      path.join(root, "src", "test.server.ts"),
+      "export const ping = action(async () => {})\n",
+    );
     const mods = scanServerFiles(root);
     expect(mods).toHaveLength(1);
     expect(mods[0]?.key).toBe("test");
     expect(mods[0]?.exports).toEqual(["ping"]);
 
     fs.mkdirSync(path.join(root, "lib"), { recursive: true });
-    fs.writeFileSync(path.join(root, "lib", "test.server.ts"), "export async function ping() {}\n");
+    fs.writeFileSync(
+      path.join(root, "lib", "test.server.ts"),
+      "export const ping = action(async () => {})\n",
+    );
     expect(() => scanServerFiles(root)).toThrow('duplicate server module key "test"');
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -100,12 +109,25 @@ describe("scanServerFiles", () => {
 });
 
 describe("codegen", () => {
+  test("custom action path threads into client and server codegen", () => {
+    expect(generateClientModule("http", undefined, "/custom/action")).toContain(
+      '"url":"/custom/action"',
+    );
+    expect(generateClientModule("ws", undefined, "/custom/action")).toContain("/custom/action");
+    const code = generateWorkerWrapper("/app/src/server.ts", {
+      actionPath: "/custom/action",
+      actionSameOrigin: true,
+    });
+    expect(code).toContain('pathname === "/custom/action"');
+    expect(code).toContain("sameOrigin: true");
+  });
+
   test("client stub posts through the shared tacho client", () => {
     const stub = generateClientStub({ key: "test", exports: ["ping"] });
     expect(stub).toContain('from "virtual:oxide/client"');
     expect(stub).toContain('client["test"]["ping"](args.slice(0, -1), opts)');
     expect(stub).toContain("opts.signal instanceof AbortSignal");
-    expect(generateClientModule()).toContain('createClient({"url":"/_action"})');
+    expect(generateClientModule()).toContain('createClient({"url":"/__oxide/action"})');
     expect(generateClientModule("http", { authorization: "Bearer x" })).toContain(
       '"authorization":"Bearer x"',
     );
@@ -163,7 +185,7 @@ describe("codegen", () => {
     expect(code).toContain('export * from "/app/src/server.ts"');
     expect(code).toContain('import user from "/app/src/server.ts"');
     expect(code).toContain('import actions from "virtual:oxide/actions"');
-    expect(code).toContain('pathname === "/_action"');
+    expect(code).toContain('pathname === "/__oxide/action"');
     expect(code).toContain("request[__fetch]");
     expect(code).toContain("await user.fetch(request, env, ctx)");
     expect(code).toContain("if (hit) return hit");
@@ -206,11 +228,11 @@ describe("codegen", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { hasActions: false });
     expect(code).not.toContain("tacho");
     expect(code).not.toContain("virtual:oxide/actions");
-    expect(code).not.toContain("/_action");
+    expect(code).not.toContain("/__oxide/action");
     expect(code).toContain("user.fetch(request, env, ctx)");
   });
 
-  test("ws wrapper upgrades /_action", () => {
+  test("ws wrapper upgrades /__oxide/action", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { actions: "ws" });
     expect(code).toContain("tacho/transport/ws");
     expect(code).toContain("crossws/adapters/node");
@@ -325,7 +347,7 @@ describe("codegen", () => {
     // not raw string manipulation. This ensures URL parsing normalization.
     expect(code).toContain("new URL(request.url).pathname");
     // The action gate also uses pathname comparison, not raw string matching
-    expect(code).toContain('new URL(request.url).pathname === "/_action"');
+    expect(code).toContain('new URL(request.url).pathname === "/__oxide/action"');
   });
 
   test("generated __asset serves real files from a public/ dir", async () => {
@@ -449,7 +471,7 @@ describe("codegen", () => {
     const file = path.join(root, "secret.server.ts");
     fs.writeFileSync(
       file,
-      `const SECRET = "leak-me";\nexport async function ping() { return SECRET }\n`,
+      `const SECRET = "leak-me";\nexport const ping = action(async () => SECRET)\n`,
     );
     try {
       const stub = loadClientStub(file);
@@ -464,22 +486,26 @@ describe("codegen", () => {
 });
 
 describe("generated router", () => {
-  test("runs exported functions over tacho /_action", async () => {
+  test("runs exported functions over tacho /__oxide/action", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-"));
     const file = path.join(root, "test.server.ts");
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       file,
-      `export async function ping() { return "pong" }\nexport async function echo(value: string) { return value }\n`,
+      `import { action } from ${ctx};
+export const ping = action(async () => "pong")
+export const echo = action(async (value: string) => value)
+`,
     );
     const code = generateActionsModule(scanServerFiles(root));
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, code);
     try {
       const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/_action" });
+      const fetch = handle(actions, { path: "/__oxide/action" });
       const call = async (method: string, params?: unknown) => {
         const res = await fetch(
-          new Request("http://localhost/_action", {
+          new Request("http://localhost/__oxide/action", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -500,16 +526,19 @@ describe("generated router", () => {
 
   test("streams async generators as SSE", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-stream-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       path.join(root, "ticks.server.ts"),
-      `export async function* ticks() { yield 0; yield 1; return 2 }\n`,
+      `import { action } from ${ctx};
+export const ticks = action(async function* () { yield 0; yield 1; return 2 })
+`,
     );
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
       const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/_action" })(
-        new Request("http://localhost/_action", {
+      const res = await handle(actions, { path: "/__oxide/action" })(
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ticks.ticks" }),
@@ -533,16 +562,16 @@ describe("generated router", () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-gen-req-"));
     fs.writeFileSync(
       path.join(root, "who.server.ts"),
-      `import { useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
-export async function* who() { yield useRequest().headers.get("x-user") }
+      `import { action, useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const who = action(async function* () { yield useRequest().headers.get("x-user") })
 `,
     );
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
       const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/_action" })(
-        new Request("http://localhost/_action", {
+      const res = await handle(actions, { path: "/__oxide/action" })(
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json", "x-user": "ada" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
@@ -559,16 +588,16 @@ export async function* who() { yield useRequest().headers.get("x-user") }
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-req-"));
     fs.writeFileSync(
       path.join(root, "who.server.ts"),
-      `import { useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
-export async function who() { return useRequest().headers.get("x-user") }
+      `import { action, useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const who = action(async () => useRequest().headers.get("x-user"))
 `,
     );
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
       const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/_action" })(
-        new Request("http://localhost/_action", {
+      const res = await handle(actions, { path: "/__oxide/action" })(
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json", "x-user": "ada" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
@@ -588,12 +617,12 @@ export async function who() { return useRequest().headers.get("x-user") }
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-env-"));
     fs.writeFileSync(
       path.join(root, "who.server.ts"),
-      `import { useCtx, useEnv, useFetchCtx } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
-export async function who() {
+      `import { action, useCtx, useEnv, useFetchCtx } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const who = action(async () => {
   const env = useEnv();
   useFetchCtx()?.waitUntil?.(Promise.resolve());
   return { secret: env.SECRET, user: useCtx().user };
-}
+})
 `,
     );
     const out = path.join(root, "actions.mjs");
@@ -602,14 +631,14 @@ export async function who() {
       const { default: actions } = await import(out);
       const waited: Promise<unknown>[] = [];
       const res = await handle(actions, {
-        path: "/_action",
+        path: "/__oxide/action",
         createContext: () => ({
           env: { SECRET: "from-env" },
           fetchCtx: { waitUntil: (p: Promise<unknown>) => waited.push(p) },
           user: "ada",
         }),
       })(
-        new Request("http://localhost/_action", {
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
@@ -630,13 +659,13 @@ export async function who() {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-abort-"));
     fs.writeFileSync(
       path.join(root, "wait.server.ts"),
-      `import { useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
-export async function wait() {
+      `import { action, useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const wait = action(async () => {
   const req = useRequest();
   if (req.signal.aborted) return "aborted";
   await new Promise((resolve) => req.signal.addEventListener("abort", resolve, { once: true }));
   return "aborted";
-}
+})
 `,
     );
     const out = path.join(root, "actions.mjs");
@@ -644,8 +673,8 @@ export async function wait() {
     try {
       const { default: actions } = await import(out);
       const ac = new AbortController();
-      const pending = handle(actions, { path: "/_action" })(
-        new Request("http://localhost/_action", {
+      const pending = handle(actions, { path: "/__oxide/action" })(
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "wait.wait" }),
@@ -682,7 +711,7 @@ export async function wait() {
     const chunks = [Buffer.from('{"jsonrpc":"2.0"}')];
     const req = Object.assign(new EventEmitter(), {
       method: "POST",
-      url: "/_action",
+      url: "/__oxide/action",
       headers: { host: "localhost" },
       destroyed: true,
       async *[Symbol.asyncIterator]() {
@@ -694,22 +723,23 @@ export async function wait() {
     expect(await request.text()).toBe('{"jsonrpc":"2.0"}');
   });
 
-  test("/_action is POST-only and rejects unknown methods", async () => {
+  test("/__oxide/action is POST-only and rejects unknown methods", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-wire-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       path.join(root, "test.server.ts"),
-      `export async function ping() { return "pong" }\n`,
+      `import { action } from ${ctx};\nexport const ping = action(async () => "pong")\n`,
     );
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
       const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/_action" });
-      const get = await fetch(new Request("http://localhost/_action"));
+      const fetch = handle(actions, { path: "/__oxide/action" });
+      const get = await fetch(new Request("http://localhost/__oxide/action"));
       expect(get.status).toBe(405);
       expect(get.headers.get("allow")).toBe("POST");
       const miss = await fetch(
-        new Request("http://localhost/_action", {
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "test.secret" }),
@@ -720,7 +750,7 @@ export async function wait() {
         id: 1,
       });
       const proto = await fetch(
-        new Request("http://localhost/_action", {
+        new Request("http://localhost/__oxide/action", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "__proto__.ping" }),
@@ -742,18 +772,19 @@ export async function wait() {
 
   test("non-array params do not become arguments", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-params-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       path.join(root, "test.server.ts"),
-      `export async function echo(value) { return value ?? "empty" }\n`,
+      `import { action } from ${ctx};\nexport const echo = action(async (value) => value ?? "empty")\n`,
     );
     const out = path.join(root, "actions.mjs");
     fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
       const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/_action" });
+      const fetch = handle(actions, { path: "/__oxide/action" });
       const call = (params: unknown) =>
         fetch(
-          new Request("http://localhost/_action", {
+          new Request("http://localhost/__oxide/action", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "test.echo", params }),

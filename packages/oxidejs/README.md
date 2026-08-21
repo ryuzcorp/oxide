@@ -34,7 +34,7 @@ vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/_action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` (`undefined` continues) → static file → `index.html` for navigations. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
+Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` (`undefined` continues) → static file → `index.html` for navigations. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
 
 ```ts
 oxide({
@@ -47,18 +47,21 @@ oxide({
 
 ## Server actions
 
-Install `tacho` if you use actions. Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with a tacho stub that POSTs `/_action`. The original module never enters the client graph. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import tacho.
+Install `tacho` if you use actions. Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with a tacho stub that POSTs `/__oxide/action`. The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import tacho.
 
 ```ts
 // src/test.server.ts
-import { useRequest } from "oxidejs";
+import { action, useRequest } from "oxidejs";
 
-export async function who() {
+export const who = action(async () => {
   return useRequest().headers.get("x-user");
-}
+});
 
-export async function ping() {
-  return "pong";
+export const ping = action(async () => "pong");
+
+// a non-action export is never exposed over the wire
+async function internalHelper() {
+  /* server-only */
 }
 
 // src/client.ts
@@ -73,15 +76,16 @@ export default {
 };
 ```
 
-`async function*` exports stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch. Types come from the real `*.server.ts`, so declare the last argument there:
+`action()` is identity — it only marks the export. Wrap `async function*` in it to stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch. Types come from the real `*.server.ts`, so declare the last argument there:
 
 ```ts
 // src/test.server.ts
+import { action } from "oxidejs";
 import type { ActionOptions } from "oxidejs";
 
-export async function* ticks(n: number, _opts?: ActionOptions) {
+export const ticks = action(async function* (n: number, _opts?: ActionOptions) {
   for (let i = 0; i < n; i++) yield i;
-}
+});
 
 // src/client.ts
 import { ticks } from "./test.server";
@@ -91,7 +95,7 @@ const stream = await ticks(10, { signal: ac.signal });
 ac.abort();
 ```
 
-`vite dev` and `rsbuild dev` serve `/_action` via middleware. `oxide({ actions: "ws" })` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actionHeaders` are static headers on the shared HTTP client.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client.
 
 ## Rsbuild
 
@@ -105,26 +109,26 @@ export default defineConfig({
 });
 ```
 
-Same factory as Vite: client stubs, `/_action`, and `dist/server.js`.
+Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 ## Options
 
-| Option                         | Default                  | Notes                                  |
-| ------------------------------ | ------------------------ | -------------------------------------- |
-| `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`                 |
-| `workerEntry`                  | `src/server.ts`          | Relative to project root               |
-| `outDir`                       | `dist`                   | Output root                            |
-| `clientDir`                    | `client`                 | Must stay inside `outDir`              |
-| `wrangler.name`                | required if `emitConfig` |                                        |
-| `wrangler.compatibility_date`  | required if `emitConfig` |                                        |
-| `wrangler.compatibility_flags` | —                        | optional                               |
-| `wrangler.durable_objects`     | —                        | optional                               |
-| `wrangler.migrations`          | —                        | optional                               |
-| `wrangler.services`            | —                        | optional                               |
-| `wrangler.vars`                | —                        | optional                               |
-| `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`   |
-| `actions`                      | `"http"`                 | `"ws"` needs `crossws`; not with celld |
-| `actionHeaders`                | —                        | Static headers on the HTTP client      |
+| Option                         | Default                  | Notes                                                                                       |
+| ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`                                                                      |
+| `workerEntry`                  | `src/server.ts`          | Relative to project root                                                                    |
+| `outDir`                       | `dist`                   | Output root                                                                                 |
+| `clientDir`                    | `client`                 | Must stay inside `outDir`                                                                   |
+| `wrangler.name`                | required if `emitConfig` |                                                                                             |
+| `wrangler.compatibility_date`  | required if `emitConfig` |                                                                                             |
+| `wrangler.compatibility_flags` | —                        | optional                                                                                    |
+| `wrangler.durable_objects`     | —                        | optional                                                                                    |
+| `wrangler.migrations`          | —                        | optional                                                                                    |
+| `wrangler.services`            | —                        | optional                                                                                    |
+| `wrangler.vars`                | —                        | optional                                                                                    |
+| `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`                                                        |
+| `actions`                      | `"http"`                 | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `actionHeaders`                | —                        | Static headers on the HTTP client                                                           |
 
 `main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 
@@ -154,8 +158,9 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 
 ### Server actions (`*.server.{ts,tsx,js,jsx}`)
 
-- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST `/_action`. The original source stays server-only.
-- `/_action` is POST-only. Non-POST requests return `405`.
+- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
+- Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
+- The endpoint is POST-only. Non-POST requests return `405`.
 - Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
 - Unknown or missing content-types → `415`.
 - Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
