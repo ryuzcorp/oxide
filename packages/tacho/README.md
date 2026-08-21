@@ -40,7 +40,7 @@ await client.user.get({ id: "1" }); // { id: "1", name: "Ada" }
 
 - **Typed end to end** — `typeof router` is the client. Nested paths are `user.get`.
 - **Just JSON-RPC** — batch, notifications, `rpc.*` reserved. Works with any JSON-RPC client.
-- **Runtime-agnostic** — `handle()` is `(Request) => Response`. srvx, Bun, Workers, Node.
+- **Runtime-agnostic** — `handle()` is `(Request) => Promise<Response>`. srvx, Bun, Workers, Node.
 - **Bring your schema** — `zod`, `valibot`, `arktype`, …
 - **Onion middleware** — `return next({ ctx })`. Skip `next()` to skip the handler.
 - **SSE streams** — `async function*` over fetch. `for await` on the client.
@@ -255,7 +255,7 @@ Dropped streams end. Tacho does not reconnect automatically because replaying th
 
 ## WebSocket
 
-Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path` / `createContext` / `onError` as fetch. `sameOrigin` rejects cross-origin browser upgrades; `maxMessageSize` defaults to 1 MB.
+Server via [crossws](https://github.com/h3js/crossws) (optional peer). Same `path`, `createContext`, `onError`, `serializer`, `sameOrigin`, and `maxBatchSize` options as fetch. `sameOrigin` rejects cross-origin browser upgrades; `maxMessageSize` defaults to 1 MB.
 
 > **Security:** The WS handler does not authenticate connections by default. Use `createContext` to verify credentials on every message. An unauthenticated socket can call any procedure.
 

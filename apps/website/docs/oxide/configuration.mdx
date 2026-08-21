@@ -23,6 +23,7 @@ Pass options to `oxide()` in your Vite or Rsbuild config. You can start with `ox
 | [`emitConfig`](#emitconfig)                 | `true` on `celld`        | Whether to write `wrangler.jsonc`                           |
 | [`actions`](#actions)                       | `"http"`                 | Action transport, endpoint path, and same-origin protection |
 | [`actionHeaders`](#actionheaders)           | -                        | Public static headers added by the browser action client    |
+| [`middleware`](#middleware)                 | `[]`                     | Production request middleware, in order                     |
 
 `main` is always `./server.js`. Oxide adds `assets` only when the project has an `index.html`. Unknown Wrangler keys fail the build instead of being silently ignored.
 
@@ -110,3 +111,31 @@ oxide({
 ```
 
 For login tokens, prefer cookies with same-origin protection or compute authorization in your own client/transport integration. Functions cannot be embedded in `actionHeaders`.
+
+## middleware
+
+List modules that run before server actions, your server entry, and static files in the generated production handler. Each module must default-export a function. Return a `Response` to stop the chain, or return `undefined` to continue.
+
+```ts twoslash
+// src/auth.ts
+export default function auth(
+  request: Request,
+  context: { env: unknown; ctx: unknown },
+) {
+  if (!request.headers.has("authorization")) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+}
+```
+
+```ts twoslash
+// vite.config.ts
+import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [oxide({ middleware: ["./src/auth.ts"] })],
+});
+```
+
+Modules run in array order. The second argument contains the runtime's `env` and fetch `ctx`. This option applies to production builds; use your Vite or Rsbuild dev server's Connect middleware during development.

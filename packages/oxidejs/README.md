@@ -95,7 +95,7 @@ const stream = await ticks(10, { signal: ac.signal });
 ac.abort();
 ```
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
 ## Rsbuild
 
@@ -129,6 +129,23 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`                                                        |
 | `actions`                      | `"http"`                 | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
 | `actionHeaders`                | —                        | Static headers on the HTTP client                                                           |
+| `middleware`                   | `[]`                     | Default-exported production fetch middleware, run in order before actions and server entry  |
+
+`middleware` modules receive `(request, { env, ctx })`. They run in array order before actions, the server entry, and assets. Return a `Response` to stop the chain or `undefined` to continue.
+
+```ts
+// src/auth.ts
+export default function auth(request: Request) {
+  if (!request.headers.has("authorization")) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+}
+
+// vite.config.ts
+oxide({ middleware: ["./src/auth.ts"] });
+```
+
+This option applies to production builds; use Connect middleware in Vite or Rsbuild during development.
 
 `main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 

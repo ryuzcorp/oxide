@@ -183,6 +183,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           actions: resolved.actions,
           actionPath: resolved.actionPath,
           actionSameOrigin: resolved.actionSameOrigin,
+          middleware: resolved.middleware,
         });
       }
       if (isServerFileId(id) && pluginShouldStub(this, extra)) {

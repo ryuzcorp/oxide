@@ -223,6 +223,7 @@ export function generateWorkerWrapper(
     actions?: OxidejsActionTransport;
     actionPath?: string;
     actionSameOrigin?: boolean;
+    middleware?: string[];
   } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
@@ -349,12 +350,23 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
     }
     `
       : "";
+  const middlewareImports = (opts.middleware ?? [])
+    .map((spec, i) => `import __mw${i} from ${JSON.stringify(spec)};`)
+    .join("\n");
+  const middlewareList = (opts.middleware ?? []).map((_, i) => `__mw${i}`).join(", ");
+  const middlewareGate = opts.middleware?.length
+    ? `for (const __mw of [${middlewareList}]) {
+      const hit = await __mw(request, { env, ctx });
+      if (hit) return hit;
+    }
+    `
+    : "";
   return `export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
-${actionImports}${assetBlock}const app = {
+${middlewareImports}${actionImports}${assetBlock}const app = {
   ...user,
   async fetch(request, env, ctx) {
-    ${actionGate}${afterAction}
+    ${middlewareGate}${actionGate}${afterAction}
   },
 };
 export default app;

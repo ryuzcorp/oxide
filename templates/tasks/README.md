@@ -1,15 +1,29 @@
-# vite-cf
+# Tasks
 
-To install dependencies:
+A small Oxide app using the default `fetch` preset, Ilha, and typed server actions.
 
-```bash
+It demonstrates:
+
+- `action()` exports from `src/tasks.server.ts`
+- an SSE action stream consumed with `for await`
+- request cancellation with `useRequest().signal`
+- in-memory task storage with `unstorage`
+- an Ilha page in `src/pages/index.tsx`
+
+## Run
+
+```sh
 bun install
+bun run dev
 ```
 
-To run:
+Open the URL printed by Vite.
 
-```bash
-bun run index.ts
+## Build
+
+```sh
+bun run build
+node dist/server.js
 ```
 
-This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Oxide writes the browser bundle to `dist/client/` and the server to `dist/server.js`. The in-memory task store resets when the server process restarts.

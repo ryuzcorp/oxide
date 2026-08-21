@@ -195,6 +195,7 @@ export function resolveOptions(
     actionPath,
     actionSameOrigin,
     actionHeaders: raw?.actionHeaders,
+    middleware: raw?.middleware ?? [],
   };
 }
 

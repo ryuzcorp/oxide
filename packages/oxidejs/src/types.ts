@@ -50,6 +50,11 @@ export interface OxidejsOptions {
 
   /** Extra headers on the shared HTTP action client. Ignored when `actions` is "ws". */
   actionHeaders?: OxidejsActionHeaders;
+
+  /** Module specifiers whose default export is `(request, ctx) => Response | undefined | Promise<Response | undefined>`.
+   * Tried in order at the top of the production fetch handler; a Response short-circuits.
+   * Dev servers use connect middleware instead. */
+  middleware?: string[];
 }
 
 export interface ResolvedOptions {
@@ -73,4 +78,5 @@ export interface ResolvedOptions {
   /** Reject cross-origin action requests (CSRF defense). Default: true. */
   actionSameOrigin: boolean;
   actionHeaders: OxidejsActionHeaders | undefined;
+  middleware: string[];
 }
