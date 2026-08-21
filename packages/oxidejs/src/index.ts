@@ -193,7 +193,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
       return;
     },
     transform(code, id, extra?: { ssr?: boolean }) {
-      if (!isServerFileId(id) || !pluginShouldStub(this, extra)) return;
+      if (
+        !isServerFileId(id) ||
+        !pluginShouldStub(this, extra) ||
+        code.startsWith("// oxidejs:client-stub\n")
+      )
+        return;
       return generateClientStub({
         key: moduleKey(id.split("?")[0] ?? id),
         exports: parseExportedNames(code),

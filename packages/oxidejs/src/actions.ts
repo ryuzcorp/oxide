@@ -119,7 +119,10 @@ export const client = createClient(${JSON.stringify(opts)});
 }
 
 export function generateClientStub(mod: Pick<ServerModule, "key" | "exports">): string {
-  const lines = [`import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`];
+  const lines = [
+    `// oxidejs:client-stub`,
+    `import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`,
+  ];
   for (const name of mod.exports) {
     lines.push(
       `export const ${name} = (...args) => {

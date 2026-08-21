@@ -71,6 +71,7 @@ describe("factory shape", () => {
       };
       expect(load.call(serverCtx, file)).toBeUndefined();
       const transform = plugin.transform as (this: object, code: string, id: string) => unknown;
+      expect(transform.call(ctx, String(stub), file)).toBeUndefined();
       const leaked = transform.call(ctx, source, file);
       expect(String(leaked)).not.toContain("leak-me");
       expect(String(leaked)).toContain('client["secret"]["ping"]');
