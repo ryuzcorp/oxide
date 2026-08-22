@@ -183,7 +183,11 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           actions: resolved.actions,
           actionPath: resolved.actionPath,
           actionSameOrigin: resolved.actionSameOrigin,
-          middleware: resolved.middleware,
+          middleware: resolved.middleware as never,
+          imports: resolved.imports,
+          bodyLimit: resolved.bodyLimit,
+          notFound: resolved.notFound,
+          env: resolved.env,
         });
       }
       if (isServerFileId(id) && pluginShouldStub(this, extra)) {
@@ -225,6 +229,49 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
           return mod.default;
         };
+
+        // Dev parity for the production middleware/imports options: load the
+        // same specifiers through the SSR graph and adapt them to connect.
+        if ((resolved?.middleware?.length ?? 0) > 0 || (resolved?.imports?.length ?? 0) > 0) {
+          void (async () => {
+            try {
+              for (const spec of resolved!.imports ?? []) await server.ssrLoadModule(spec);
+              const handlers: Array<(request: Request) => Promise<Response | undefined>> = [];
+              for (const entry of resolved!.middleware ?? []) {
+                const spec2 = typeof entry === "string" ? entry : entry.module;
+                const mod = (await server.ssrLoadModule(spec2)) as {
+                  default?: (
+                    request: Request,
+                  ) => Response | undefined | Promise<Response | undefined>;
+                };
+                if (typeof mod.default !== "function") continue;
+                const fn = mod.default;
+                handlers.push((request) => Promise.resolve(fn(request)));
+              }
+              if (handlers.length === 0) return;
+              const { nodeToWebRequest, sendWebResponseFrom } = await import("./actions");
+              server.middlewares.use((creq, cres, next) => {
+                void (async () => {
+                  try {
+                    const request = await nodeToWebRequest(creq);
+                    for (const handler of handlers) {
+                      const hit = await handler(request);
+                      if (hit) return sendWebResponseFrom(creq, cres, hit);
+                    }
+                    next();
+                  } catch (error) {
+                    cres.statusCode = 500;
+                    cres.end(String(error));
+                  }
+                })();
+              });
+            } catch (error) {
+              server.config.logger.error(
+                "oxidejs: failed to wire dev middleware: " + String(error),
+              );
+            }
+          })();
+        }
         if (resolved?.actions === "ws")
           attachActionUpgrade(
             server.httpServer,

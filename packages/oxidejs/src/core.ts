@@ -196,6 +196,10 @@ export function resolveOptions(
     actionSameOrigin,
     actionHeaders: raw?.actionHeaders,
     middleware: raw?.middleware ?? [],
+    imports: raw?.imports ?? [],
+    bodyLimit: raw?.bodyLimit ?? 1048576,
+    notFound: raw?.notFound,
+    env: raw?.env,
   };
 }
 

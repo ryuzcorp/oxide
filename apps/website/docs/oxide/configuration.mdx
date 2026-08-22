@@ -138,4 +138,69 @@ export default defineConfig({
 });
 ```
 
-Modules run in array order. The second argument contains the runtime's `env` and fetch `ctx`. This option applies to production builds; use your Vite or Rsbuild dev server's Connect middleware during development.
+Modules run in array order, before the action gate. The second argument contains the runtime's `env` and fetch `ctx`. The same handlers are loaded through the SSR graph in development, so dev and production behave identically.
+
+Entries can also be objects that carry their own side-effect imports — modules loaded at startup before the handler runs:
+
+```ts twoslash
+// vite.config.ts
+import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [
+    oxide({
+      middleware: [
+        {
+          module: "@ilha/router/ssr",
+          imports: ["ilha:pages/server", "ilha:loaders"],
+        },
+      ],
+    }),
+  ],
+});
+```
+
+## imports
+
+Module specifiers imported for side effects at the top of the generated server bundle — for virtual modules or integrations that self-register handlers. Also loaded once during development.
+
+```ts twoslash
+// vite.config.ts
+import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [oxide({ imports: ["./src/register-handlers.ts"] })],
+});
+```
+
+## bodyLimit
+
+Maximum request body size in bytes on the Node preset. Larger requests receive `413 Payload Required`. Defaults to 1 MiB.
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({ bodyLimit: 4 * 1024 * 1024 });
+```
+
+## notFound
+
+Custom HTML served with a 404 status when no action, user fetch, route, or asset handled the request (fetch preset). Defaults to a minimal `<h1>404 Not Found</h1>`.
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({ notFound: "<h1>Page not found</h1>" });
+```
+
+## env
+
+Extra values passed as the second argument to `fetch(request, env, ctx)` on the Node preset. Read them with [`useEnv()`](/tacho/context).
+
+```ts twoslash
+import oxide from "oxidejs/vite";
+
+oxide({ env: { API_ORIGIN: "https://api.example.com" } });
+```

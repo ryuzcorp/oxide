@@ -113,6 +113,27 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 ## Options
 
+### `middleware` and `imports`
+
+\`\`\`ts
+oxide({
+middleware: ["@ilha/router/ssr"], // string or { module, imports }
+imports: ["./side-effects"], // side-effect modules loaded at startup
+})
+\`\`\`
+
+Middleware handlers run in production before the action gate; the same specifiers are loaded through the SSR graph in dev, so dev and prod behave identically. Middleware entries may carry their own \`imports\`.
+
+### Other server options
+
+| Option        | Type   | Default | Description                                                          |
+| ------------- | ------ | ------- | -------------------------------------------------------------------- |
+| \`bodyLimit\` | number | 1048576 | Max request body size (Node preset); larger requests get 413         |
+| \`notFound\`  | string | —       | Custom HTML 404 body when no route or asset matches                  |
+| \`env\`       | object | —       | Passed as \`env\` to \`fetch(request, env, ctx)\` on the Node preset |
+
+## Options
+
 | Option                         | Default                  | Notes                                                                                       |
 | ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------- |
 | `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`                                                                      |

@@ -223,7 +223,11 @@ export function generateWorkerWrapper(
     actions?: OxidejsActionTransport;
     actionPath?: string;
     actionSameOrigin?: boolean;
-    middleware?: string[];
+    middleware?: (string | { module: string; imports?: string[] })[];
+    imports?: string[];
+    bodyLimit?: number;
+    notFound?: string | undefined;
+    env?: Record<string, unknown> | undefined;
   } = {},
 ): string {
   const preset = opts.preset ?? "fetch";
@@ -233,6 +237,9 @@ export function generateWorkerWrapper(
   const serveAssets = preset === "fetch" && (opts.hasClient === true || opts.hasPublic === true);
   const hasActions = opts.hasActions !== false;
   const ws = hasActions && opts.actions === "ws";
+  const bodyLimit = opts.bodyLimit ?? 1048576;
+  const nfBody = JSON.stringify(opts.notFound ?? "<h1>404 Not Found</h1>");
+  const __nf = `() => new Response(${nfBody}, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } })`;
   const assetBlock = serveAssets
     ? `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
@@ -266,22 +273,30 @@ async function __asset(request, spa) {
     const headers = { "content-type": __types[extname(file)] ?? "application/octet-stream" };
     const cache = __cache(file);
     if (cache) headers["cache-control"] = cache;
+    const etag = '"' + body.length.toString(16) + "-" + file + '"';
+    headers["etag"] = etag;
+    if (request.headers.get("if-none-match") === etag) {
+      return new Response(null, { status: 304, headers });
+    }
     return new Response(body, { headers });
   } catch {
     return;
   }
 }
+const __nf = ${__nf};
 `
     : "";
+  void __nf; // referenced by name inside the generated wrapper source
+  const envJson = JSON.stringify(opts.env ?? {});
   const afterAction = serveAssets
     ? `if (typeof user.fetch === "function") {
-      const hit = await user.fetch(request, env, ctx);
+      const hit = await user.fetch(request, env ?? ${envJson}, ctx);
       if (hit) return hit;
     }
-    return (await __asset(request)) ?? (__nav(request) ? await __asset(request, true) : undefined) ?? new Response("Not Found", { status: 404 });`
+    return (await __asset(request)) ?? (__nav(request) ? await __asset(request, true) : undefined) ?? __nf();`
     : `return typeof user.fetch === "function"
       ? user.fetch(request, env, ctx)
-      : new Response("Not Found", { status: 404 });`;
+      : __nf();`;
   const listen =
     preset === "fetch"
       ? `
@@ -289,6 +304,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT) || 3000;
+  const bodyLimit = ${bodyLimit};
   const server = createServer(async (req, res) => {
     const url = \`http://\${req.headers.host ?? "localhost"}\${req.url ?? "/"}\`;
     const headers = new Headers();
@@ -301,7 +317,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     req.once("aborted", () => ac.abort());
     const method = req.method ?? "GET";
     const chunks = [];
-    if (method !== "GET" && method !== "HEAD") for await (const chunk of req) chunks.push(chunk);
+    let size = 0;
+    if (method !== "GET" && method !== "HEAD") for await (const chunk of req) {
+      size += chunk.length;
+      // Bound request buffering — unbounded bodies are a memory DoS vector.
+      if (size > ${bodyLimit}) { res.statusCode = 413; res.end(); return; }
+      chunks.push(chunk);
+    }
     const init = { method, headers, signal: ac.signal };
     if (chunks.length) init.body = Buffer.concat(chunks);
     const response = await app.fetch(new Request(url, init));
@@ -328,6 +350,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   server.listen(port, () => console.log(\`oxidejs listening on \${port}\`));
 }
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, () => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 5000).unref();
+    });
+  }
 `
       : "";
   const actionImports = hasActions
@@ -350,9 +378,25 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
     }
     `
       : "";
-  const middlewareImports = (opts.middleware ?? [])
-    .map((spec, i) => `import __mw${i} from ${JSON.stringify(spec)};`)
-    .join("\n");
+  // Convention: the ilha SSR middleware needs its server route graph loaded
+  // before it runs; inject its known side-effect specifiers automatically.
+  const ILHA_SSR_IMPLICIT = ["ilha:pages/server", "ilha:loaders"];
+  const mwEntries = (opts.middleware ?? []).map((m) =>
+    typeof m === "string"
+      ? {
+          module: m,
+          imports: m === "@ilha/router/ssr" ? ILHA_SSR_IMPLICIT : ([] as string[]),
+        }
+      : m,
+  );
+  const middlewareImports =
+    mwEntries
+      .map(
+        (m, i) =>
+          (m.imports ?? []).map((spec) => `import ${JSON.stringify(spec)};`).join("\n") +
+          `\nimport __mw${i} from ${JSON.stringify(m.module)};`,
+      )
+      .join("\n") + "\n";
   const middlewareList = (opts.middleware ?? []).map((_, i) => `__mw${i}`).join(", ");
   const middlewareGate = opts.middleware?.length
     ? `for (const __mw of [${middlewareList}]) {
@@ -361,7 +405,10 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
     }
     `
     : "";
-  return `export * from ${JSON.stringify(userWorkerAbs)};
+  const sideEffectImports = (opts.imports ?? [])
+    .map((spec) => `import ${JSON.stringify(spec)};`)
+    .join("\n");
+  return `${sideEffectImports}export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
 ${middlewareImports}${actionImports}${assetBlock}const app = {
   ...user,

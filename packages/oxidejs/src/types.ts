@@ -54,7 +54,23 @@ export interface OxidejsOptions {
   /** Module specifiers whose default export is `(request, ctx) => Response | undefined | Promise<Response | undefined>`.
    * Tried in order at the top of the production fetch handler; a Response short-circuits.
    * Dev servers use connect middleware instead. */
-  middleware?: string[];
+  middleware?: (string | { module: string; imports?: string[] })[];
+
+  /** Module specifiers imported for side effects at the top of the production
+   * server bundle (e.g. virtual modules that self-register handlers). */
+  imports?: string[];
+
+  /** Max request body size in bytes (Node preset). Larger requests get 413.
+   * Default: 1048576 (1 MiB). */
+  bodyLimit?: number;
+
+  /** Custom 404 body (HTML) served when no route, asset, or user fetch
+   * handled the request (fetch preset with client assets). */
+  notFound?: string;
+
+  /** Extra env passed as the second argument to fetch(request, env, ctx) on
+   * the Node fetch preset — read it with useEnv(). */
+  env?: Record<string, unknown>;
 }
 
 export interface ResolvedOptions {
@@ -78,5 +94,9 @@ export interface ResolvedOptions {
   /** Reject cross-origin action requests (CSRF defense). Default: true. */
   actionSameOrigin: boolean;
   actionHeaders: OxidejsActionHeaders | undefined;
-  middleware: string[];
+  middleware: (string | { module: string; imports?: string[] })[];
+  imports: string[];
+  bodyLimit: number;
+  notFound: string | undefined;
+  env: Record<string, unknown> | undefined;
 }

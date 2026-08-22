@@ -37,7 +37,7 @@
     },
     "packages/oxidejs": {
       "name": "oxidejs",
-      "version": "0.1.10",
+      "version": "0.2.0",
       "dependencies": {
         "unplugin": "^3.3.0",
       },
