@@ -16,7 +16,7 @@ import {
   scanServerFiles,
   shouldStubServerModule,
 } from "./actions";
-import { useCtx, useEnv, useFetchCtx, useRequest } from "./context";
+import { action, runWithRequest, useCtx, useEnv, useFetchCtx, useRequest } from "./context";
 
 describe("parseExportedNames", () => {
   test("finds only action-marked exports (functions, generators, consts)", () => {
@@ -187,7 +187,7 @@ describe("codegen", () => {
     expect(code).toContain('import actions from "virtual:oxide/actions"');
     expect(code).toContain('pathname === "/__oxide/action"');
     expect(code).toContain("request[__fetch]");
-    expect(code).toContain("await user.fetch(request, env, ctx)");
+    expect(code).toContain("await user.fetch(request, env ?? {}, ctx)");
     expect(code).toContain("if (hit) return hit");
     expect(code).toContain('from "node:fs/promises"');
     expect(code).toContain("await __asset(request)");
@@ -213,7 +213,8 @@ describe("codegen", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { preset: "celld" });
     expect(code).not.toContain("node:fs/promises");
     expect(code).not.toContain("createServer");
-    expect(code).toContain('new Response("Not Found", { status: 404 })');
+    expect(code).toContain('__nf = () => new Response("<h1>404 Not Found</h1>", { status: 404');
+    expect(code).toContain(": __nf()");
     expect(code).toContain("export * from");
     expect(code).toContain("...user");
   });
@@ -604,13 +605,39 @@ export const who = action(async () => useRequest().headers.get("x-user"))
         }),
       );
       expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "ada" });
-      expect(() => useRequest()).toThrow("outside an action");
-      expect(() => useCtx()).toThrow("outside an action");
-      expect(() => useEnv()).toThrow("outside an action");
-      expect(() => useFetchCtx()).toThrow("outside an action");
+      expect(() => useRequest()).toThrow("request context is unavailable");
+      expect(() => useCtx()).toThrow("request context is unavailable");
+      expect(() => useEnv()).toThrow("request context is unavailable");
+      expect(() => useFetchCtx()).toThrow("request context is unavailable");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("action adds typed cancellation without changing the function", async () => {
+    const pingFn = async () => "pong" as const;
+    const ping = action(pingFn);
+    const echo = action(async (value: string) => value);
+    const signal = new AbortController().signal;
+
+    expect(ping).toBe(pingFn);
+    expect(await ping({ signal })).toBe("pong");
+    expect(await echo("ok", { signal })).toBe("ok");
+  });
+
+  test("runWithRequest always provides the current Request", () => {
+    const controller = new AbortController();
+    const request = new Request("http://localhost/frame", { signal: controller.signal });
+
+    runWithRequest(
+      request,
+      () => {
+        expect(useRequest()).toBe(request);
+        expect(useRequest().signal).toBe(controller.signal);
+        expect(useEnv<{ TASKS: boolean }>()).toEqual({ TASKS: true });
+      },
+      { req: new Request("http://wrong/"), env: { TASKS: true } },
+    );
   });
 
   test("useEnv() and useFetchCtx() read tacho ctx extras", async () => {

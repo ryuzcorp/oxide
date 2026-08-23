@@ -240,6 +240,8 @@ export function generateWorkerWrapper(
   const bodyLimit = opts.bodyLimit ?? 1048576;
   const nfBody = JSON.stringify(opts.notFound ?? "<h1>404 Not Found</h1>");
   const __nf = `() => new Response(${nfBody}, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } })`;
+  void __nf; // referenced by name inside the generated wrapper source
+  const nfBlock = `const __nf = ${__nf};\n`;
   const assetBlock = serveAssets
     ? `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
@@ -283,10 +285,8 @@ async function __asset(request, spa) {
     return;
   }
 }
-const __nf = ${__nf};
 `
     : "";
-  void __nf; // referenced by name inside the generated wrapper source
   const envJson = JSON.stringify(opts.env ?? {});
   const afterAction = serveAssets
     ? `if (typeof user.fetch === "function") {
@@ -373,11 +373,13 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
   const actionGate =
     hasActions && !ws
       ? `if (new URL(request.url).pathname === ${JSON.stringify(actionPath)}) {
-      request[__fetch] = { env, fetchCtx: ctx };
       return __rpc(request);
     }
     `
       : "";
+  // Establish the action context (env, fetch ctx) for every request — not just
+  // /__oxide/action — so SSR middlewares (e.g. @ilha/router frames) render
+  // islands with useEnv()/useRequest() intact.
   // Convention: the ilha SSR middleware needs its server route graph loaded
   // before it runs; inject its known side-effect specifiers automatically.
   const ILHA_SSR_IMPLICIT = ["ilha:pages/server", "ilha:loaders"];
@@ -410,9 +412,10 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
     .join("\n");
   return `${sideEffectImports}export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
-${middlewareImports}${actionImports}${assetBlock}const app = {
+${middlewareImports}${actionImports}${assetBlock}${nfBlock}const app = {
   ...user,
   async fetch(request, env, ctx) {
+    request[__fetch] = { env, fetchCtx: ctx };
     ${middlewareGate}${actionGate}${afterAction}
   },
 };

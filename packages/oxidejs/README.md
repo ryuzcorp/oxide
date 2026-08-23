@@ -76,15 +76,15 @@ export default {
 };
 ```
 
-`action()` is identity — it only marks the export. Wrap `async function*` in it to stream over tacho SSE. `oxidejs/tsconfig` makes `await ticks()` typecheck. Pass `{ signal }` last on any action to abort the fetch. Types come from the real `*.server.ts`, so declare the last argument there:
+`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over tacho SSE. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts
 // src/test.server.ts
-import { action } from "oxidejs";
-import type { ActionOptions } from "oxidejs";
+import { action, useRequest } from "oxidejs";
 
-export const ticks = action(async function* (n: number, _opts?: ActionOptions) {
-  for (let i = 0; i < n; i++) yield i;
+export const ticks = action(async function* (n: number) {
+  const { signal } = useRequest();
+  for (let i = 0; i < n && !signal.aborted; i++) yield i;
 });
 
 // src/client.ts

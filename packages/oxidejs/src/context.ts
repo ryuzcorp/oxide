@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 const ALS_KEY = Symbol.for("oxidejs.requestContext");
+const FETCH_KEY = Symbol.for("oxidejs.fetch");
 
 export type ExecutionContext = {
   waitUntil?(promise: Promise<unknown>): void;
@@ -25,16 +26,16 @@ function als(): AsyncLocalStorage<ActionContext> {
 
 function store(): ActionContext {
   const current = als().getStore();
-  if (!current) throw new Error("oxidejs: useRequest() called outside an action");
+  if (!current) throw new Error("oxidejs: request context is unavailable");
   return current;
 }
 
-/** Current tacho `ctx`. Throws outside `*.server.ts` running over `/__oxide/action`. */
+/** Current tacho or host request context. Throws outside request handling. */
 export function useCtx<C extends ActionContext = ActionContext>(): C {
   return store() as C;
 }
 
-/** Current action `Request`. Throws outside `*.server.ts` running over `/__oxide/action`. */
+/** Current server `Request`. Available in actions, SSR, and frame renders. */
 export function useRequest(): Request {
   return store().req;
 }
@@ -49,18 +50,27 @@ export function useFetchCtx(): ExecutionContext | undefined {
   return store().fetchCtx;
 }
 
-export function runWithRequest<T>(req: Request, fn: () => T, extra?: ActionContext): T {
-  return als().run(extra ?? { req }, fn);
+export function runWithRequest<T>(req: Request, fn: () => T, extra?: Partial<ActionContext>): T {
+  return als().run({ ...extra, req }, fn);
 }
 
-/** Optional last argument on a `*.server.ts` export so the client can pass `{ signal }`. */
-export type ActionOptions = { signal?: AbortSignal };
+// Install a globalThis slot so host frameworks can enter the action scope
+// around their own request handling — same pattern as the Symbol.for keys
+// above. @ilha/router's frame/SSR middleware consults this so `useRequest()`
+// and `useEnv()` work outside `/__oxide/action` too.
+const HOOK_KEY = Symbol.for("oxidejs.runWithRequest");
+(globalThis as AlsGlobal)[HOOK_KEY] ??= (req: Request, fn: () => unknown) => {
+  // SAFETY: the generated wrapper stores Partial<ActionContext> under this shared Symbol.for key.
+  const extra = (req as unknown as Record<symbol, Partial<ActionContext> | undefined>)[FETCH_KEY];
+  return runWithRequest(req, fn as () => unknown, extra);
+};
 
 /**
- * Marks a `*.server.ts` export as a remote RPC action. Identity: returns `fn` unchanged.
- * Only exports wrapped in `action()` become callable over the wire; other exports stay
- * server-local. Wrap async functions and async generators.
+ * Marks a `*.server.ts` export as a remote RPC action. Runtime identity; the
+ * second call signature adds the transport-only `{ signal }` argument.
  */
-export function action<T>(fn: T): T {
-  return fn;
+export function action<Args extends unknown[], Result>(fn: (...args: Args) => Result) {
+  // SAFETY: the client transform removes the final options object before RPC dispatch;
+  // server and in-process calls still execute this original function unchanged.
+  return fn as typeof fn & ((...args: [...Args, options: { signal?: AbortSignal }]) => Result);
 }

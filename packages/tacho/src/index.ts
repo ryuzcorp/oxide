@@ -37,6 +37,8 @@ export const JSON_RPC_ERROR = {
 
 export const APP_ERROR_RANGE = { min: -32099, max: -32000 } as const;
 
+export { Publisher } from "./pubsub";
+
 export class RpcError extends Error {
   readonly code: number;
   readonly data?: unknown;
@@ -75,7 +77,7 @@ export type ProcedureDef<C extends Context, In, Out> = {
   inputSchema?: Schema<In> | undefined;
   outputSchema?: Schema<Out> | undefined;
   middlewares: Middleware<C>[];
-  run: (opts: { input: In; ctx: C }) => Out | Promise<Out>;
+  run: (opts: { input: In; ctx: C; signal: AbortSignal }) => Out | Promise<Out>;
 };
 
 export type AnyRouter = {
@@ -99,8 +101,12 @@ type Builder<C extends Context, In = undefined, Out = Unset> = {
   input<Next>(schema: Schema<Next>): Builder<C, Next, Out>;
   output<Next>(schema: Schema<Next>): Builder<C, In, Next>;
   run: [Out] extends [Unset]
-    ? <R>(fn: (opts: { input: In; ctx: C }) => R | Promise<R>) => ProcedureDef<C, In, R>
-    : (fn: (opts: { input: In; ctx: C }) => HandlerResult<Out>) => ProcedureDef<C, In, Out>;
+    ? <R>(
+        fn: (opts: { input: In; ctx: C; signal: AbortSignal }) => R | Promise<R>,
+      ) => ProcedureDef<C, In, R>
+    : (
+        fn: (opts: { input: In; ctx: C; signal: AbortSignal }) => HandlerResult<Out>,
+      ) => ProcedureDef<C, In, Out>;
 };
 
 async function parseWith(
@@ -119,6 +125,7 @@ const builder = <C extends Context, In = undefined, Out = Unset>(
   inputSchema?: Schema<In>,
   outputSchema?: Schema,
 ): Builder<C, In, Out> =>
+  // SAFETY: assigned methods exactly implement Builder; TypeScript cannot infer Object.assign's recursive generic shape.
   Object.assign(<T extends AnyRouter>(def: T): T => def, {
     use(mw: Middleware<C>) {
       return builder<C, In, Out>([...middlewares, mw], inputSchema, outputSchema);
@@ -129,21 +136,31 @@ const builder = <C extends Context, In = undefined, Out = Unset>(
     output<Next>(schema: Schema<Next>) {
       return builder<C, In, Next>(middlewares, inputSchema, schema);
     },
-    run(fn: (opts: { input: In; ctx: C }) => unknown) {
+    run(fn: (opts: { input: In; ctx: C; signal: AbortSignal }) => unknown) {
       const call = (async (input?: In, ctx?: C) => {
         const value = await parseWith(inputSchema, input, {
           code: JSON_RPC_ERROR.INVALID_PARAMS,
           message: "Invalid params",
         });
+        const controller = new AbortController();
         const result = await applyMiddleware(middlewares, ctx ?? ({} as C), (nextCtx) =>
-          fn({ input: value as In, ctx: nextCtx }),
+          fn({ input: value as In, ctx: nextCtx, signal: controller.signal }),
         );
         if (isAsyncGenerator(result)) {
-          if (!outputSchema) return result;
-          return (async function* () {
+          // Abort the procedure signal when its stream is closed (client
+          // disconnect, batch cancel, or explicit .return()).
+          const rawReturn = result.return.bind(result);
+          const stream = Object.assign(result, {
+            return: (closed?: unknown) => {
+              controller.abort();
+              return rawReturn(closed);
+            },
+          });
+          if (!outputSchema) return stream;
+          const wrapped = (async function* () {
             let next: unknown;
             for (;;) {
-              const step = await result.next(next);
+              const step = await stream.next(next);
               if (step.done) {
                 if (step.value !== undefined) {
                   return await parseWith(outputSchema, step.value, {
@@ -159,6 +176,15 @@ const builder = <C extends Context, In = undefined, Out = Unset>(
               });
             }
           })();
+          // Delegate close to `stream` first: `wrapped` is suspended at
+          // stream.next(), which cannot settle until the signal aborts.
+          const rawWrappedReturn = wrapped.return.bind(wrapped);
+          return Object.assign(wrapped, {
+            return: (closed?: unknown) => {
+              void stream.return(closed).catch(() => {});
+              return rawWrappedReturn(closed);
+            },
+          });
         }
         return parseWith(outputSchema, result, {
           code: JSON_RPC_ERROR.INTERNAL_ERROR,
@@ -356,6 +382,7 @@ export function createProxyClient<R, E extends object = {}>(
   extras?: E,
 ): RPCClient<R> & E {
   const proxy = (path: string[]): RPCClient<R> & E =>
+    // SAFETY: get/apply dynamically implement the recursive RPCClient surface TypeScript cannot model.
     new Proxy(() => {}, {
       get(_target, key) {
         if (typeof key !== "string") return undefined;

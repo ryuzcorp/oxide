@@ -58,6 +58,61 @@ export const serverOnlyLabel = "not remotely callable";
 
 This explicit marker prevents an exported helper from accidentally becoming a public endpoint. `action()` does not validate input or authorize users. Treat action arguments as untrusted data, validate them, and check the current user before reading or changing private data.
 
+## Reuse authorization and context
+
+Use a higher-order function for action middleware. Keep `action()` as the outer call so Oxide recognizes the export:
+
+```ts twoslash src/profile.server.ts
+// @filename: db.ts
+export type User = { id: string; role: "user" | "admin" };
+export declare const db: {
+  users: { findByToken(token: string): Promise<User | undefined> };
+  profiles: {
+    find(userId: string): Promise<{ name: string } | undefined>;
+    update(userId: string, input: { name: string }): Promise<void>;
+  };
+};
+// ---cut---
+// @filename: profile.server.ts
+import { action, useRequest } from "oxidejs";
+import { RpcError } from "tacho";
+import { db, type User } from "./db";
+
+function withUser<Args extends unknown[], Result>(
+  handler: (user: User, ...args: Args) => Result,
+) {
+  return async (...args: Args) => {
+    const authorization = useRequest().headers.get("authorization");
+    if (!authorization) {
+      throw new RpcError({ code: -32001, message: "Unauthorized" });
+    }
+
+    const user = await db.users.findByToken(authorization);
+    if (!user) {
+      throw new RpcError({ code: -32001, message: "Unauthorized" });
+    }
+
+    return handler(user, ...args);
+  };
+}
+
+export const profile = action(
+  withUser((user) => db.profiles.find(user.id)),
+);
+```
+
+The client calls `profile()` without supplying `user`. The wrapper reads the request, loads the user, and passes it only to the server handler. Other handler arguments remain typed client input:
+
+```ts
+export const update = action(
+  withUser((user, name: string) =>
+    db.profiles.update(user.id, { name }),
+  ),
+);
+```
+
+Keep authorization wrappers server-only. Throw `RpcError` for an intentional wire error; do not return authentication tokens, database credentials, or other secrets.
+
 ## Stream values
 
 Wrap an `async function*` to stream values over [tacho SSE](/tacho/sse-streaming):
@@ -88,21 +143,16 @@ Breaking the `for await` loop or calling `await stream.return()` cleans up the s
 
 ## Cancel a call
 
-Pass `{ signal }` as the final argument. Declare the optional argument in the real server function so TypeScript knows it exists:
+Pass `{ signal }` as the final argument. `action()` adds that transport-only argument to the function type. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts twoslash src/abort.ts
 // @filename: test.server.ts
-import { action } from "oxidejs";
-import type { ActionOptions } from "oxidejs";
+import { action, useRequest } from "oxidejs";
 
-export const ping = action(
-  async (_options?: ActionOptions) => "pong" as const,
-);
-export const ticks = action(async function* (
-  count: number,
-  _options?: ActionOptions,
-) {
-  for (let i = 0; i < count; i++) yield i;
+export const ping = action(async () => "pong" as const);
+export const ticks = action(async function* (count: number) {
+  const { signal } = useRequest();
+  for (let i = 0; i < count && !signal.aborted; i++) yield i;
 });
 // ---cut---
 // @filename: abort.ts
@@ -120,7 +170,7 @@ Inside the action, `useRequest().signal` follows the same abort.
 
 ### `useRequest()`
 
-`useRequest()` returns the inbound `Request`. It throws when called outside an action:
+`useRequest()` returns the current server `Request` in actions, SSR, and frame renders. It throws outside request handling:
 
 ```ts twoslash src/who.server.ts
 import { action, useRequest } from "oxidejs";

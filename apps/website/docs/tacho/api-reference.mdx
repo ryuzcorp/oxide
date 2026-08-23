@@ -2,39 +2,168 @@
 title: API Reference
 sidebar:
   icon: book-marked
-description: A short list of every public export, with links to the pages that explain them.
+description: Every public Tacho export and entrypoint.
 ---
 
-## `tacho`
+## Router and procedures
 
-| export                    | from    |                                                                                                                  |
-| ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| `tacho()`                 | `tacho` | Procedure builder. Call it as `rpc({ ... })` to make a [router](/tacho/router).                                  |
-| `router(def)`             | `tacho` | Identity helper. Same as `rpc({ ... })`.                                                                         |
-| `RpcError`                | `tacho` | Throw from a procedure or [middleware](/tacho/middleware). See [errors](/tacho/error-handling).                  |
-| `JSON_RPC_ERROR`          | `tacho` | `-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal. |
-| `APP_ERROR_RANGE`         | `tacho` | `{ min: -32099, max: -32000 }` for your own codes.                                                               |
-| `toOpenRpc(router, info)` | `tacho` | Walk a router into an [OpenRPC](/tacho/openrpc) document.                                                        |
+```ts
+import { tacho } from "tacho";
 
-## Transports
+const rpc = tacho<{ req: Request }>();
 
-| export                  | from                    |                                                                                            |
-| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
-| `handle(router, opts?)` | `tacho/transport/fetch` | `(Request) => Promise<Response>`. [HTTP](/tacho/transport/http).                           |
-| `createClient(opts)`    | `tacho/client/http`     | Typed proxy over POST.                                                                     |
-| `handle(router, opts?)` | `tacho/transport/ws`    | [crossws](https://github.com/h3js/crossws) hooks. [WebSocket](/tacho/transport/websocket). |
-| `createClient(opts)`    | `tacho/client/ws`       | One socket. `.ready` and `.close()`.                                                       |
+export const router = rpc({
+  ping: rpc.run(({ ctx, signal }) => {
+    signal.throwIfAborted();
+    return ctx.req.url;
+  }),
+});
+```
 
-A `File` or `Blob` in params or the result is [Files](/tacho/files). An `async function*` is [SSE](/tacho/sse-streaming).
+| export             | description                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `tacho<C>()`       | Creates a procedure builder. Call the builder as `rpc({ ... })` to make a [router](/tacho/router). |
+| `router(def)`      | Typed identity helper for an existing router definition.                                           |
+| `rpc.input(s)`     | Returns a builder that validates procedure input with a Standard Schema.                           |
+| `rpc.output(s)`    | Returns a builder that validates procedure output and every streamed yield.                        |
+| `rpc.use(mw)`      | Returns a builder with onion [middleware](/tacho/middleware).                                      |
+| `rpc.run(handler)` | Creates a procedure. The handler receives `{ input, ctx, signal }`.                                |
 
-## Low-level
+A procedure is callable in-process. Closing an async-generator result aborts its `signal`.
 
-For a custom transport.
+## Errors
+
+| export            | description                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `RpcError`        | Throw from a procedure or middleware to return a custom JSON-RPC error. Clients receive and throw it too.        |
+| `JSON_RPC_ERROR`  | `-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal. |
+| `APP_ERROR_RANGE` | `{ min: -32099, max: -32000 }`, the reserved range for application errors.                                       |
+
+```ts
+import { RpcError, tacho } from "tacho";
+
+const rpc = tacho();
+
+const secret = rpc.run(() => {
+  throw new RpcError({ code: -32001, message: "Forbidden" });
+});
+```
+
+See [error handling](/tacho/error-handling).
+
+## `Publisher`
+
+Typed, in-memory pub/sub for live streams. It is isolated to one process or Worker isolate and has no replay or persistence.
+
+```ts
+import { Publisher } from "tacho";
+
+const events = new Publisher<{ change: { id: string } }>();
+const signal = new AbortController().signal;
+
+const stream = events.subscribe("change", { signal });
+const next = events.once("change", { signal });
+events.publish("change", { id: "1" });
+await next;
+```
+
+| method                          | description                                                         |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `publish(event, payload)`       | Delivers the payload to every current subscriber for that event.    |
+| `subscribe(event, { signal }?)` | Returns an ordered async generator. Abort or `.return()` closes it. |
+| `once(event, { signal }?)`      | Resolves with the next payload, or `undefined` when closed first.   |
+
+Queues are unbounded per subscriber. Keep publishers and subscribers in the same isolate. Use storage or an external bus for durable or cross-isolate events.
+
+## Fetch transport
+
+```ts
+import { handle } from "tacho/transport/fetch";
+
+export default handle(router, {
+  path: "/rpc",
+  sameOrigin: true,
+  maxBodySize: 1_048_576,
+  maxBatchSize: 20,
+});
+```
+
+### `handle(router, options?)`
+
+Returns `(request: Request) => Promise<Response>`.
+
+| `HandleOptions` | type                       | default     |
+| --------------- | -------------------------- | ----------- |
+| `createContext` | `(request) => context`     | `{}`        |
+| `path`          | `string`                   | every path  |
+| `onError`       | `(error, request) => void` | —           |
+| `maxBodySize`   | `number`                   | `1_048_576` |
+| `maxBatchSize`  | `number`                   | `20`        |
+| `serializer`    | `Serializer`               | JSON        |
+| `sameOrigin`    | `boolean`                  | `false`     |
+| `heartbeatMs`   | `number`                   | disabled    |
+
+`sameOrigin` rejects cross-origin browser requests. Enable it when cookie-authenticated RPC does not need cross-origin access. Async generators stream over SSE. `File` and `Blob` values use multipart responses. See [HTTP](/tacho/transport/http), [SSE](/tacho/sse-streaming), and [files](/tacho/files).
+
+### `createClient(options)`
+
+Import from `tacho/client/http`. Returns the typed router proxy.
+
+| `ClientOptions` | type                                                         | default      |
+| --------------- | ------------------------------------------------------------ | ------------ |
+| `url`           | `string`                                                     | required     |
+| `headers`       | `HeadersInit \| (() => HeadersInit \| Promise<HeadersInit>)` | —            |
+| `fetch`         | `typeof fetch`                                               | global fetch |
+| `signal`        | `AbortSignal`                                                | —            |
+| `serializer`    | `Serializer`                                                 | JSON         |
+
+Every client procedure also accepts `{ signal?: AbortSignal }` after its input.
+
+## WebSocket transport
+
+### `handle(router, options?)`
+
+Import from `tacho/transport/ws`. Returns crossws hooks.
+
+| `WsHandleOptions` | type                    | default     |
+| ----------------- | ----------------------- | ----------- |
+| `createContext`   | `(peer) => context`     | `{}`        |
+| `path`            | `string`                | every path  |
+| `onError`         | `(error, peer) => void` | —           |
+| `maxBatchSize`    | `number`                | `20`        |
+| `maxMessageSize`  | `number`                | `1_048_576` |
+| `sameOrigin`      | `boolean`               | `false`     |
+| `serializer`      | `Serializer`            | JSON        |
+
+### `createClient(options)`
+
+Import from `tacho/client/ws`. Returns the typed router proxy plus `.ready` and `.close(code?, reason?)`.
+
+| `WsClientOptions` | type                 | default          |
+| ----------------- | -------------------- | ---------------- |
+| `url`             | `string`             | required         |
+| `protocols`       | `string \| string[]` | —                |
+| `WebSocket`       | `typeof WebSocket`   | global WebSocket |
+| `serializer`      | `Serializer`         | JSON             |
+
+WebSocket procedures do not support async-generator streaming. See [WebSocket](/tacho/transport/websocket).
+
+## OpenRPC
+
+| export                        | description                                               |
+| ----------------------------- | --------------------------------------------------------- |
+| `toOpenRpc(router, options?)` | Creates an OpenRPC 1.3.2 document from procedure schemas. |
+
+`OpenRpcOptions` contains `title`, `version`, optional `description`, and optional `servers`.
+
+## Low-level dispatch
+
+For custom transports:
 
 ```ts twoslash
 import {
   createProxyClient,
-  resolveProcedure,
+  isRpcStream,
   rpcResult,
   runBatch,
   runOne,
@@ -45,33 +174,50 @@ const rpc = tacho();
 const router = rpc({ ping: rpc.run(() => "pong" as const) });
 const ctx = { req: new Request("http://localhost") };
 // ---cut---
-resolveProcedure(router, "ping");
-await runOne(router, { jsonrpc: "2.0", method: "ping", id: 1 }, ctx);
+const response = await runOne(
+  router,
+  { jsonrpc: "2.0", method: "ping", id: 1 },
+  ctx,
+);
+
 await runBatch(
   router,
   [{ jsonrpc: "2.0", method: "ping", id: 1 }],
   ctx,
 );
 rpcResult({ result: "pong" });
-rpcResult({ error: { message: "nope", code: -32603 } });
+isRpcStream(response);
 
 const client = createProxyClient<typeof router>(
   async (method, params) => {
-    const res = await runOne(
+    const result = await runOne(
       router,
       { jsonrpc: "2.0", method, params, id: 1 },
       ctx,
     );
-    return rpcResult(res ?? {});
+    return rpcResult(result ?? {});
   },
 );
+
 await client.ping();
 ```
 
-| export                             |                                                          |
-| ---------------------------------- | -------------------------------------------------------- |
-| `resolveProcedure(router, method)` | Procedure, or `undefined`.                               |
-| `runOne(router, request, ctx)`     | One JSON-RPC call. No `id` → `undefined` (notification). |
-| `runBatch(router, requests, ctx)`  | Many calls. All notifications → `undefined`.             |
-| `rpcResult(body)`                  | Result, or throws `RpcError`.                            |
-| `createProxyClient(send)`          | Typed proxy over your own `send`.                        |
+| export                                   | description                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `resolveProcedure(router, method)`       | Returns an RPC procedure or `undefined`.                              |
+| `runOne(router, request, ctx, options?)` | Dispatches one request. `{ stream: true }` may return an `RpcStream`. |
+| `runBatch(router, requests, ctx)`        | Dispatches a batch. Batches reject streaming procedures.              |
+| `isRpcStream(value)`                     | Type guard for the low-level streaming result.                        |
+| `rpcResult(body)`                        | Returns `result`, or throws `RpcError` for an error response.         |
+| `createProxyClient(send, extras?)`       | Creates a typed recursive client over a custom send function.         |
+
+## Public types
+
+Imported from `tacho`:
+
+- JSON-RPC: `JsonRpcId`, `JsonRpcRequest`, `JsonRpcErrorObject`, `JsonRpcSuccessResponse`, `JsonRpcErrorResponse`, `JsonRpcResponse`
+- Router: `Context`, `Middleware`, `Schema`, `ProcedureDef`, `AnyRouter`
+- Client and dispatch: `CallOptions`, `RPCClient`, `RpcStream`, `Serializer`
+- OpenRPC: `OpenRpcInfo`, `OpenRpcServer`, `OpenRpcError`, `OpenRpcMethod`, `OpenRpcDocument`, `OpenRpcOptions`
+
+Transport option types come from their entrypoints: `HandleOptions`, `ClientOptions`, `WsHandleOptions`, and `WsClientOptions`.

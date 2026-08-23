@@ -5,6 +5,7 @@ import { pages } from "@ilha/router/vite";
 export default defineConfig({
   plugins: [
     oxide({
+      middleware: ["@ilha/router/ssr"],
       preset: "celld",
       wrangler: {
         name: "celld-tasks",

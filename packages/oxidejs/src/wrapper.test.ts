@@ -14,7 +14,10 @@ describe("generateWorkerWrapper", () => {
     const mw = out.indexOf("for (const __mw of");
     const gate = out.indexOf("request[__fetch] =");
     expect(mw).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(mw);
+    // Context must be established before middleware so frame/SSR renders
+    // resolve useEnv()/useRequest().
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(mw);
   });
 
   test("imports option emits side-effect imports at the top", () => {

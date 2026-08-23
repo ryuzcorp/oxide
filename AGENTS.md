@@ -97,5 +97,6 @@ Package READMEs (`packages/oxidejs/README.md`, `packages/tacho/README.md`) ship 
 
 - Smallest change that works. Do not add files, deps, or abstractions "for later."
 - Prefer stdlib and what is already in the repo. `unplugin` is the only oxidejs runtime dep. `crossws` is an optional tacho peer.
+- Prefer TypeScript inference over explicit annotations. Do not annotate function, async function, or generator return types when TypeScript can infer them correctly.
 - Keep public exports stable. New entrypoints need a reason and a README update.
 - If a request contradicts this file (add a Result library, emulate `wrangler dev`, drop Bun, merge tacho into oxidejs), stop and ask.

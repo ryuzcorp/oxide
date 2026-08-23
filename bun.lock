@@ -20,7 +20,7 @@
         "bejamas": "^0.4.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
-        "ilha": "^0.10.2",
+        "ilha": "^0.11.0",
         "oxidejs": "workspace:*",
         "rangi": "^2.2.0",
         "tacho": "workspace:*",
@@ -37,12 +37,12 @@
     },
     "packages/oxidejs": {
       "name": "oxidejs",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "dependencies": {
         "unplugin": "^3.3.0",
       },
       "devDependencies": {
-        "tacho": "^0.4.3",
+        "tacho": "^0.5.0",
       },
       "peerDependencies": {
         "@rsbuild/core": "*",
@@ -59,7 +59,7 @@
     },
     "packages/tacho": {
       "name": "tacho",
-      "version": "0.4.3",
+      "version": "0.5.0",
       "devDependencies": {
         "@tsconfig/strictest": "^2.0.8",
         "@types/bun": "latest",
@@ -78,13 +78,13 @@
     "templates/tasks": {
       "name": "@oxidejs/template-ilha",
       "dependencies": {
-        "@ilha/router": "^0.8.12",
-        "ilha": "^0.10.2",
-        "tacho": "^0.4.0",
+        "@ilha/router": "^0.9.1",
+        "ilha": "^0.11.0",
+        "tacho": "^0.5.0",
         "unstorage": "^2.0.0-alpha.7",
       },
       "devDependencies": {
-        "oxidejs": "0.1.0",
+        "oxidejs": "^0.2.1",
         "typescript": "^6",
         "vite": "^8.2.1",
       },
@@ -92,14 +92,13 @@
     "templates/tasks-celld": {
       "name": "template-celld-tasks",
       "dependencies": {
-        "@ilha/router": "^0.8.12",
-        "ilha": "^0.10.2",
-        "tacho": "^0.4.0",
-        "unstorage": "^2.0.0-alpha.7",
+        "@ilha/router": "^0.9.1",
+        "ilha": "^0.11.0",
+        "tacho": "^0.5.0",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^5.20260818.1",
-        "oxidejs": "0.1.0",
+        "oxidejs": "^0.2.1",
         "typescript": "^6",
         "vite": "^8.2.1",
       },
@@ -350,7 +349,7 @@
 
     "@ilha/astro": ["@ilha/astro@0.1.5", "", { "peerDependencies": { "astro": "^7.2.0", "ilha": ">=0.10.2" } }, "sha512-UWp2fr62ZW5x/0nt+4I1cG1ldS4E5VygwZTpNghXPPxjLUbLyZGLv9Kle6qEFMtYXvwsMixeG6mPNCHiru3aUQ=="],
 
-    "@ilha/router": ["@ilha/router@0.8.12", "", { "dependencies": { "rou3": "0.9.1", "unplugin": "3.3.0" }, "peerDependencies": { "ilha": ">=0.10.2" } }, "sha512-phvDNk1RhthZozG2KAn7SUTTLeDb4uz7djy+1IuR19zTeHdEBJAeYRiNA9kGG/UCNP9eU6whuW0jmrs6ktF8wg=="],
+    "@ilha/router": ["@ilha/router@0.9.1", "", { "dependencies": { "unplugin": "3.3.0" }, "peerDependencies": { "ilha": ">=0.11.0" } }, "sha512-8ZUIRMReq2In9t3CAqFA+xVwAM8bov41ox04wX8NDbZ/s625G3Ac46rzoObf4v5GP5TrrvAIEdATv4y++ricLg=="],
 
     "@img/colour": ["@img/colour@1.1.0", "", {}, "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ=="],
 
@@ -1556,7 +1555,7 @@
 
     "ignore": ["ignore@5.3.2", "", {}, "sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g=="],
 
-    "ilha": ["ilha@0.10.2", "", { "dependencies": { "alien-signals": "3.2.1" } }, "sha512-kbB7ur4isWty2zoYlzKvH7yaeMVyaHZCYOVeh7TORQ/OBRP8s5MWt88LH7jsuDjozNlbNSs/+UpdaqHdwC6y4g=="],
+    "ilha": ["ilha@0.11.0", "", { "dependencies": { "alien-signals": "3.2.1" } }, "sha512-wnOiT64TVZ7iqxrskLrgtWpjMWdsArnUS34RsK50dc2k2XZ9WOJkwHaMtAa82wrGgcBaBan3s9U8zBQvVcEZvA=="],
 
     "image-size": ["image-size@2.0.2", "", { "bin": { "image-size": "bin/image-size.js" } }, "sha512-IRqXKlaXwgSMAMtpNzZa1ZAe8m+Sa1770Dhk8VkSsP9LS+iHD62Zd8FQKs8fbPiagBE7BzoFX23cxFnwshpV6w=="],
 
@@ -2209,8 +2208,6 @@
     "rolldown": ["rolldown@1.2.4", "", { "dependencies": { "@oxc-project/types": "=0.144.0", "@rolldown/pluginutils": "^1.0.0" }, "optionalDependencies": { "@rolldown/binding-android-arm64": "1.2.4", "@rolldown/binding-darwin-arm64": "1.2.4", "@rolldown/binding-darwin-x64": "1.2.4", "@rolldown/binding-freebsd-x64": "1.2.4", "@rolldown/binding-linux-arm-gnueabihf": "1.2.4", "@rolldown/binding-linux-arm64-gnu": "1.2.4", "@rolldown/binding-linux-arm64-musl": "1.2.4", "@rolldown/binding-linux-ppc64-gnu": "1.2.4", "@rolldown/binding-linux-s390x-gnu": "1.2.4", "@rolldown/binding-linux-x64-gnu": "1.2.4", "@rolldown/binding-linux-x64-musl": "1.2.4", "@rolldown/binding-openharmony-arm64": "1.2.4", "@rolldown/binding-win32-arm64-msvc": "1.2.4", "@rolldown/binding-win32-x64-msvc": "1.2.4" }, "bin": { "rolldown": "./bin/cli.mjs" } }, "sha512-rSr7irW0K7QRWzjdJXqZowkcRdDtjRduh43rBltnVKd0VFq839l1lJoDvGJb6gl7+4rTTCrPWu+YfujUL8Ug7w=="],
 
     "rolldown-plugin-dts": ["rolldown-plugin-dts@0.27.14", "", { "dependencies": { "dts-resolver": "^3.0.0", "get-tsconfig": "5.0.0-beta.5", "obug": "^2.1.4", "yuku-ast": "^0.8.0", "yuku-codegen": "^0.8.0", "yuku-parser": "^0.8.0" }, "peerDependencies": { "@typescript/native-preview": "*", "@volar/typescript": "~2.4.0", "rolldown": "^1.0.0", "typescript": "^5.0.0 || ^6.0.0 || ~7.0.0", "vue-tsc": "~3.2.0 || ~3.3.0" }, "optionalPeers": ["@typescript/native-preview", "@volar/typescript", "typescript", "vue-tsc"] }, "sha512-ZvuDDwoIpRK9RPxDXratCpklFO9QZZWndf/sd0VBFb4LEj0jj07UcHK9OCh7V4XiFz2Z89ziyBC2K6tJiDjrbw=="],
-
-    "rou3": ["rou3@0.9.1", "", {}, "sha512-z/sSmzvtwMDDnxsPVhfWMuG6F6mbmhFDXoVqLmMfbpDD9qfV3GDmSQpf0+W296/ZDIpW2wcMmBfpVFzcnOi/nA=="],
 
     "roughjs": ["roughjs@4.6.6", "", { "dependencies": { "hachure-fill": "^0.5.2", "path-data-parser": "^0.1.0", "points-on-curve": "^0.2.0", "points-on-path": "^0.2.1" } }, "sha512-ZUz/69+SYpFN/g/lUlo2FXcIjRkSu3nDarreVdGGndHEBJ6cXPdKguS8JGxwj5HA5xIbVKSmLgr5b3AWxtRfvQ=="],
 

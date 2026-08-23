@@ -53,6 +53,35 @@ for await (const tick of stream) {
 
 WebSocket and batch calls reject streaming procedures. A notification returns `204` and does not start the generator.
 
+## Fan out with `Publisher`
+
+Use `Publisher` when one procedure publishes live updates that many stream procedures consume:
+
+```ts twoslash
+import { Publisher, tacho } from "tacho";
+import { z } from "zod";
+
+const rpc = tacho();
+const events = new Publisher<{
+  change: { id: string; text: string };
+}>();
+
+export const router = rpc({
+  update: rpc
+    .input(z.object({ id: z.string(), text: z.string() }))
+    .run(({ input }) => events.publish("change", input)),
+  changes: rpc.run(async function* ({ signal }) {
+    for await (const change of events.subscribe("change", { signal })) {
+      yield change;
+    }
+  }),
+});
+```
+
+`publish()` delivers each payload to every current subscriber. `subscribe()` returns an ordered async generator and removes its subscription when the procedure signal aborts or the iterator closes. Use `once()` to wait for only the next payload.
+
+A publisher lives in one process or Worker isolate. It has no replay or persistence, and each subscriber queue is unbounded. Keep publishers and subscribers in the same isolate. Use storage or an external bus when events must survive restarts or cross isolates.
+
 ## Stop and clean up
 
 Call `return()` when you stop before the stream finishes. Tacho forwards cancellation so the server generator can run its `finally` block:

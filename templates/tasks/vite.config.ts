@@ -3,7 +3,7 @@ import oxide from "oxidejs/vite";
 import { pages } from "@ilha/router/vite";
 
 export default defineConfig({
-  plugins: [oxide(), pages()],
+  plugins: [oxide({ middleware: ["@ilha/router/ssr"] }), pages()],
   resolve: {
     tsconfigPaths: true,
   },

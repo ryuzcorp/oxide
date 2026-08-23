@@ -11,7 +11,7 @@
     "bejamas": "^0.4.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "ilha": "^0.10.2",
+    "ilha": "^0.11.0",
     "oxidejs": "workspace:*",
     "rangi": "^2.2.0",
     "tacho": "workspace:*",

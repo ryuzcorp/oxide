@@ -249,6 +249,37 @@ for await (const t of ticks) console.log(t.i);
 await ticks.return();
 ```
 
+## Publisher
+
+In-memory pub/sub for live updates: one procedure publishes, a stream procedure subscribes. Events are typed. Plain Map/Set — runs on Bun, Node, and Workers (workerd). One instance lives in exactly one isolate: inside a Durable Object, keep the publisher and its stream procedures in the same cell.
+
+```ts
+import { Publisher } from "tacho";
+
+const events = new Publisher<{ "task-added": { id: string } }>();
+
+export const router = rpc({
+  add: rpc.run((input: { id: string }) => {
+    events.publish("task-added", input);
+  }),
+  live: rpc.run(async function* ({ signal }) {
+    for await (const e of events.subscribe("task-added", { signal })) yield e;
+  }),
+});
+```
+
+Dynamic channels work too — type the map with a string index:
+
+```ts
+const messages = new Publisher<Record<string, { text: string }>>();
+messages.publish("room-42", { text: "hi" });
+const next = await messages.once("room-42", { signal }); // one-shot wait, undefined if aborted
+```
+
+Memory-only, no replay or resume. Cross-cell or durable events need stub RPC / storage (Redis, Durable Object alarms + storage).
+
+`subscribe` returns a standard async generator, so it plugs into anything that consumes one — `Stream.fromAsyncIterable(publisher.subscribe("task-added", { signal }), cause => new Error(String(cause)))` for Effect, `from(generator)` for RxJS.
+
 Wire: each `yield` is `data: { jsonrpc, id, result }`. Handler `return` is `event: done`. Throw is `event: error`. Streams set `Cache-Control: no-store` and `X-Accel-Buffering: no`. Passing `heartbeatMs` to `handle()` emits `: ping` comment frames to keep idle connections alive.
 
 Dropped streams end. Tacho does not reconnect automatically because replaying the POST could run procedure side effects twice. Resume needs application-specific event IDs and server-side state.
