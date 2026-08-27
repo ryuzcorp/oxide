@@ -4,18 +4,7 @@ import oxide from "oxidejs/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [
-    oxide({
-      middleware: ["@ilha/router/ssr"],
-      preset: "celld",
-      wrangler: {
-        name: "celld-tasks",
-        compatibility_date: "2026-01-01",
-      },
-    }),
-    pages(),
-    tailwindcss(),
-  ],
+  plugins: [oxide({ middleware: ["@ilha/router/ssr"] }), pages(), tailwindcss()],
   resolve: {
     tsconfigPaths: true,
   },

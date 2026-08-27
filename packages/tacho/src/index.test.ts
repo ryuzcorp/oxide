@@ -873,12 +873,42 @@ describe("ws client extras", () => {
     live.emit("close");
     await expect(pending).rejects.toThrow("socket closed");
   });
+
+  test("close before open rejects ready", async () => {
+    const { emit, listen } = listeners();
+    const client = createWsClient<typeof app>({
+      url: "ws://x",
+      WebSocket: function MockWebSocket() {
+        return { addEventListener: listen, send() {}, close() {} };
+      } as unknown as typeof WebSocket,
+    });
+    queueMicrotask(() => emit("close"));
+    await expect(client.ready).rejects.toThrow("socket closed");
+  });
+
+  test("per-call signal stops waiting", async () => {
+    const { emit, listen } = listeners();
+    const client = createWsClient<typeof app>({
+      url: "ws://x",
+      WebSocket: function MockWebSocket() {
+        return { addEventListener: listen, send() {}, close() {} };
+      } as unknown as typeof WebSocket,
+    });
+    queueMicrotask(() => emit("open"));
+    await client.ready;
+
+    const ac = new AbortController();
+    const pending = client.ping(undefined, { signal: ac.signal });
+    ac.abort();
+    await expect(pending).rejects.toHaveProperty("name", "AbortError");
+  });
 });
 
 describe("sse stream", () => {
   const streamRpc = tacho();
   let cleaned = 0;
   const streamApp = streamRpc({
+    ping: streamRpc.run(() => "pong"),
     ticks: streamRpc.run(async function* () {
       yield 0;
       yield 1;
@@ -988,16 +1018,19 @@ describe("sse stream", () => {
     expect(res.status).toBe(204);
   });
 
-  test("batch with a stream is INVALID_REQUEST", async () => {
+  test("batch rejects only the stream item", async () => {
     const res = await post([
       { jsonrpc: "2.0", method: "ping", id: 1 },
       { jsonrpc: "2.0", method: "ticks", id: 2 },
     ]);
-    expect(await res.json()).toEqual({
-      jsonrpc: "2.0",
-      error: { code: -32600, message: "Invalid Request" },
-      id: null,
-    });
+    expect(await res.json()).toEqual([
+      { jsonrpc: "2.0", result: "pong", id: 1 },
+      {
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Streaming is not supported" },
+        id: 2,
+      },
+    ]);
   });
 
   test("ws rejects streams", async () => {

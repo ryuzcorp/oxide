@@ -340,17 +340,7 @@ export async function runBatch(router: AnyRouter, items: unknown[], ctx: Context
   if (items.length === 0) {
     return errorResponse(JSON_RPC_ERROR.INVALID_REQUEST, "Invalid Request", null);
   }
-  const results = await Promise.all(
-    items.map((item) => runOne(router, item, { ...ctx }, { stream: true })),
-  );
-  if (results.some(isRpcStream)) {
-    await Promise.all(
-      results.map((item) =>
-        isRpcStream(item) ? item.gen.return(undefined).catch(() => {}) : undefined,
-      ),
-    );
-    return errorResponse(JSON_RPC_ERROR.INVALID_REQUEST, "Invalid Request", null);
-  }
+  const results = await Promise.all(items.map((item) => runOne(router, item, { ...ctx })));
   const responses = results.filter((item): item is JsonRpcResponse => item !== undefined);
   return responses.length > 0 ? responses : undefined;
 }

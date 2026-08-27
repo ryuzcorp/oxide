@@ -14,6 +14,7 @@ import {
   nodeToWebRequest,
   parseExportedNames,
   pluginShouldStub,
+  RequestBodyTooLargeError,
   RESOLVED_VIRTUAL_ACTIONS_ID,
   RESOLVED_VIRTUAL_CLIENT_ID,
   RESOLVED_VIRTUAL_WORKER_ID,
@@ -36,7 +37,12 @@ type ConnectReq = IncomingMessage;
 type ConnectRes = ServerResponse;
 type ConnectNext = (err?: unknown) => void;
 
-function actionMiddleware(loadRouter: () => Promise<unknown>, path: string, sameOrigin: boolean) {
+function actionMiddleware(
+  loadRouter: () => Promise<unknown>,
+  path: string,
+  sameOrigin: boolean,
+  bodyLimit: number,
+) {
   return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
     if ((req.url ?? "").split("?")[0] !== path) {
       next();
@@ -48,9 +54,16 @@ function actionMiddleware(loadRouter: () => Promise<unknown>, path: string, same
       const response = await handle(await loadRouter(), {
         path,
         ...(sameOrigin ? { sameOrigin: true } : {}),
-      })(await nodeToWebRequest(req));
+      })(await nodeToWebRequest(req, bodyLimit));
       await sendWebResponseFrom(req, res, response);
-    })().catch(next);
+    })().catch((error) => {
+      if (error instanceof RequestBodyTooLargeError) {
+        res.statusCode = 413;
+        res.end();
+      } else {
+        next(error);
+      }
+    });
   };
 }
 
@@ -229,60 +242,78 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
           return mod.default;
         };
+        const wireActions = () =>
+          server.middlewares.use(
+            actionMiddleware(
+              loadRouter,
+              resolved!.actionPath,
+              resolved!.actionSameOrigin,
+              resolved!.bodyLimit,
+            ),
+          );
 
-        // Dev parity for the production middleware/imports options: load the
-        // same specifiers through the SSR graph and adapt them to connect.
-        if ((resolved?.middleware?.length ?? 0) > 0 || (resolved?.imports?.length ?? 0) > 0) {
-          void (async () => {
-            try {
-              for (const spec of resolved!.imports ?? []) await server.ssrLoadModule(spec);
-              const handlers: Array<(request: Request) => Promise<Response | undefined>> = [];
-              for (const entry of resolved!.middleware ?? []) {
-                const spec2 = typeof entry === "string" ? entry : entry.module;
-                const mod = (await server.ssrLoadModule(spec2)) as {
-                  default?: (
-                    request: Request,
-                  ) => Response | undefined | Promise<Response | undefined>;
-                };
-                if (typeof mod.default !== "function") continue;
-                const fn = mod.default;
-                handlers.push((request) => Promise.resolve(fn(request)));
-              }
-              if (handlers.length === 0) return;
-              const { nodeToWebRequest, sendWebResponseFrom } = await import("./actions");
-              server.middlewares.use((creq, cres, next) => {
-                void (async () => {
-                  try {
-                    const request = await nodeToWebRequest(creq);
-                    for (const handler of handlers) {
-                      const hit = await handler(request);
-                      if (hit) return sendWebResponseFrom(creq, cres, hit);
-                    }
-                    next();
-                  } catch (error) {
-                    cres.statusCode = 500;
-                    cres.end(String(error));
-                  }
-                })();
-              });
-            } catch (error) {
-              server.config.logger.error(
-                "oxidejs: failed to wire dev middleware: " + String(error),
-              );
-            }
-          })();
-        }
-        if (resolved?.actions === "ws")
+        if (resolved?.actions === "ws") {
           attachActionUpgrade(
             server.httpServer,
             loadRouter,
             resolved.actionPath,
             resolved.actionSameOrigin,
           );
-        else
-          server.middlewares.use(
-            actionMiddleware(loadRouter, resolved!.actionPath, resolved!.actionSameOrigin),
-          );
+          return;
+        }
+
+        // Load production middleware through the SSR graph, then append it and
+        // actions after synchronous framework middleware (such as Ilha frames).
+        if ((resolved?.middleware?.length ?? 0) === 0 && (resolved?.imports?.length ?? 0) === 0) {
+          wireActions();
+          return;
+        }
+        void (async () => {
+          try {
+            for (const spec of resolved!.imports ?? []) await server.ssrLoadModule(spec);
+            const handlers: Array<
+              (
+                request: Request,
+                context: { env: unknown; ctx: unknown },
+              ) => Promise<Response | undefined>
+            > = [];
+            for (const entry of resolved!.middleware ?? []) {
+              const spec = typeof entry === "string" ? entry : entry.module;
+              const mod = (await server.ssrLoadModule(spec)) as {
+                default?: (
+                  request: Request,
+                  context: { env: unknown; ctx: unknown },
+                ) => Response | undefined | Promise<Response | undefined>;
+              };
+              if (typeof mod.default !== "function") continue;
+              const fn = mod.default;
+              handlers.push((request, context) => Promise.resolve(fn(request, context)));
+            }
+            if (handlers.length > 0) {
+              const { nodeToWebRequest, sendWebResponseFrom } = await import("./actions");
+              server.middlewares.use((creq, cres, next) => {
+                void (async () => {
+                  try {
+                    const request = await nodeToWebRequest(creq, resolved!.bodyLimit);
+                    const context = { env: resolved!.env, ctx: undefined };
+                    for (const handler of handlers) {
+                      const hit = await handler(request, context);
+                      if (hit) return sendWebResponseFrom(creq, cres, hit);
+                    }
+                    next();
+                  } catch (error) {
+                    cres.statusCode = error instanceof RequestBodyTooLargeError ? 413 : 500;
+                    cres.end(error instanceof RequestBodyTooLargeError ? undefined : String(error));
+                  }
+                })();
+              });
+            }
+          } catch (error) {
+            server.config.logger.error("oxidejs: failed to wire dev middleware: " + String(error));
+          } finally {
+            wireActions();
+          }
+        })();
       },
       configurePreviewServer(server) {
         if (resolved?.preset !== "fetch") return;
@@ -310,7 +341,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
             );
           else
             server.middlewares.use(
-              actionMiddleware(loadRouter, resolved!.actionPath, resolved!.actionSameOrigin),
+              actionMiddleware(
+                loadRouter,
+                resolved!.actionPath,
+                resolved!.actionSameOrigin,
+                resolved!.bodyLimit,
+              ),
             );
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {

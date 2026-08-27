@@ -13,6 +13,7 @@ import {
   nodeToWebRequest,
   parseExportedNames,
   pluginShouldStub,
+  RequestBodyTooLargeError,
   scanServerFiles,
   shouldStubServerModule,
 } from "./actions";
@@ -731,6 +732,21 @@ export const wait = action(async () => {
     expect(request.signal.aborted).toBe(false);
     req.emit("aborted");
     expect(request.signal.aborted).toBe(true);
+  });
+
+  test("nodeToWebRequest enforces the body limit", async () => {
+    const { EventEmitter } = await import("node:events");
+    const req = Object.assign(new EventEmitter(), {
+      method: "POST",
+      url: "/__oxide/action",
+      headers: { host: "localhost" },
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from("too large");
+      },
+    });
+    await expect(nodeToWebRequest(req as never, 3)).rejects.toBeInstanceOf(
+      RequestBodyTooLargeError,
+    );
   });
 
   test("nodeToWebRequest stays open after draining a POST body", async () => {

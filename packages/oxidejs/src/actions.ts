@@ -458,7 +458,7 @@ export function shouldStubServerModule(environment?: StubEnvironment, extra?: St
   return true;
 }
 
-export function pluginShouldStub(pluginThis: object, options?: { ssr?: boolean }): boolean {
+export function pluginShouldStub(pluginThis: unknown, options?: { ssr?: boolean }): boolean {
   const ctx = pluginThis as {
     environment?: StubEnvironment;
     getNativeBuildContext?: () => {
@@ -485,7 +485,12 @@ export function loadClientStub(id: string): string {
   });
 }
 
-export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {
+export class RequestBodyTooLargeError extends Error {}
+
+export async function nodeToWebRequest(
+  req: IncomingMessage,
+  maxBytes = Number.POSITIVE_INFINITY,
+): Promise<Request> {
   const host = req.headers.host ?? "localhost";
   const url = `http://${host}${req.url ?? "/"}`;
   const headers = new Headers();
@@ -503,8 +508,12 @@ export async function nodeToWebRequest(req: IncomingMessage): Promise<Request> {
   const init: RequestInit = { method, headers, signal: ac.signal };
   if (method === "GET" || method === "HEAD") return new Request(url, init);
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    size += buffer.length;
+    if (size > maxBytes) throw new RequestBodyTooLargeError();
+    chunks.push(buffer);
   }
   const body = Buffer.concat(chunks);
   if (body.length > 0) init.body = body;

@@ -187,11 +187,49 @@ await client.ping(undefined, { signal: AbortSignal.timeout(1_000) });
 
 | option       |                                                            |
 | ------------ | ---------------------------------------------------------- |
-| `url`        | POST target.                                               |
 | `headers`    | Object or `() => HeadersInit \| Promise<HeadersInit>`.     |
 | `signal`     | Default abort. Per-call: `client.ping(input, { signal })`. |
 | `fetch`      | Custom `fetch`.                                            |
 | `serializer` | Custom serializer.                                         |
+
+## Query cache
+
+Every HTTP client ships a `.query()` surface that caches by RPC method path and input, plus a `.cache` handle to control it.
+
+```ts
+const client = createClient<Router>({ url: "http://localhost:3000" });
+
+await client.user.get({ id: "1" }); // always hits the wire
+await client.query().user.get({ id: "1" }); // cached with key ["user.get", { id: "1" }]
+await client.query({ key: ["user", "1"] }).user.get({ id: "1" }); // custom key
+```
+
+The default key is `[methodPath, input]`, hashed stably — object key order does not matter. Identical in-flight calls dedupe into one request. Errors are never cached: a failed call drops its entry so the next call retries. Streams (`async function*`) and file uploads bypass the cache. You can also set `staleTime` on `query(opts)`:
+
+```ts
+const q = client.query({ staleTime: 30_000 });
+await q.list(); // fresh for 30s
+```
+
+Cache control via `.cache`:
+
+```ts
+await client.cache.invalidate(); // drop everything
+await client.cache.invalidate(["user.get"]); // prefix match on method path segments
+await client.cache.invalidate((e) => e.method.startsWith("task."));
+await client.cache.invalidate(["user.get"], { refetch: true }); // re-run stored params now
+client.cache.keys();
+client.cache.clear();
+```
+
+After a mutation, invalidate what it touched:
+
+```ts
+const name = await client.user.rename({ id: "1", name: "Ada" });
+await client.cache.invalidate(["user.get"], { refetch: true });
+```
+
+Caveat: a router with root-level `query` or `cache` procedures shadows them on the typed surface.
 
 ## Custom Serializers
 
@@ -235,7 +273,7 @@ await file.text(); // "hello"
 
 ## Stream
 
-`async function*` over fetch becomes SSE. Same client call, `for await` the result. WS and batch reject streams. Notifications to a stream procedure are 204 and do not start the generator.
+`async function*` over fetch becomes SSE. Same client call, `for await` the result. WS requests and stream items inside batches return `INTERNAL_ERROR`. Other batch items still run. Notifications to a stream procedure are 204 and do not start the generator.
 
 ```ts
 export const router = rpc({
@@ -318,6 +356,8 @@ await ws.ping();
 ws.close();
 ```
 
+Per-call `{ signal }` stops waiting for that response. It does not cancel work already running on the server.
+
 ## Low-level
 
 For custom transports.
@@ -388,5 +428,5 @@ JSON-RPC 2.0, POST only.
 - Notification-only batch → no response
 - `rpc.*` → `METHOD_NOT_FOUND`
 - Non-POST → 405 + `Allow: POST`
-- Stream + batch → `INVALID_REQUEST`
+- Stream in batch → that item gets `INTERNAL_ERROR`; other items still run
 - Stream over WS → `INTERNAL_ERROR` (`Streaming is not supported`)

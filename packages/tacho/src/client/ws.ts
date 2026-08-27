@@ -11,7 +11,11 @@ export type WsClientOptions = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  cleanup: (() => void) | undefined;
 };
+
+const abortReason = (signal: AbortSignal) =>
+  signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
 
 export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
   close: (code?: number, reason?: string) => void;
@@ -28,11 +32,26 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
   const pending = new Map<number | string, Pending>();
   let nextId = 0;
 
+  let opened = false;
   const ready = new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener(
+      "open",
+      () => {
+        opened = true;
+        resolve();
+      },
+      { once: true },
+    );
     socket.addEventListener("error", () => reject(new Error("RPC transport error")), {
       once: true,
     });
+    socket.addEventListener(
+      "close",
+      () => {
+        if (!opened) reject(new Error("RPC transport error: socket closed"));
+      },
+      { once: true },
+    );
   });
 
   socket.addEventListener("message", async (event) => {
@@ -51,6 +70,7 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
       const waiter = pending.get(id);
       if (!waiter) continue;
       pending.delete(id);
+      waiter.cleanup?.();
       try {
         waiter.resolve(rpcResult(item));
       } catch (err) {
@@ -61,6 +81,7 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
 
   socket.addEventListener("close", () => {
     for (const waiter of pending.values()) {
+      waiter.cleanup?.();
       waiter.reject(new Error("RPC transport error: socket closed"));
     }
     pending.clear();
@@ -70,12 +91,40 @@ export function createClient<R>(opts: WsClientOptions): RPCClient<R> & {
     R,
     { ready: Promise<void>; close: (code?: number, reason?: string) => void }
   >(
-    async (method, params) => {
-      await ready;
+    async (method, params, call) => {
+      const signal = call?.signal;
+      let stopWaiting: (() => void) | undefined;
+      if (signal) {
+        await Promise.race([
+          ready,
+          new Promise<never>((_, reject) => {
+            const abort = () => reject(abortReason(signal));
+            stopWaiting = () => signal.removeEventListener("abort", abort);
+            signal.addEventListener("abort", abort, { once: true });
+            if (signal.aborted) abort();
+          }),
+        ]).finally(() => stopWaiting?.());
+      } else {
+        await ready;
+      }
+
       const id = ++nextId;
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        socket.send(stringify({ jsonrpc: "2.0", method, params, id }));
+        const abort = () => {
+          pending.delete(id);
+          reject(abortReason(signal!));
+        };
+        const cleanup = signal ? () => signal.removeEventListener("abort", abort) : undefined;
+        if (signal?.aborted) return abort();
+        signal?.addEventListener("abort", abort, { once: true });
+        pending.set(id, { resolve, reject, cleanup });
+        try {
+          socket.send(stringify({ jsonrpc: "2.0", method, params, id }));
+        } catch (err) {
+          pending.delete(id);
+          cleanup?.();
+          reject(err);
+        }
       });
     },
     {

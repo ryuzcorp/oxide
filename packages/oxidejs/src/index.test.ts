@@ -40,6 +40,47 @@ describe("factory shape", () => {
     expect(typeof plugin.rsbuild?.setup).toBe("function");
   });
 
+  test("vite dev middleware runs before actions with the production signature", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-dev-"));
+    const seen: unknown[] = [];
+    const plugin = unpluginFactory({ middleware: ["./middleware"], env: { mode: "dev" } }, {
+      framework: "vite",
+    } as never);
+    if (Array.isArray(plugin)) throw new Error("expected a single plugin");
+    if (!plugin.vite) throw new Error("expected vite hooks");
+    (plugin.vite.config as (config: { root: string }) => void)({ root });
+
+    const handlers: Array<(req: never, res: never, next: () => void) => void> = [];
+    const server = {
+      environments: {},
+      watcher: { on() {} },
+      middlewares: { use: (handler: (typeof handlers)[number]) => handlers.push(handler) },
+      ssrLoadModule: async () => ({
+        default: (_request: Request, context: unknown) => {
+          seen.push(context);
+        },
+      }),
+      config: { logger: { error() {} } },
+    };
+
+    try {
+      (plugin.vite.configureServer as (server: unknown) => void)(server);
+      handlers.push((_req, _res, next) => next()); // downstream framework middleware
+      for (let i = 0; handlers.length < 3 && i < 10; i++) await Bun.sleep(0);
+      expect(handlers).toHaveLength(3);
+      const { EventEmitter } = await import("node:events");
+      const req = Object.assign(new EventEmitter(), {
+        method: "GET",
+        url: "/other",
+        headers: { host: "localhost" },
+      });
+      await new Promise<void>((resolve) => handlers[1]!(req as never, {} as never, resolve));
+      expect(seen).toEqual([{ env: { mode: "dev" }, ctx: undefined }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("client load stubs *.server.tsx and blocks virtual actions", () => {
     const plugin = unpluginFactory({}, { framework: "vite" } as never);
     if (Array.isArray(plugin)) throw new Error("expected a single plugin");

@@ -49,7 +49,7 @@ It guides you. It doesn't frame you.
 | [oxidejs](packages/oxidejs) | Turns Vite or Rsbuild into a backend. One plugin, one folder to deploy. |
 | [tacho](packages/tacho)     | Typed JSON-RPC. The wire those actions ride on. Also usable on its own. |
 
-Need RPC without the plugin? Use [tacho](packages/tacho). `typeof router` is the client. The `templates/tasks` and `templates/tasks-celld` apps show fetch and celld deployments.
+Need RPC without the plugin? Use [tacho](packages/tacho). `typeof router` is the client. The `templates/simple` and `templates/tasks` apps show fetch and celld deployments.
 
 [Docs](https://oxide.build) · [oxidejs](packages/oxidejs) · [tacho](packages/tacho)
 

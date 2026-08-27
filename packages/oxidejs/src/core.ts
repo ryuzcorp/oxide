@@ -175,6 +175,7 @@ export function resolveOptions(
   if (hasClient || hasPublic) assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
 
   if (raw?.wrangler) {
+    // SAFETY: validateWranglerOptions only reads Object.keys; OxidejsWranglerOptions is a plain object.
     validateWranglerOptions(raw.wrangler as unknown as Record<string, unknown>);
   }
 

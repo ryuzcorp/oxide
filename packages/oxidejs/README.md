@@ -113,27 +113,6 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 ## Options
 
-### `middleware` and `imports`
-
-\`\`\`ts
-oxide({
-middleware: ["@ilha/router/ssr"], // string or { module, imports }
-imports: ["./side-effects"], // side-effect modules loaded at startup
-})
-\`\`\`
-
-Middleware handlers run in production before the action gate; the same specifiers are loaded through the SSR graph in dev, so dev and prod behave identically. Middleware entries may carry their own \`imports\`.
-
-### Other server options
-
-| Option        | Type   | Default | Description                                                          |
-| ------------- | ------ | ------- | -------------------------------------------------------------------- |
-| \`bodyLimit\` | number | 1048576 | Max request body size (Node preset); larger requests get 413         |
-| \`notFound\`  | string | —       | Custom HTML 404 body when no route or asset matches                  |
-| \`env\`       | object | —       | Passed as \`env\` to \`fetch(request, env, ctx)\` on the Node preset |
-
-## Options
-
 | Option                         | Default                  | Notes                                                                                       |
 | ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------- |
 | `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`                                                                      |
@@ -150,23 +129,22 @@ Middleware handlers run in production before the action gate; the same specifier
 | `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`                                                        |
 | `actions`                      | `"http"`                 | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
 | `actionHeaders`                | —                        | Static headers on the HTTP client                                                           |
-| `middleware`                   | `[]`                     | Default-exported production fetch middleware, run in order before actions and server entry  |
+| `middleware`                   | `[]`                     | Fetch middleware, run in order before actions and the server entry                          |
+| `imports`                      | `[]`                     | Modules imported for side effects at server startup                                         |
+| `bodyLimit`                    | `1048576`                | Max Node request body size; larger requests get 413                                         |
+| `notFound`                     | —                        | Custom HTML 404 body when no route or asset matches                                         |
+| `env`                          | —                        | Node preset value passed to `fetch(request, env, ctx)`                                      |
 
-`middleware` modules receive `(request, { env, ctx })`. They run in array order before actions, the server entry, and assets. Return a `Response` to stop the chain or `undefined` to continue.
+### `middleware` and `imports`
 
 ```ts
-// src/auth.ts
-export default function auth(request: Request) {
-  if (!request.headers.has("authorization")) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-}
-
-// vite.config.ts
-oxide({ middleware: ["./src/auth.ts"] });
+oxide({
+  middleware: ["@ilha/router/ssr"], // string or { module, imports }
+  imports: ["./side-effects"],
+});
 ```
 
-This option applies to production builds; use Connect middleware in Vite or Rsbuild during development.
+Middleware modules receive `(request, { env, ctx })`. They run before actions, the server entry, and assets. Return a `Response` to stop the chain or `undefined` to continue. Vite loads the same modules through its SSR graph in development. Middleware entries may carry their own `imports`.
 
 `main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
 

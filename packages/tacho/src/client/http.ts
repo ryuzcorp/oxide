@@ -1,5 +1,12 @@
-import { createProxyClient, rpcResult, type RPCClient, type Serializer } from "../index";
+import {
+  createProxyClient,
+  rpcResult,
+  type CallOptions,
+  type RPCClient,
+  type Serializer,
+} from "../index";
 import { extractFiles, filenameFrom, fromForm, injectFiles, toForm } from "../file";
+import { createQueryExtras, type QueryExtras } from "./query";
 
 export type ClientOptions = {
   url: string;
@@ -67,12 +74,12 @@ async function* readSse(
   }
 }
 
-export function createClient<R>(opts: ClientOptions): RPCClient<R> {
+export function createClient<R>(opts: ClientOptions): RPCClient<R> & QueryExtras<R> {
   const parse = opts.serializer?.parse ?? JSON.parse;
   const stringify = opts.serializer?.stringify ?? JSON.stringify;
   const contentType = opts.serializer?.contentType ?? "application/json";
 
-  return createProxyClient(async (method, params, call) => {
+  const rawSend = async (method: string, params: unknown, call?: CallOptions) => {
     const headers = typeof opts.headers === "function" ? await opts.headers() : opts.headers;
     const ac = new AbortController();
     const signals = [opts.signal, call?.signal].filter((s): s is AbortSignal => !!s);
@@ -136,5 +143,6 @@ export function createClient<R>(opts: ClientOptions): RPCClient<R> {
       cleanup();
       throw err;
     }
-  });
+  };
+  return createProxyClient<R, QueryExtras<R>>(rawSend, createQueryExtras(rawSend));
 }
