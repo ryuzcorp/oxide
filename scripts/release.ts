@@ -38,11 +38,7 @@ if (parts.length !== 3 || parts.some((p) => !/^\d+$/.test(p))) {
 const [maj, min, pat] = parts.map(Number);
 const next = bump === "minor" ? `${maj}.${min + 1}.0` : `${maj}.${min}.${pat + 1}`;
 
-type DepField =
-  | "dependencies"
-  | "devDependencies"
-  | "peerDependencies"
-  | "optionalDependencies";
+type DepField = "dependencies" | "devDependencies" | "peerDependencies" | "optionalDependencies";
 const DEP_FIELDS: DepField[] = [
   "dependencies",
   "devDependencies",
@@ -94,11 +90,17 @@ const walk = (dir: string): void => {
 
 for (const root of ["packages", "templates", "apps"]) walk(root);
 
-if (!pkgText.includes(`"version": "${old}"`) && !new RegExp('"version":\\s*"' + old + '"').test(pkgText)) {
+if (
+  !pkgText.includes(`"version": "${old}"`) &&
+  !new RegExp('"version":\\s*"' + old + '"').test(pkgText)
+) {
   console.error(`version mismatch: ${pkgPath} does not contain "${old}"`);
   process.exit(1);
 }
-writeFileSync(pkgPath, pkgText.replace(new RegExp('("version"\\s*:\\s*")' + old + '"'), `$1${next}"`));
+writeFileSync(
+  pkgPath,
+  pkgText.replace(new RegExp('("version"\\s*:\\s*")' + old + '"'), `$1${next}"`),
+);
 console.log(
   `${pkgPath}: ${old} -> ${next}\n${updated.join("\n")}\nPublish with: bun publish --cwd packages/${name}, then bun install to refresh bun.lock.`,
 );

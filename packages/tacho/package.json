@@ -1,6 +1,6 @@
 {
   "name": "tacho",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "JSON-RPC, but you never write a client.",
   "keywords": [
     "bun",

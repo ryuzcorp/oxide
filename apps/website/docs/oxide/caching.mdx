@@ -1,0 +1,148 @@
+---
+title: Caching
+sidebar:
+  icon: database
+description: Cache server-action results in the browser with tacho's query cache. Dedupe in-flight calls and invalidate after mutations.
+---
+
+Server actions always hit the wire. For reads you call repeatedly — lists, lookups, dashboards — wrap them in tacho's query cache instead of adding state by hand.
+
+## Wrap an action
+
+Import `query` from tacho and pass it any server action:
+
+```ts twoslash
+// @filename: tasks.server.ts
+export declare const listTasks: () => Promise<{ id: string }[]>;
+
+// ---cut---
+// @filename: app.ts
+import { query } from "tacho";
+import { listTasks } from "./tasks.server";
+
+const loadTasks = query(listTasks, { staleTime: 30_000 });
+
+const tasks = await loadTasks(); // first call runs the action
+const again = await loadTasks(); // served from cache, no request
+```
+
+The result is still callable exactly like the action. The default cache identity ties to this wrapper plus a stable hash of the arguments:
+
+```ts twoslash
+// @filename: tasks.server.ts
+export declare const getTask: (
+  id: string,
+) => Promise<{ id: string; text: string }>;
+
+// ---cut---
+// @filename: app.ts
+import { query } from "tacho";
+import { getTask } from "./tasks.server";
+
+const loadTask = query(getTask);
+
+await loadTask("1"); // cached under its own entry
+await loadTask("2"); // separate entry
+```
+
+Options:
+
+| option      |                                                                |
+| ----------- | -------------------------------------------------------------- |
+| `staleTime` | How long results stay fresh in ms. Default: until invalidated. |
+| `key`       | Explicit key prefix controlling the invalidation scope.        |
+
+Failures are never cached: a failed call retries on the next invoke. Identical in-flight calls dedupe into one request.
+
+## Invalidate
+
+Every wrapper carries `invalidate()` and `clear()`:
+
+```ts twoslash
+// @filename: tasks.server.ts
+export declare const getTask: (id: string) => Promise<unknown>;
+
+// ---cut---
+// @filename: app.ts
+import { query } from "tacho";
+import { getTask } from "./tasks.server";
+
+const loadTask = query(getTask);
+
+loadTask.invalidate(); // drop every cached input of this function
+loadTask.invalidate(({ args }) => args[0] === "1"); // selective
+loadTask.clear();
+```
+
+Call them after mutations so stale reads don't linger:
+
+```ts twoslash
+// @filename: tasks.server.ts
+export declare const renameTask: (i: {
+  id: string;
+  text: string;
+}) => Promise<void>;
+export declare const getTask: (id: string) => Promise<unknown>;
+
+// ---cut---
+// @filename: app.ts
+import { query } from "tacho";
+import { getTask, renameTask } from "./tasks.server";
+
+const loadTask = query(getTask);
+
+export async function save(props: { id: string; text: string }) {
+  await renameTask(props);
+  loadTask.invalidate(({ args }) => args[0] === props.id);
+}
+```
+
+To bust across wrappers at once, give related wrappers a shared `key` and a shared cache via `createCache` (below), or just call each wrapper's `invalidate()`.
+
+## Share a cache: `createCache`
+
+By default each wrapper owns its own in-memory cache. Pass a cache created with `createCache` to share one store across wrappers — invalidating on the cache handle hits every wrapper that uses it:
+
+```ts twoslash
+// @filename: tasks.server.ts
+export declare const listTasks: () => Promise<unknown>;
+export declare const getTask: (id: string) => Promise<unknown>;
+
+// ---cut---
+// @filename: app.ts
+import { createCache, query } from "tacho";
+import { getTask, listTasks } from "./tasks.server";
+
+const cache = createCache();
+
+const loadTasks = query(listTasks, { cache, key: ["tasks"] });
+const loadTask = query(getTask, { cache, key: ["tasks"] });
+
+await cache.invalidate(["tasks"]); // drops both wrappers' entries
+```
+
+The generated `virtual:oxide/client` accepts the same handle, so wrappers and the client share one store:
+
+```ts
+import { client } from "virtual:oxide/client";
+import { createCache, query } from "tacho";
+
+const cache = createCache();
+const loadTask = query(getTask, { cache, key: ["tasks"] });
+await client.cache.invalidate(["tasks"], { refetch: true });
+```
+
+See tacho's [Query Cache](/tacho/query-cache) docs for persistence drivers (`localStorageDriver()` and custom `CacheDriver` implementations).
+
+## Cached client surface
+
+The generated `virtual:oxide/client` is a full tacho HTTP client, so it exposes `.query()` / `.cache` too (types there are generated, not checked):
+
+```ts
+import { client } from "virtual:oxide/client";
+
+await client.query().test.ping(); // cached with method-path keys
+await client.cache.invalidate();
+```
+
+Prefer the `query(fn)` wrapper for day-to-day code: it keeps imports local (`./tasks.server`) and typed.

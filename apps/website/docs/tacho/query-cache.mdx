@@ -1,0 +1,202 @@
+---
+title: Query Cache
+sidebar:
+  icon: database
+description: Cache RPC results by method path and input. Dedupe in-flight calls, invalidate on mutations, or wrap any async function.
+---
+
+Tacho ships a result cache so reads don't refetch what hasn't changed. It dedupes identical in-flight calls, keeps results fresh for a window you choose, and never caches failures. There are two surfaces over the same engine:
+
+- `client.query()` / `client.cache` — cached calls through an HTTP client, keyed by method path.
+- `query(fn)` — a wrapper that gives any async function the same semantics.
+
+## Cached client calls
+
+Every HTTP client exposes `.query()` and `.cache` next to the plain surface:
+
+```ts twoslash
+import { tacho } from "tacho";
+import { createClient } from "tacho/client/http";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+type Router = typeof router;
+
+const client = createClient<Router>({ url: "/rpc" });
+
+await client.ping(); // always hits the wire
+await client.query().ping(); // same call, but cached with key ["ping"]
+```
+
+The default key is `[methodPath, input]`, hashed stably — object key order in the input does not matter. Identical in-flight calls share one request instead of racing. Pass options to the surface:
+
+```ts twoslash
+import { tacho } from "tacho";
+import { createClient } from "tacho/client/http";
+import { z } from "zod";
+
+const rpc = tacho();
+const router = rpc({
+  task: {
+    list: rpc
+      .input(z.object({ done: z.boolean() }))
+      .run(() => [] as string[]),
+  },
+});
+type Router = typeof router;
+const client = createClient<Router>({ url: "/rpc" });
+
+const q = client.query({ staleTime: 30_000 });
+await q.task.list({ done: false }); // fresh for 30s, then refetched
+```
+
+A custom key namespaces every call made through that surface; entries still split per input:
+
+```ts twoslash
+import { tacho } from "tacho";
+import { createClient } from "tacho/client/http";
+
+const rpc = tacho();
+const router = rpc({ ping: rpc.run(() => "pong" as const) });
+type Router = typeof router;
+const client = createClient<Router>({ url: "/rpc" });
+
+await client.query({ key: ["page", 1] }).ping(); // cached under ["page", 1, ...]
+```
+
+What is never cached:
+
+- **Streams** (`async function*` procedures). They come back as generators.
+- **File uploads** — inputs containing `File`/`Blob` have no stable hash and bypass the cache.
+- **Failures.** A rejected call drops its entry so the next call retries.
+
+## Invalidation
+
+The `.cache` handle controls everything the client has cached:
+
+```ts twoslash
+import { tacho } from "tacho";
+import { createClient } from "tacho/client/http";
+
+const rpc = tacho();
+const router = rpc({
+  user: {
+    get: rpc.run(() => ({ id: "1" })),
+    rename: rpc.run(() => undefined),
+  },
+});
+type Router = typeof router;
+const client = createClient<Router>({ url: "/rpc" });
+
+// ---cut---
+await client.cache.invalidate(["user.get"]); // prefix match on key segments
+await client.cache.invalidate((e) => e.method.startsWith("user."));
+
+await client.cache.invalidate(["user.get"], { refetch: true }); // re-run stored params now
+client.cache.keys();
+client.cache.clear();
+```
+
+After a mutation, invalidate what it touched:
+
+```ts twoslash
+import { tacho } from "tacho";
+import { createClient } from "tacho/client/http";
+import { z } from "zod";
+
+const rpc = tacho();
+const router = rpc({
+  user: {
+    get: rpc
+      .input(z.object({ id: z.string() }))
+      .run(() => ({ id: "1" })),
+    rename: rpc
+      .input(z.object({ id: z.string() }))
+      .run(() => undefined),
+  },
+});
+type Router = typeof router;
+const client = createClient<Router>({ url: "/rpc" });
+
+// ---cut---
+await client.user.rename({ id: "1" });
+await client.cache.invalidate(["user.get"], { refetch: true });
+```
+
+Caveat: a router with root-level `query` or `cache` procedures shadows these handles on the typed surface.
+
+## Shared and persistent caches: `createCache()`
+
+A named, sharable, optionally persistent cache. Pass the handle to wrappers or clients so they share one store — invalidating on the handle hits every consumer:
+
+```ts twoslash
+import { createCache, localStorageDriver, query } from "tacho";
+
+declare const listTasks: () => Promise<unknown>;
+declare const getUsers: () => Promise<unknown>;
+// ---cut---
+const cache = createCache({
+  name: "myapp",
+  driver: localStorageDriver(),
+});
+const loadTasks = query(listTasks, { cache, key: ["tasks"] });
+const loadUsers = query(getUsers, { cache, key: ["users"] });
+await cache.invalidate(["tasks"]); // tasks only, users untouched
+```
+
+HTTP clients accept the same handle so `.query()` surfaces share it:
+
+```ts
+const client = createClient<Router>({ url: "/rpc", cache });
+```
+
+A driver persists settled values as namespaced JSON envelopes and hydrates them once up front; entries whose fresh window expired on disk are ignored. Anything that cannot survive a JSON round-trip (`File`, `Blob`, class instances) is not persisted. Failures and in-flight calls never touch storage.
+
+`localStorageDriver()` wraps Web Storage. For Redis, IndexedDB, or anything else, implement four methods:
+
+```ts twoslash
+import type { CacheDriver } from "tacho";
+
+declare const redis: {
+  keys(p: string): Promise<string[]>;
+  get(k: string): Promise<string | undefined>;
+  set(k: string, v: string): Promise<void>;
+  del(k: string): Promise<void>;
+};
+// ---cut---
+const redisDriver: CacheDriver = {
+  keys: async () => (await redis.keys("app:*")).map((k) => k.slice(4)),
+  get: (_key) => undefined,
+  set: async () => {},
+  delete: async () => {},
+};
+```
+
+> When persisting, pass explicit `key`s to your wrappers — default wrapper identities reset with each session.
+
+## Wrap any function: `query(fn, opts?)`
+
+No typed router client in hand? Wrap the function directly. Works for plain `fetch` helpers or any async call:
+
+```ts twoslash
+// @filename: api.ts
+export declare const getUser: (i: {
+  id: string;
+}) => Promise<{ id: string }>;
+
+// ---cut---
+// @filename: app.ts
+import { query } from "tacho";
+import { getUser } from "./api";
+
+const loadUser = query(getUser, { staleTime: 30_000 });
+
+await loadUser({ id: "1" }); // deduped + cached per distinct input
+await loadUser.invalidate();
+await loadUser.invalidate(({ args }) => args[0].id === "1"); // selective
+loadUser.clear();
+```
+
+The default cache identity ties to the wrapper instance plus a stable hash of the arguments. Two wrappers never collide. Pass `{ key: ["users"] }` to pin the invalidation scope explicitly — useful across hot reloads, since instance identity resets when code reloads.
+
+Options are shared with the client surface: `staleTime` (default: forever, until invalidated) and `key`.

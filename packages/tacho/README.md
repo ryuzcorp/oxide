@@ -231,6 +231,41 @@ await client.cache.invalidate(["user.get"], { refetch: true });
 
 Caveat: a router with root-level `query` or `cache` procedures shadows them on the typed surface.
 
+### `createCache({ name?, driver? })`
+
+A named, sharable, optionally persistent cache. Pass the handle to wrappers or clients so they share one store — invalidating on the handle hits every consumer:
+
+```ts
+import { createCache, localStorageDriver, query } from "tacho";
+
+const cache = createCache({ name: "myapp", driver: localStorageDriver() });
+const loadTasks = query(listTasks, { cache, key: ["tasks"] });
+const loadUsers = query(getUsers, { cache, key: ["users"] });
+await cache.invalidate(["tasks"]); // tasks only
+
+const client = createClient<Router>({ url: "/rpc", cache });
+```
+
+A driver persists settled values as namespaced JSON envelopes and hydrates them once up front (stale entries are ignored). Anything that cannot survive a JSON round-trip is not persisted. Values are written through on settle; failures and in-flight entries never touch storage. `localStorageDriver()` wraps Web Storage; pass any `{ keys, get, set, delete }` object for Redis, IndexedDB, and friends. When persisting, prefer explicit `key`s — default wrapper identities reset per session.
+
+### `query(fn, opts?)`
+
+The same cache as a wrapper around any async function — ideal for server-action imports where no typed router client is in hand:
+
+```ts
+import { query } from "tacho";
+import { getUser } from "./users.server";
+
+const loadUser = query(getUser, { staleTime: 30_000 });
+
+await loadUser({ id: "1" }); // deduped + cached per distinct input
+await loadUser.invalidate(); // drop every cached input of this function
+await loadUser.invalidate(({ args }) => args[0].id === "1"); // selective
+loadUser.clear();
+```
+
+The default cache identity ties to the wrapper instance plus a stable hash of the arguments. Pass `{ key: ["users"] }` to pin the invalidation scope explicitly (its entries still split per input). Streams bypass the cache; failures are never cached.
+
 ## Custom Serializers
 
 To use a custom serializer (like `superjson` or `msgpack`), pass it to `handle()` and `createClient()`.

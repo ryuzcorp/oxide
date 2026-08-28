@@ -38,6 +38,14 @@ export const JSON_RPC_ERROR = {
 export const APP_ERROR_RANGE = { min: -32099, max: -32000 } as const;
 
 export { Publisher } from "./pubsub";
+export {
+  createCache,
+  localStorageDriver,
+  query,
+  type CacheDriver,
+  type CacheHandle,
+  type QueryOptions,
+} from "./client/query";
 
 export class RpcError extends Error {
   readonly code: number;

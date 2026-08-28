@@ -37,12 +37,12 @@
     },
     "packages/oxidejs": {
       "name": "oxidejs",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "dependencies": {
         "unplugin": "^3.3.0",
       },
       "devDependencies": {
-        "tacho": "^0.6.0",
+        "tacho": "^0.6.1",
       },
       "peerDependencies": {
         "@rsbuild/core": "*",
@@ -59,7 +59,7 @@
     },
     "packages/tacho": {
       "name": "tacho",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "devDependencies": {
         "@tsconfig/strictest": "^2.0.8",
         "@types/bun": "latest",

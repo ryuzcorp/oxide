@@ -1,0 +1,39 @@
+---
+title: Security
+sidebar:
+  icon: shield
+description: What tacho guards by default, what you must guard yourself, and where the trust boundaries sit.
+---
+
+Tacho guards the protocol boundary so malformed or hostile requests fail closed. It does not know your users — authentication, CORS, and rate limiting are yours.
+
+## Default guards
+
+| Guard                     | Default                                                     | What fails                                                                                                              |
+| ------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Method dispatch**       | `Object.hasOwn` walk                                        | `__proto__`, `constructor`, prototype chain segments → `METHOD_NOT_FOUND`                                               |
+| **HTTP method**           | POST only                                                   | GET / PUT / DELETE / PATCH → `405` + `Allow: POST`                                                                      |
+| **Content-Type**          | `application/json`                                          | `text/plain`, `application/xml` → `415`                                                                                 |
+| **Body size**             | 1 MB (`maxBodySize`)                                        | Oversized body → `413`. Measured on the _actual_ body, not just the `Content-Length` header.                            |
+| **Batch size**            | 20 (`maxBatchSize`)                                         | Fetch _and_ WS enforce the same cap. Oversized → `INVALID_REQUEST`.                                                     |
+| **Error info**            | Plain `Error` → generic `"Internal error"`                  | Original message, stack, and data are never serialized. `RpcError` exposes only `code`, `message`, and explicit `data`. |
+| **Procedure name**        | `rpc.*` reserved                                            | `rpc.discover` → `METHOD_NOT_FOUND`                                                                                     |
+| **Stream + batch**        | Rejected                                                    | `INVALID_REQUEST`                                                                                                       |
+| **Stream + notification** | No-op                                                       | `204`, generator never starts                                                                                           |
+| **Content-Disposition**   | `safeFileName` strips `\r`, `\n`, `"`, `\`, path separators | `fileHeaders` returns a safer `filename` value                                                                          |
+
+## Same-origin
+
+Set `sameOrigin: true` on the fetch or WebSocket handler to reject cross-origin browser requests. It checks `Sec-Fetch-Site`, then `Origin`. Requests with neither header (server-to-server, curl) are allowed — this is CSRF protection, not authentication.
+
+## What you must guard
+
+- **Authentication** — none built in. Verify credentials in middleware (`rpc.use`) or in `createContext`, and throw `RpcError` when unauthorized.
+- **CORS** — `handle()` does not set `Access-Control-*` headers. Wrap it when called cross-origin.
+- **Rate limiting** — no built-in. Wrap `handle()` or put a reverse proxy in front.
+- **WebSocket authentication** — the WS handler's `upgrade()` only checks `path`. Authenticate via `createContext` or guard at the upgrade point from your server's WebSocket upgrade handler. An unauthenticated socket can call any procedure.
+
+## Trust boundaries
+
+- **`RpcError.data` is serialized to the wire.** Never put secrets, stack traces, or internal state in it. Plain `Error`s are scrubbed; only `RpcError` carries what you explicitly attach.
+- **A custom serializer is the full trust boundary.** Whatever its `parse` returns, tacho dispatches against. Whatever it `stringify`s, the client sees. If you use one, it is responsible for not leaking internals. See [Custom serializers](/tacho/api-reference#custom-serializers).

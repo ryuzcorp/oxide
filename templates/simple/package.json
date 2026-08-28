@@ -11,11 +11,11 @@
     "@ilha/router": "^0.10.3",
     "areia": "^0.3.1",
     "ilha": "^0.12.1",
-    "tacho": "^0.6.0"
+    "tacho": "^0.6.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "oxidejs": "^0.2.2",
+    "oxidejs": "^0.2.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^6",
     "vite": "^8.2.1"

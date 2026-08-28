@@ -6,7 +6,7 @@ import {
   type Serializer,
 } from "../index";
 import { extractFiles, filenameFrom, fromForm, injectFiles, toForm } from "../file";
-import { createQueryExtras, type QueryExtras } from "./query";
+import { createQueryExtras, type CacheHandle, type QueryExtras } from "./query";
 
 export type ClientOptions = {
   url: string;
@@ -15,6 +15,8 @@ export type ClientOptions = {
   signal?: AbortSignal;
   /** Custom serializer for the JSON-RPC payload (e.g. superjson, msgpack). */
   serializer?: Serializer;
+  /** Shared/persistent cache from `createCache()`. Defaults to a private in-memory store. */
+  cache?: CacheHandle;
 };
 
 let nextId = 0;
@@ -144,5 +146,5 @@ export function createClient<R>(opts: ClientOptions): RPCClient<R> & QueryExtras
       throw err;
     }
   };
-  return createProxyClient<R, QueryExtras<R>>(rawSend, createQueryExtras(rawSend));
+  return createProxyClient<R, QueryExtras<R>>(rawSend, createQueryExtras(rawSend, opts.cache));
 }

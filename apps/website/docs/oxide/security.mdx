@@ -1,0 +1,40 @@
+---
+title: Security
+sidebar:
+  icon: shield
+description: What oxidejs guards by default in asset serving, server actions, and the dev server — and what stays your job.
+---
+
+oxidejs inherits all of tacho's [protocol guards](/tacho/security) and adds its own for the build output and dev server. Authentication, CORS, and rate limiting are still yours.
+
+## Asset serving (`preset: "fetch"`)
+
+The generated server serves static files from `dist/client/` (or the `public/` directory merged into it). These guards are active:
+
+| Attack vector                      | Guard                                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments.                                                                                      |
+| **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`.                                                                  |
+| **Null byte** (`%00`, `\0`)        | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`.                                                   |
+| **Absolute path** (`/etc/passwd`)  | `__rel()` returns `null` for paths not starting with `/`.                                                                              |
+| **SPA fallback**                   | Unknown paths → `index.html`, never a directory listing.                                                                               |
+| **`clientDir` escape**             | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`.                                                        |
+| **Hashed assets**                  | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |
+
+The generated `__asset` function uses `path.join` — not `path.resolve` — so a leading `/` in the relative path stays inside the asset root.
+
+## Server actions (`*.server.{ts,tsx,js,jsx}`)
+
+- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
+- Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
+- The endpoint is POST-only. Non-POST requests return `405`.
+- Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
+- Unknown or missing content-types → `415`.
+- Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
+- Batch requests capped at 20 items (both HTTP and WebSocket transports).
+
+Set `sameOrigin: false` only when you intentionally accept cross-origin calls and provide your own CORS, CSRF, and authentication rules. See [`middleware`](/oxide/configuration#middleware).
+
+## Host header
+
+The generated dev server constructs `request.url` from `req.headers.host`. This is standard HTTP/1.1 behavior (same as Express, Hono, Koa, Node http). If your `src/server.ts` reads `request.url` to construct redirects, validate the host yourself — the framework cannot distinguish a legitimate host header from a malicious one. In production, your reverse proxy handles this.
