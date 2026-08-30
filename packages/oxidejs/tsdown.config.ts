@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
   entry: {
     index: "src/index.ts",
+    plugin: "src/plugin.ts",
     vite: "src/vite.ts",
     rsbuild: "src/rsbuild.ts",
   },

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RESOLVED_VIRTUAL_ACTIONS_ID, VIRTUAL_ACTIONS_ID, VIRTUAL_WORKER_ID } from "./actions";
-import { oxidejs, unpluginFactory, vite } from "./index";
+import { oxidejs, unpluginFactory, vite } from "./plugin";
 import rsbuild from "./rsbuild";
 import { applyRsbuildEnvironments, applyViteEnvironments } from "./worker-build";
 import { resolveOptions } from "./core";
@@ -40,7 +40,7 @@ describe("factory shape", () => {
     expect(typeof plugin.rsbuild?.setup).toBe("function");
   });
 
-  test("vite dev middleware runs before actions with the production signature", async () => {
+  test("vite registers middleware and actions synchronously before Vite internals", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-dev-"));
     const seen: unknown[] = [];
     const plugin = unpluginFactory({ middleware: ["./middleware"], env: { mode: "dev" } }, {
@@ -64,18 +64,79 @@ describe("factory shape", () => {
     };
 
     try {
-      (plugin.vite.configureServer as (server: unknown) => void)(server);
+      const post = (
+        plugin.vite.configureServer as (server: unknown) => (() => void | Promise<void>) | void
+      )(server);
+      expect(handlers).toHaveLength(2);
+      expect(typeof post).toBe("function");
       handlers.push((_req, _res, next) => next()); // downstream framework middleware
-      for (let i = 0; handlers.length < 3 && i < 10; i++) await Bun.sleep(0);
-      expect(handlers).toHaveLength(3);
       const { EventEmitter } = await import("node:events");
       const req = Object.assign(new EventEmitter(), {
         method: "GET",
         url: "/other",
         headers: { host: "localhost" },
       });
-      await new Promise<void>((resolve) => handlers[1]!(req as never, {} as never, resolve));
+      await new Promise<void>((resolve) => handlers[0]!(req as never, {} as never, resolve));
       expect(seen).toEqual([{ env: { mode: "dev" }, ctx: undefined }]);
+
+      // Action path must skip the bridge so the body stays readable for tacho.
+      let actionNext = false;
+      handlers[0]!(
+        Object.assign(new EventEmitter(), {
+          method: "POST",
+          url: "/__oxide/action",
+          headers: { host: "localhost" },
+        }) as never,
+        {} as never,
+        () => {
+          actionNext = true;
+        },
+      );
+      expect(actionNext).toBe(true);
+      expect(seen).toHaveLength(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("vite retries a rejected action router on the next load", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-retry-"));
+    const plugin = unpluginFactory({}, { framework: "vite" } as never);
+    if (Array.isArray(plugin)) throw new Error("expected a single plugin");
+    if (!plugin.vite) throw new Error("expected vite hooks");
+    (plugin.vite.config as (config: { root: string }) => void)({ root });
+
+    let loads = 0;
+    const errors: string[] = [];
+    const server = {
+      environments: {},
+      watcher: { on() {} },
+      middlewares: { use() {} },
+      ssrLoadModule: async () => {
+        loads += 1;
+        if (loads === 1) throw new Error("cold");
+        return { default: { ping: () => "ok" } };
+      },
+      config: {
+        logger: {
+          error(message: string) {
+            errors.push(message);
+          },
+        },
+      },
+    };
+
+    try {
+      const post = (plugin.vite.configureServer as (server: unknown) => () => Promise<void>)(
+        server,
+      );
+      await post();
+      expect(errors.some((message) => message.includes("prewarm"))).toBe(true);
+      expect(loads).toBe(1);
+      errors.length = 0;
+      await post();
+      expect(errors).toEqual([]);
+      expect(loads).toBe(2);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

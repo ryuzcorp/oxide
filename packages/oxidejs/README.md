@@ -12,6 +12,8 @@ dist/
 
 v1 targets **Vite** and **Rsbuild** via unplugin. Other bundlers are out of scope for now.
 
+The `oxidejs` entry exports runtime helpers (`action`, `useRequest`, …). The bundler plugin lives at `oxidejs/vite` or `oxidejs/rsbuild` — keep those separate so `*.server.ts` can import `oxidejs` under `preset: "celld"` without pulling Node build tooling into the worker graph.
+
 ## Vite
 
 ```ts
