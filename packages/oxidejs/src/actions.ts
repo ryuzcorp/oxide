@@ -194,7 +194,7 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     `import { Schema } from "effect";`,
     `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
     `import { AsyncLocalStorage } from "node:async_hooks";`,
-    `import { asyncGenToStream } from "oxidejs/rpc";`,
+    `import { asyncGenToStreamInContext } from "oxidejs/rpc";`,
     `const __alsKey = Symbol.for("oxidejs.requestContext");`,
     `const __als = globalThis[__alsKey] ??= new AsyncLocalStorage();`,
     `const __store = () => {`,
@@ -206,6 +206,7 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     `  Effect.promise(() => __als.run(__store(), fn)).pipe(`,
     `    Effect.map((value) => (value === undefined ? null : value)),`,
     `  );`,
+    `const __withStore = (store, fn) => __als.run(store, fn);`,
   ];
   const rpcNames: string[] = [];
   const aliases = modules.map((mod, i) => {
@@ -231,7 +232,7 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
       const stream = mod.streams?.includes(name) ?? false;
       lines.push(
         stream
-          ? `  ${JSON.stringify(tag)}: ({ args }) => asyncGenToStream(__als.run(__store(), () => ${alias}[${JSON.stringify(name)}].apply(null, args))),`
+          ? `  ${JSON.stringify(tag)}: ({ args }) => { const __s = __store(); return asyncGenToStreamInContext(() => ${alias}[${JSON.stringify(name)}].apply(null, args), (fn) => __withStore(__s, fn)); },`
           : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, args)),`,
       );
     }

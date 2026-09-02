@@ -205,6 +205,43 @@ test("scrubNdjsonTransform reassembles a line split across multi-byte UTF-8", as
   expect(out).not.toContain("sécret");
 });
 
+test("scrubRpcJson repairs distinct Defect ids for multi-request batches", () => {
+  const batch = JSON.stringify([
+    {
+      jsonrpc: "2.0",
+      id: -32603,
+      error: { _tag: "Defect", data: { message: "first" } },
+    },
+    {
+      jsonrpc: "2.0",
+      id: -32603,
+      error: { _tag: "Defect", data: { message: "second" } },
+    },
+  ]);
+  expect(JSON.parse(scrubRpcJson(batch, [10, 20]))).toEqual([
+    { jsonrpc: "2.0", id: 10, error: { code: -32603, message: "Internal error" } },
+    { jsonrpc: "2.0", id: 20, error: { code: -32603, message: "Internal error" } },
+  ]);
+
+  const ndjson =
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 10,
+      result: "ok",
+    }) +
+    "\n" +
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: -32603,
+      error: { _tag: "Defect", data: { message: "boom" } },
+    }) +
+    "\n";
+  expect(scrubRpcJson(ndjson, [10, 20])).toBe(
+    '{"jsonrpc":"2.0","id":10,"result":"ok"}\n' +
+      '{"jsonrpc":"2.0","id":20,"error":{"code":-32603,"message":"Internal error"}}\n',
+  );
+});
+
 test("extractJsonRpcRequestIds reads unary, batch array, and NDJSON ids", () => {
   expect(extractJsonRpcRequestId('{"jsonrpc":"2.0","id":7,"method":"x"}')).toBe(7);
   expect(

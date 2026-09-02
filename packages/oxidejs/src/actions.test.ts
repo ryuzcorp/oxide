@@ -788,6 +788,31 @@ export const who = action(async function* () { yield useRequest().headers.get("x
     }
   });
 
+  test("useRequest() stays available after a yield in an async generator", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-gen-req-after-"));
+    fs.writeFileSync(
+      path.join(root, "who.server.ts"),
+      `import { action, useRequest } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const who = action(async function* () {
+  yield "start";
+  yield useRequest().headers.get("x-user");
+})
+`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "who.who", undefined, { headers: { "x-user": "ada" } });
+      const body = await readRpcFrames(res);
+      expect(body).toEqual([
+        { jsonrpc: "2.0", chunk: true, id: 1, result: ["start"] },
+        { jsonrpc: "2.0", chunk: true, id: 1, result: ["ada"] },
+        { jsonrpc: "2.0", id: 1, result: null },
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("useRequest() reads the inbound Request inside an action", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-req-"));
     fs.writeFileSync(

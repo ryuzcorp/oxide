@@ -36,14 +36,45 @@ function scrubError(error: unknown): { code: number; message: string } {
   return { ...INTERNAL };
 }
 
-/** Scrub one JSON-RPC response object. `requestIds` repairs Defect ids (= -32603). */
-export function scrubRpcMessage(msg: unknown, requestIds: readonly unknown[] = []): unknown {
-  if (!isRecord(msg) || !("error" in msg) || msg["error"] == null) return msg;
+/** Mutable repair state so each Defect can claim a distinct originating request id. */
+export type IdRepairState = {
+  /** Request ids not yet claimed by a terminal (non-chunk) response. */
+  remaining: Set<unknown>;
+};
+
+export function createIdRepairState(requestIds: readonly unknown[] = []): IdRepairState {
+  return { remaining: new Set(requestIds) };
+}
+
+/**
+ * Scrub one JSON-RPC response object.
+ * Effect encodes Defects with `id: -32603`; reclaim the originating request id from `state.remaining`.
+ */
+export function scrubRpcMessage(
+  msg: unknown,
+  requestIds: readonly unknown[] = [],
+  state: IdRepairState = createIdRepairState(requestIds),
+): unknown {
+  if (!isRecord(msg) || !("error" in msg) || msg["error"] == null) {
+    // Terminal success / chunk frames with a real id consume that id so later Defects don't steal it.
+    if (isRecord(msg) && msg["chunk"] !== true && msg["id"] !== -32603 && "id" in msg) {
+      state.remaining.delete(msg["id"]);
+    }
+    return msg;
+  }
 
   const error = scrubError(msg["error"]);
   let id = msg["id"];
   if (id === -32603) {
-    id = requestIds.length === 1 ? requestIds[0] : null;
+    const next = state.remaining.values().next();
+    if (!next.done) {
+      id = next.value;
+      state.remaining.delete(next.value);
+    } else {
+      id = null;
+    }
+  } else if (id !== undefined && id !== null) {
+    state.remaining.delete(id);
   }
   if (id === undefined) id = null;
 
@@ -57,6 +88,7 @@ export function scrubRpcMessage(msg: unknown, requestIds: readonly unknown[] = [
 export function scrubRpcJson(body: string, requestIds: readonly unknown[] = []): string {
   const trimmed = body.replace(/^\uFEFF/, "");
   if (!trimmed) return body;
+  const state = createIdRepairState(requestIds);
 
   // NDJSON: one or more newline-terminated frames (possibly without a final newline).
   if (trimmed.includes("\n")) {
@@ -67,7 +99,7 @@ export function scrubRpcJson(body: string, requestIds: readonly unknown[] = []):
         // Preserve trailing newline as an empty trailing segment from split.
         continue;
       }
-      out.push(scrubRpcLine(line, requestIds));
+      out.push(scrubRpcLine(line, state));
     }
     const endsWithNl = trimmed.endsWith("\n");
     return endsWithNl ? `${out.join("\n")}\n` : out.join("\n");
@@ -76,17 +108,17 @@ export function scrubRpcJson(body: string, requestIds: readonly unknown[] = []):
   try {
     const parsed: unknown = JSON.parse(trimmed);
     if (Array.isArray(parsed)) {
-      return JSON.stringify(parsed.map((msg) => scrubRpcMessage(msg, requestIds)));
+      return JSON.stringify(parsed.map((msg) => scrubRpcMessage(msg, requestIds, state)));
     }
-    return JSON.stringify(scrubRpcMessage(parsed, requestIds));
+    return JSON.stringify(scrubRpcMessage(parsed, requestIds, state));
   } catch {
     return body;
   }
 }
 
-function scrubRpcLine(line: string, requestIds: readonly unknown[]): string {
+function scrubRpcLine(line: string, state: IdRepairState): string {
   try {
-    return JSON.stringify(scrubRpcMessage(JSON.parse(line), requestIds));
+    return JSON.stringify(scrubRpcMessage(JSON.parse(line), [], state));
   } catch {
     return line;
   }
@@ -150,6 +182,7 @@ export function scrubNdjsonTransform(
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const state = createIdRepairState(requestIds);
   let pending = "";
 
   return new TransformStream<Uint8Array, Uint8Array>({
@@ -160,7 +193,7 @@ export function scrubNdjsonTransform(
         const line = pending.slice(0, nl);
         pending = pending.slice(nl + 1);
         if (line.length > 0) {
-          controller.enqueue(encoder.encode(`${scrubRpcLine(line, requestIds)}\n`));
+          controller.enqueue(encoder.encode(`${scrubRpcLine(line, state)}\n`));
         }
         nl = pending.indexOf("\n");
       }
@@ -168,7 +201,7 @@ export function scrubNdjsonTransform(
     flush(controller) {
       pending += decoder.decode();
       if (pending.length > 0) {
-        controller.enqueue(encoder.encode(`${scrubRpcLine(pending, requestIds)}\n`));
+        controller.enqueue(encoder.encode(`${scrubRpcLine(pending, state)}\n`));
         pending = "";
       }
     },
