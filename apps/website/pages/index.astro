@@ -1,19 +1,6 @@
 ---
 import PageLayout from "blume/components/layout/PageLayout.astro";
 import data from "blume:data";
-import { Button } from "@/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/ui/card";
-import { Separator } from "@/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
-import { BuildSwitcher } from "./_home/BuildSwitcher";
 import { highlight } from "./_home/highlight";
 
 const { config } = data;
@@ -29,7 +16,7 @@ import { create, watch } from "./notes.server";
 const note = await create("Ship Oxide");
 console.log(note); // { id: "…", title: "Ship Oxide" }
 
-// A function that yields streams live updates to the browser.
+// Stream actions return an async generator after await.
 for await (const n of await watch()) console.log(n);`,
       "ts",
     ),
@@ -37,18 +24,17 @@ for await (const n of await watch()) console.log(n);`,
   {
     name: "notes.server.ts",
     html: highlight(
-      `// Your backend logic lives here. Talk to a database,
-// call an API — it stays on the server.
-import { useRequest } from "oxidejs";
+      `// Only action()-wrapped exports are callable over the wire.
+import { action, useRequest } from "oxidejs";
 
-export async function create(title: string) {
+export const create = action(async (title: string) => {
   return { id: crypto.randomUUID(), title };
-}
+});
 
-export async function* watch() {
-  const req = useRequest(); // the inbound request
+export const watch = action(async function* () {
+  useRequest(); // inbound Request inside the stream
   yield { id: "1", title: "Ship Oxide" };
-}`,
+});`,
       "ts",
     ),
   },
@@ -99,12 +85,40 @@ const sysInfo: SysInfo[] = [
   ["runtime", "node / bun / deno"],
   ["bundler", "vite / rsbuild", "/oxide/quickstart"],
   ["entry", "src/server.ts", "/oxide/server-entry"],
-  ["rpc", "tacho", "/tacho/overview"],
+  ["rpc", "effect", "/oxide/server-actions"],
   ["agentic", "llms.txt", "/llms.txt"],
   ["deploy", "vps / celld / cloudflare / vercel", undefined, "vps / workers / vercel"],
 ];
 
-const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
+const btn =
+  "btn rounded-none border-2 font-mono uppercase tracking-wide shadow-none";
+
+const bundlers = [
+  {
+    name: "Vite",
+    html: highlight(
+      `import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [oxide()],
+});`,
+      "ts",
+    ),
+  },
+  {
+    name: "Rsbuild",
+    html: highlight(
+      `import { defineConfig } from "@rsbuild/core";
+import oxide from "oxidejs/rsbuild";
+
+export default defineConfig({
+  plugins: [oxide()],
+});`,
+      "ts",
+    ),
+  },
+] as const;
 ---
 
 <PageLayout
@@ -133,9 +147,7 @@ const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
     <section class="relative mx-auto max-w-5xl px-4 pt-12 pb-16 sm:px-6 sm:pt-16">
       <div class="grid items-center gap-12 lg:grid-cols-2">
         <div>
-          <h1
-            class="font-mono text-lg text-foreground"
-          >
+          <h1 class="font-mono text-lg text-foreground">
             <span class="text-primary">oxide</span><span class="text-muted-foreground"
               >@build</span
             >:<span class="text-muted-foreground">~</span>
@@ -151,31 +163,23 @@ const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
           </p>
           <div class="mt-8 flex flex-wrap items-center gap-3">
             <span class="inline-grid">
-              <Button
-                as="a"
+              <a
                 href="/getting-started"
-                size="lg"
-                class={`${btn} sysbox-cta-pending [grid-area:1/1] transition-opacity duration-300 motion-reduce:transition-none`}
-                variant="outline"
-              >Start building</Button>
-              <Button
-                as="a"
+                class={`${btn} btn-outline sysbox-cta-pending [grid-area:1/1] transition-opacity duration-300 motion-reduce:transition-none`}
+              >Start building</a>
+              <a
                 href="/getting-started"
-                size="lg"
-                class={`${btn} sysbox-cta-ready [grid-area:1/1] pointer-events-none opacity-0 transition-opacity duration-300 motion-reduce:transition-none`}
+                class={`${btn} btn-primary sysbox-cta-ready [grid-area:1/1] pointer-events-none opacity-0 transition-opacity duration-300 motion-reduce:transition-none`}
                 aria-hidden="true"
                 tabindex="-1"
-              >Start building</Button>
+              >Start building</a>
             </span>
-            <Button
-              as="a"
+            <a
               href={repoUrl}
               rel="noreferrer"
-              size="lg"
               target="_blank"
-              class={btn}
-              variant="outline">Read the source</Button
-            >
+              class={`${btn} btn-outline`}
+            >Read the source</a>
           </div>
           <p class="mt-6 font-mono text-xs text-muted-foreground/80">
             <span class="text-primary">[ok]</span> 1 plugin · 1 build · 1 deployable tree
@@ -222,57 +226,55 @@ const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
     </section>
 
     <section class="relative mx-auto max-w-5xl px-4 pb-20 sm:px-6">
-      <Card
-        class="ascii-card terminal-win rounded-none bg-card shadow-none gap-0 py-0"
-      >
-        <CardHeader class="border-b-2 border-border px-4 py-3">
-          <CardTitle class="font-mono text-base uppercase tracking-wide">
-            server code in. deployable app out.
-          </CardTitle>
-          <CardDescription class="font-mono text-sm leading-6 text-muted-foreground">
-            Five files. No controllers, client SDK, or second build pipeline.
-          </CardDescription>
-          <CardAction>
-            <Button as="a" target="_blank" rel="noopener noreferrer" href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/simple?file=src%2Fgreet.server.tsx" size="sm" type="button" variant="secondary" class="rounded-none border-2 font-mono uppercase tracking-wide">▶ run</Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent class="p-0">
-          <Tabs defaultValue={files[0].name}>
-            <TabsList
-              class="h-auto w-full justify-start overflow-x-auto overflow-y-hidden border-b border-border rounded-none bg-transparent p-0"
-              size="sm"
-              variant="line"
-            >
-              {
-                files.map((file) => (
-                  <TabsTrigger
-                    class="flex-none rounded-none border-b-2 border-transparent px-3 py-2 font-mono text-xs data-[state=active]:border-primary"
-                    value={file.name}
-                  >
-                    {file.name}
-                  </TabsTrigger>
-                ))
-              }
-            </TabsList>
+      <div class="ascii-card terminal-win card rounded-none bg-card shadow-none">
+        <div class="card-body gap-0 p-0">
+          <div class="flex flex-wrap items-start justify-between gap-3 border-b-2 border-border px-4 py-3">
+            <div class="min-w-0 space-y-1">
+              <h2 class="card-title font-mono text-base uppercase tracking-wide">
+                server code in. deployable app out.
+              </h2>
+              <p class="font-mono text-sm leading-6 text-muted-foreground">
+                Five files. No controllers, client SDK, or second build pipeline.
+              </p>
+            </div>
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/simple?file=src%2Fgreet.server.tsx"
+              class={`${btn} btn-sm btn-secondary`}
+            >▶ run</a>
+          </div>
+
+          <div class="tabs tabs-border w-full">
             {
-              files.map((file) => (
-                <TabsContent value={file.name} class="m-0">
-                  <div
-                    class="overflow-x-auto px-4 py-4 font-mono text-sm leading-6 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
-                    set:html={file.html}
+              files.map((file, index) => (
+                <>
+                  <input
+                    type="radio"
+                    name="oxide_files"
+                    class="tab font-mono text-xs"
+                    aria-label={file.name}
+                    checked={index === 0}
                   />
-                </TabsContent>
+                  <div class="tab-content m-0 border-0 p-0">
+                    <div
+                      class="overflow-x-auto px-4 py-4 font-mono text-sm leading-6 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
+                      set:html={file.html}
+                    />
+                  </div>
+                </>
               ))
             }
-          </Tabs>
+          </div>
+
           <div
             class="flex items-center gap-2 border-t-2 border-border px-4 py-2 font-mono text-xs text-muted-foreground"
           >
             <span class="text-primary">[ok]</span>
-            {files.length} files · tacho rpc · sse streams
+            {files.length} files · effect rpc · chunked streams
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -282,39 +284,39 @@ const btn = "rounded-none border-2 font-mono uppercase tracking-wide";
     </h2>
     <div aria-hidden="true" class="ascii-divider mt-3"></div>
     <div class="mt-8 grid gap-4 sm:grid-cols-3">
-      <Card class="ascii-card rounded-none shadow-none">
-        <CardHeader>
-          <CardTitle class="font-mono text-base uppercase tracking-wide">
+      <div class="ascii-card card rounded-none bg-card shadow-none">
+        <div class="card-body">
+          <h3 class="card-title font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> call server code directly
-          </CardTitle>
-          <CardDescription class="font-mono text-sm leading-6">
+          </h3>
+          <p class="font-mono text-sm leading-6 text-muted-foreground">
             Import a <code>*.server.ts</code> function in the browser. Oxide turns
             the call into typed RPC and keeps the implementation on the server.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-      <Card class="ascii-card rounded-none shadow-none">
-        <CardHeader>
-          <CardTitle class="font-mono text-base uppercase tracking-wide">
+          </p>
+        </div>
+      </div>
+      <div class="ascii-card card rounded-none bg-card shadow-none">
+        <div class="card-body">
+          <h3 class="card-title font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> stream by yielding
-          </CardTitle>
-          <CardDescription class="font-mono text-sm leading-6">
-            Export an async generator to stream updates over SSE. Consume it with
-            <code>for await</code> and cancel it with an abort signal.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-      <Card class="ascii-card rounded-none shadow-none">
-        <CardHeader>
-          <CardTitle class="font-mono text-base uppercase tracking-wide">
+          </h3>
+          <p class="font-mono text-sm leading-6 text-muted-foreground">
+            Export an async generator to stream values over chunked JSON-RPC.
+            Consume it with <code>for await</code> and cancel with an abort signal.
+          </p>
+        </div>
+      </div>
+      <div class="ascii-card card rounded-none bg-card shadow-none">
+        <div class="card-body">
+          <h3 class="card-title font-mono text-base uppercase tracking-wide">
             <span class="text-primary">▸</span> deploy boring output
-          </CardTitle>
-          <CardDescription class="font-mono text-sm leading-6">
+          </h3>
+          <p class="font-mono text-sm leading-6 text-muted-foreground">
             Get one ESM server bundle plus optional client assets. Run it on a VPS,
             celld, Cloudflare, or Vercel.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+          </p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -336,33 +338,55 @@ dist/
             >vite build</code
           >. Oxide emits the browser assets and a server you can run with
           <code class="font-mono text-foreground">node dist/server.js</code>. Server
-          actions ride on <a class="underline-offset-4 hover:text-foreground hover:underline" href="/tacho/overview">tacho</a>, its typed RPC layer.
+          actions use typed Effect RPC over HTTP or WebSocket.
         </p>
-        <Button as="a" class="mt-6 pl-0 font-mono uppercase tracking-wide" href="/oxide/quickstart" variant="link">
+        <a class="btn btn-link mt-6 pl-0 font-mono uppercase tracking-wide" href="/oxide/quickstart">
           build your first app →
-        </Button>
+        </a>
       </div>
       <div class="landing-code space-y-4">
-        <BuildSwitcher client:visible />
+        <div class="ascii-card overflow-hidden rounded-none bg-card">
+          <div class="tabs tabs-border w-full">
+            {
+              bundlers.map((bundler, index) => (
+                <>
+                  <input
+                    type="radio"
+                    name="oxide_bundler"
+                    class="tab font-mono text-xs"
+                    aria-label={bundler.name}
+                    checked={index === 0}
+                  />
+                  <div class="tab-content m-0 border-0 p-0">
+                    <div
+                      class="p-4 font-mono text-[13px] leading-6"
+                      set:html={bundler.html}
+                    />
+                  </div>
+                </>
+              ))
+            }
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
   <section class="landing-tone mx-auto max-w-5xl px-4 pb-24 sm:px-6">
-    <Card class="ascii-card rounded-none shadow-none">
-      <CardHeader>
-        <CardTitle class="font-mono text-base uppercase tracking-wide">
+    <div class="ascii-card card rounded-none bg-card shadow-none">
+      <div class="card-body">
+        <h2 class="card-title font-mono text-base uppercase tracking-wide">
           <span class="text-primary">[03] $</span> ship something
-        </CardTitle>
-        <CardDescription class="font-mono text-sm leading-6">
+        </h2>
+        <p class="font-mono text-sm leading-6 text-muted-foreground">
           Add one plugin. Write one server function. Call it from the browser.
           Your backend is ready to ship.
-        </CardDescription>
-      </CardHeader>
-      <CardFooter>
-        <Button as="a" href="/getting-started" size="lg" class={btn}>Start building</Button>
-      </CardFooter>
-    </Card>
+        </p>
+        <div class="card-actions">
+          <a href="/getting-started" class={`${btn} btn-primary btn-lg`}>Start building</a>
+        </div>
+      </div>
+    </div>
   </section>
 
   <footer
@@ -376,19 +400,19 @@ dist/
         oxide · built by the team behind{" "}
         <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noreferrer" target="_blank">ilha</a>
       </span>
-      <div class="flex h-5 items-center justify-center gap-3 font-mono">
-        <Button as="a" href="/getting-started" variant="link" class="font-mono uppercase tracking-wide">docs</Button>
-        <Separator orientation="vertical" />
-        <Button as="a" href={repoUrl} rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
-          >github</Button
+      <div class="flex h-5 items-center justify-center gap-1 font-mono">
+        <a href="/getting-started" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide">docs</a>
+        <div class="divider divider-horizontal mx-0"></div>
+        <a href={repoUrl} rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+          >github</a
         >
-        <Separator orientation="vertical" />
-        <Button as="a" href="https://x.com/oxidejs" rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
-          >x.com</Button
+        <div class="divider divider-horizontal mx-0"></div>
+        <a href="https://x.com/oxidejs" rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+          >x.com</a
         >
-        <Separator orientation="vertical" />
-        <Button as="a" href="https://discord.gg/WnVTMCTz74" rel="noreferrer" target="_blank" variant="link" class="font-mono uppercase tracking-wide"
-          >discord</Button
+        <div class="divider divider-horizontal mx-0"></div>
+        <a href="https://discord.gg/WnVTMCTz74" rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+          >discord</a
         >
       </div>
     </div>
@@ -446,10 +470,6 @@ dist/
     --shj-var: var(--blume-foreground);
     --shj-str: var(--blume-foreground);
     --shj-insert: var(--blume-accent);
-  }
-
-  .terminal-win :global([data-slot="card-content"]) {
-    gap: 0;
   }
 
   .sysbox-frame,

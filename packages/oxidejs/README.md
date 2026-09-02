@@ -49,7 +49,7 @@ oxide({
 
 ## Server actions
 
-Install `tacho` if you use actions. Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with a tacho stub that POSTs `/__oxide/action`. The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is tacho `ctx` (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import tacho.
+Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an RPC stub that POSTs `/__oxide/action`. The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`.
 
 ```ts
 // src/test.server.ts
@@ -78,7 +78,7 @@ export default {
 };
 ```
 
-`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over tacho SSE. Inside server code, always read the non-optional signal from `useRequest().signal`:
+`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (`application/json-rpc` frames, not SSE). On the client, await the call to get the async generator. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts
 // src/test.server.ts
@@ -93,7 +93,9 @@ export const ticks = action(async function* (n: number) {
 import { ticks } from "./test.server";
 
 const ac = new AbortController();
-const stream = await ticks(10, { signal: ac.signal });
+for await (const value of await ticks(10, { signal: ac.signal })) {
+  console.log(value);
+}
 ac.abort();
 ```
 
@@ -176,7 +178,7 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 
 ### Server actions (`*.server.{ts,tsx,js,jsx}`)
 
-- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
+- Server action code is **never bundled into the client**. Client imports are replaced with RPC stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
 - Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
 - The endpoint is POST-only. Non-POST requests return `405`.
 - Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { RESOLVED_VIRTUAL_ACTIONS_ID, VIRTUAL_ACTIONS_ID, VIRTUAL_WORKER_ID } from "./actions";
+import { RESOLVED_VIRTUAL_ACTIONS_ID, VIRTUAL_WORKER_ID } from "./actions";
 import { oxidejs, unpluginFactory, vite } from "./plugin";
 import rsbuild from "./rsbuild";
 import { applyRsbuildEnvironments, applyViteEnvironments } from "./worker-build";
@@ -79,7 +79,7 @@ describe("factory shape", () => {
       await new Promise<void>((resolve) => handlers[0]!(req as never, {} as never, resolve));
       expect(seen).toEqual([{ env: { mode: "dev" }, ctx: undefined }]);
 
-      // Action path must skip the bridge so the body stays readable for tacho.
+      // Action path must skip the bridge so the body stays readable for RPC.
       let actionNext = false;
       handlers[0]!(
         Object.assign(new EventEmitter(), {
@@ -159,13 +159,14 @@ describe("factory shape", () => {
       expect(typeof stub).toBe("string");
       expect(String(stub)).toContain("virtual:oxide/client");
       expect(String(stub)).not.toContain("leak-me");
-      expect(String(load.call(ctx, "\0virtual:oxide/client"))).toContain("tacho/client/http");
+      expect(String(load.call(ctx, "\0virtual:oxide/client"))).toContain("oxidejs/rpc/client");
       const wsPlugin = unpluginFactory({ actions: "ws" }, { framework: "vite" } as never);
       if (Array.isArray(wsPlugin)) throw new Error("expected a single plugin");
       const wsLoad = wsPlugin.load as (this: object, id: string) => unknown;
-      expect(String(wsLoad.call(ctx, "\0virtual:oxide/client"))).toContain("tacho/client/ws");
-      expect(() => load.call(ctx, RESOLVED_VIRTUAL_ACTIONS_ID)).toThrow(
-        `${VIRTUAL_ACTIONS_ID} is server-only`,
+      expect(String(wsLoad.call(ctx, "\0virtual:oxide/client"))).toContain('"transport":"ws"');
+      expect(String(load.call(ctx, RESOLVED_VIRTUAL_ACTIONS_ID))).toContain("RpcGroup.make");
+      expect(String(load.call(ctx, RESOLVED_VIRTUAL_ACTIONS_ID))).not.toContain(
+        "AsyncLocalStorage",
       );
       const serverCtx = {
         environment: { config: { consumer: "server" } },
@@ -200,8 +201,15 @@ describe("factory shape", () => {
       expect(config.environments?.["ssr"]?.build?.rollupOptions?.output?.entryFileNames).toBe(
         "server.js",
       );
-      expect(config.environments?.["ssr"]?.resolve).toEqual({ noExternal: ["tacho"] });
-      expect(config.environments?.["ssr"]?.ssr).toEqual({ noExternal: ["tacho"] });
+      expect(config.environments?.["ssr"]?.resolve).toEqual({ noExternal: ["effect", "oxidejs"] });
+      expect(config.environments?.["ssr"]?.ssr).toEqual({ noExternal: ["effect", "oxidejs"] });
+      expect(config.resolve?.dedupe).toEqual(["effect", "oxidejs"]);
+      expect(config.optimizeDeps?.include).toEqual([
+        "effect",
+        "effect/unstable/rpc",
+        "effect/unstable/http",
+        "effect/unstable/socket",
+      ]);
       expect(config.build?.outDir).toBe(path.join(resolved.outDir, "client"));
       expect(config.build?.manifest).toBe(true);
     } finally {

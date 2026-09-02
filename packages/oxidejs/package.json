@@ -1,6 +1,6 @@
 {
   "name": "oxidejs",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
   "keywords": [
     "cloudflare",
@@ -45,6 +45,22 @@
     "./client": {
       "types": "./client.d.ts"
     },
+    "./rpc": {
+      "types": "./dist/rpc.d.mts",
+      "import": "./dist/rpc.mjs"
+    },
+    "./rpc/client": {
+      "types": "./dist/rpc/client.d.mts",
+      "import": "./dist/rpc/client.mjs"
+    },
+    "./worker-dom": {
+      "types": "./dist/worker-dom.d.mts",
+      "import": "./dist/worker-dom.mjs"
+    },
+    "./worker-dom/install": {
+      "types": "./dist/worker-dom/install.d.mts",
+      "import": "./dist/worker-dom/install.mjs"
+    },
     "./tsconfig": "./tsconfig.app.json"
   },
   "scripts": {
@@ -56,15 +72,13 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
+    "effect": "~4.0.0-rc.112",
+    "linkedom": "^0.18.13",
     "unplugin": "^3.3.0"
-  },
-  "devDependencies": {
-    "tacho": "^0.6.1"
   },
   "peerDependencies": {
     "@rsbuild/core": "*",
     "crossws": "*",
-    "tacho": "*",
     "vite": "*"
   },
   "peerDependenciesMeta": {
@@ -75,9 +89,6 @@
       "optional": true
     },
     "vite": {
-      "optional": true
-    },
-    "tacho": {
       "optional": true
     }
   },

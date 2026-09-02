@@ -176,6 +176,7 @@ describe("tryEmitWranglerConfig", () => {
       name: "vite-cf",
       main: "./server.js",
       compatibility_date: "2026-01-01",
+      compatibility_flags: ["nodejs_compat"],
     });
   });
 

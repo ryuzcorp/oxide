@@ -1,0 +1,211 @@
+/** Strip Effect RPC `Defect` / `Cause` payloads down to plain JSON-RPC errors. */
+
+const INTERNAL = { code: -32603, message: "Internal error" } as const;
+const NDJSON_CONTENT = "application/json-rpc";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function classifyCause(error: Record<string, unknown>): { code: number; message: string } {
+  const blob = `${String(error["message"] ?? "")}${JSON.stringify(error["data"] ?? "")}`;
+  if (/Unknown request tag/i.test(blob)) {
+    return { code: -32601, message: "Method not found" };
+  }
+  // Payload decode failures (not Effect's "Expected never" on typed Fail/Die exits).
+  if (
+    /Missing key/i.test(blob) ||
+    (/Expected/i.test(blob) && /\["args"\]|\[\\"args\\"\]/.test(blob))
+  ) {
+    return { code: -32602, message: "Invalid params" };
+  }
+  // Interrupt / Empty / sequential|parallel Die trees → opaque internal error.
+  return { ...INTERNAL };
+}
+
+function scrubError(error: unknown): { code: number; message: string } {
+  if (!isRecord(error)) return { ...INTERNAL };
+
+  if (error["_tag"] === "Defect") return { ...INTERNAL };
+  if (error["_tag"] === "Cause") return classifyCause(error);
+
+  // Plain JSON-RPC (Forbidden, parse errors, etc.) — keep code/message, drop data.
+  if (typeof error["code"] === "number" && typeof error["message"] === "string") {
+    return { code: error["code"], message: error["message"] };
+  }
+  return { ...INTERNAL };
+}
+
+/** Mutable repair state so each Defect can claim a distinct originating request id. */
+export type IdRepairState = {
+  /** Request ids not yet claimed by a terminal (non-chunk) response. */
+  remaining: Set<unknown>;
+};
+
+export function createIdRepairState(requestIds: readonly unknown[] = []): IdRepairState {
+  return { remaining: new Set(requestIds) };
+}
+
+/**
+ * Scrub one JSON-RPC response object.
+ * Effect encodes Defects with `id: -32603`; reclaim the originating request id from `state.remaining`.
+ */
+export function scrubRpcMessage(
+  msg: unknown,
+  requestIds: readonly unknown[] = [],
+  state: IdRepairState = createIdRepairState(requestIds),
+): unknown {
+  if (!isRecord(msg) || !("error" in msg) || msg["error"] == null) {
+    // Terminal success / chunk frames with a real id consume that id so later Defects don't steal it.
+    if (isRecord(msg) && msg["chunk"] !== true && msg["id"] !== -32603 && "id" in msg) {
+      state.remaining.delete(msg["id"]);
+    }
+    return msg;
+  }
+
+  const error = scrubError(msg["error"]);
+  let id = msg["id"];
+  if (id === -32603) {
+    const next = state.remaining.values().next();
+    if (!next.done) {
+      id = next.value;
+      state.remaining.delete(next.value);
+    } else {
+      id = null;
+    }
+  } else if (id !== undefined && id !== null) {
+    state.remaining.delete(id);
+  }
+  if (id === undefined) id = null;
+
+  return { jsonrpc: "2.0", id, error };
+}
+
+/**
+ * Rewrite a JSON / NDJSON body so clients never see Effect `_tag` / `data` trees.
+ * Accepts a single object, a JSON array, or newline-delimited frames.
+ */
+export function scrubRpcJson(body: string, requestIds: readonly unknown[] = []): string {
+  const trimmed = body.replace(/^\uFEFF/, "");
+  if (!trimmed) return body;
+  const state = createIdRepairState(requestIds);
+
+  // NDJSON: one or more newline-terminated frames (possibly without a final newline).
+  if (trimmed.includes("\n")) {
+    const lines = trimmed.split("\n");
+    const out: string[] = [];
+    for (const line of lines) {
+      if (line === "") {
+        // Preserve trailing newline as an empty trailing segment from split.
+        continue;
+      }
+      out.push(scrubRpcLine(line, state));
+    }
+    const endsWithNl = trimmed.endsWith("\n");
+    return endsWithNl ? `${out.join("\n")}\n` : out.join("\n");
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return JSON.stringify(parsed.map((msg) => scrubRpcMessage(msg, requestIds, state)));
+    }
+    return JSON.stringify(scrubRpcMessage(parsed, requestIds, state));
+  } catch {
+    return body;
+  }
+}
+
+function scrubRpcLine(line: string, state: IdRepairState): string {
+  try {
+    return JSON.stringify(scrubRpcMessage(JSON.parse(line), [], state));
+  } catch {
+    return line;
+  }
+}
+
+/** Collect JSON-RPC request ids from a unary object or batch array body. */
+export function extractJsonRpcRequestIds(body: ArrayBuffer | Uint8Array | string): unknown[] {
+  try {
+    let text =
+      typeof body === "string"
+        ? body
+        : new TextDecoder().decode(body instanceof Uint8Array ? body : new Uint8Array(body));
+    text = text.replace(/^\uFEFF/, "").trimEnd();
+    // NDJSON request batch: one object per line.
+    if (text.includes("\n")) {
+      const ids: unknown[] = [];
+      for (const line of text.split("\n")) {
+        if (!line) continue;
+        const parsed: unknown = JSON.parse(line);
+        if (isRecord(parsed) && "id" in parsed) ids.push(parsed["id"]);
+      }
+      return ids;
+    }
+    const parsed: unknown = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter(isRecord)
+        .filter((item) => "id" in item)
+        .map((item) => item["id"]);
+    }
+    if (isRecord(parsed) && "id" in parsed) return [parsed["id"]];
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+/** @deprecated use extractJsonRpcRequestIds */
+export function extractJsonRpcRequestId(body: ArrayBuffer | string): unknown {
+  return extractJsonRpcRequestIds(body)[0];
+}
+
+/** Ensure a body is a valid NDJSON frame (Effect's ndJsonRpc decode requires a trailing newline). */
+export function ensureNdjsonBody(buf: ArrayBuffer): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(buf);
+  if (bytes.length > 0 && bytes[bytes.length - 1] === 0x0a) {
+    return bytes as Uint8Array<ArrayBuffer>;
+  }
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out as Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * TransformStream that scrubs Effect defect payloads one NDJSON line at a time,
+ * so long-running stream actions stay incremental.
+ */
+export function scrubNdjsonTransform(
+  requestIds: readonly unknown[] = [],
+): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const state = createIdRepairState(requestIds);
+  let pending = "";
+
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      pending += decoder.decode(chunk, { stream: true });
+      let nl = pending.indexOf("\n");
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        if (line.length > 0) {
+          controller.enqueue(encoder.encode(`${scrubRpcLine(line, state)}\n`));
+        }
+        nl = pending.indexOf("\n");
+      }
+    },
+    flush(controller) {
+      pending += decoder.decode();
+      if (pending.length > 0) {
+        controller.enqueue(encoder.encode(`${scrubRpcLine(pending, state)}\n`));
+        pending = "";
+      }
+    },
+  });
+}
+
+export { NDJSON_CONTENT };

@@ -1,5 +1,20 @@
-export { action, useCtx, useEnv, useFetchCtx, useRequest } from "./context";
-export type { ActionContext, ExecutionContext } from "./context";
+export {
+  action,
+  brandServerAction,
+  wrapClientRpc,
+  wrapClientStreamRpc,
+  ACTION_CALL,
+  useCtx,
+  useEnv,
+  useFetchCtx,
+  useRequest,
+} from "./context";
+export type {
+  ActionContext,
+  ExecutionContext,
+  ServerActionHandle,
+  StreamActionHandle,
+} from "./context";
 export type {
   OxidejsActionHeaders,
   OxidejsActionTransport,

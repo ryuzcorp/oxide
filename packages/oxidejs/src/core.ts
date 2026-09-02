@@ -228,7 +228,7 @@ export function tryEmitWranglerConfig(opts: ResolvedOptions, state: EmitState): 
     name: wrangler.name,
     main: "./server.js",
     compatibility_date: wrangler.compatibility_date,
-    ...(wrangler.compatibility_flags ? { compatibility_flags: wrangler.compatibility_flags } : {}),
+    compatibility_flags: [...new Set([...(wrangler.compatibility_flags ?? []), "nodejs_compat"])],
     ...(wrangler.durable_objects ? { durable_objects: wrangler.durable_objects } : {}),
     ...(wrangler.migrations ? { migrations: wrangler.migrations } : {}),
     ...(wrangler.services ? { services: wrangler.services } : {}),
