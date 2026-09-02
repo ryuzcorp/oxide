@@ -10,9 +10,9 @@
     "celld": "celld"
   },
   "dependencies": {
-    "@ilha/router": "^0.11.1",
+    "@ilha/router": "^0.11.2",
     "effect": "^4.0.0-rc.112",
-    "ilha": "^0.14.1",
+    "ilha": "^0.14.2",
     "unstorage": "^2.0.0-alpha.9"
   },
   "devDependencies": {
