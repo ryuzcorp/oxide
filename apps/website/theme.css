@@ -1,14 +1,10 @@
-@import "tw-animate-css";
-@import "bejamas/tailwind.css";
+@plugin "daisyui";
 
 @theme inline {
   --color-primary: var(--blume-accent);
   --color-primary-foreground: var(--blume-accent-foreground);
   --color-secondary: var(--blume-muted);
   --color-secondary-foreground: var(--blume-foreground);
-  --color-destructive: oklch(0.58 0.22 25);
-  --color-input: var(--blume-border);
-  --color-ring: var(--blume-accent);
   --color-card: var(--blume-background);
   --color-card-foreground: var(--blume-foreground);
 }

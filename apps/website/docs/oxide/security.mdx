@@ -5,7 +5,7 @@ sidebar:
 description: What oxidejs guards by default in asset serving, server actions, and the dev server — and what stays your job.
 ---
 
-oxidejs inherits all of tacho's [protocol guards](/tacho/security) and adds its own for the build output and dev server. Authentication, CORS, and rate limiting are still yours.
+oxidejs guards the build output, action transport, and dev server by default. Authentication, CORS, and rate limiting are still yours.
 
 ## Asset serving (`preset: "fetch"`)
 
@@ -25,8 +25,9 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 
 ## Server actions (`*.server.{ts,tsx,js,jsx}`)
 
-- Server action code is **never bundled into the client**. Client imports are replaced with tacho stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
+- Server action code is **never bundled into the client**. Client imports are replaced with Effect RPC stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
 - Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
+- Stream actions use chunked JSON-RPC over that same endpoint — not Server-Sent Events.
 - The endpoint is POST-only. Non-POST requests return `405`.
 - Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
 - Unknown or missing content-types → `415`.

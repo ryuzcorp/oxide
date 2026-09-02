@@ -29,5 +29,3 @@ If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, t
 Named exports such as `scheduled` and `queue` stay on the celld wrapper. Spread them yourself if you replace `fetch`.
 
 On the Node preset the generated server also handles `SIGTERM`/`SIGINT`: it stops accepting connections and exits once in-flight requests drain (forced after 5 seconds).
-
-To serve typed RPC from this file, set up a tacho router and pass it to `handle()`. See the [Tacho quickstart](/tacho/quickstart).

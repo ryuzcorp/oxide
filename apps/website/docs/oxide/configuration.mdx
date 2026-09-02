@@ -24,6 +24,10 @@ Pass options to `oxide()` in your Vite or Rsbuild config. You can start with `ox
 | [`actions`](#actions)                       | `"http"`                 | Action transport, endpoint path, and same-origin protection |
 | [`actionHeaders`](#actionheaders)           | -                        | Public static headers added by the browser action client    |
 | [`middleware`](#middleware)                 | `[]`                     | Production request middleware, in order                     |
+| [`imports`](#imports)                       | `[]`                     | Side-effect modules loaded at server startup                |
+| [`bodyLimit`](#bodylimit)                   | `1048576`                | Max Node request body size (413 when exceeded)              |
+| [`notFound`](#notfound)                     | -                        | Custom HTML 404 body on the fetch preset                    |
+| [`env`](#env)                               | -                        | Node preset value passed to `fetch(request, env, ctx)`      |
 
 `main` is always `./server.js`. Oxide adds `assets` only when the project has an `index.html`. Unknown Wrangler keys fail the build instead of being silently ignored.
 
@@ -62,7 +66,7 @@ The default is `client`, producing `dist/client/`. It must stay inside [`outDir`
 
 ## wrangler
 
-These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself.
+These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself. Oxide always adds `nodejs_compat` to `compatibility_flags` (merged with any flags you pass).
 
 ## emitConfig
 
@@ -197,7 +201,7 @@ oxide({ notFound: "<h1>Page not found</h1>" });
 
 ## env
 
-Extra values passed as the second argument to `fetch(request, env, ctx)` on the Node preset. Read them with [`useEnv()`](/tacho/context).
+Extra values passed as the second argument to `fetch(request, env, ctx)` on the Node preset. Read them with [`useEnv()`](/oxide/server-actions#useenv-and-usefetchctx).
 
 ```ts twoslash
 import oxide from "oxidejs/vite";

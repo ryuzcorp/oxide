@@ -5,13 +5,7 @@ sidebar:
 description: Run a marked function on the server and call it from browser code with the same TypeScript types.
 ---
 
-A server action is a function that runs on your server but can be imported and called from browser code. Oxide turns that browser import into a small RPC request. The function body and its server-only imports never enter the client bundle.
-
-Oxide actions use [tacho](/tacho/overview). Install it next to `oxidejs`:
-
-```package-install
-npm i tacho
-```
+A server action is a function that runs on your server but can be imported and called from browser code. Oxide turns that browser import into Effect RPC over HTTP (or WebSocket). The function body and its server-only imports never enter the client bundle.
 
 ## Create your first action
 
@@ -38,7 +32,7 @@ import { ping } from "./test.server";
 const result = await ping(); // "pong"
 ```
 
-Oxide replaces that client import with a tacho stub. By default, the stub sends a POST request to `/__oxide/action`. The remote method name is `<file>.<export>`; the example above calls `test.ping`.
+Oxide replaces that client import with an RPC stub. By default, the stub sends a POST request to `/__oxide/action`. The remote method name is `<file>.<export>`; the example above calls `test.ping`.
 
 ## What is exposed?
 
@@ -58,6 +52,30 @@ export const serverOnlyLabel = "not remotely callable";
 
 This explicit marker prevents an exported helper from accidentally becoming a public endpoint. `action()` does not validate input or authorize users. Treat action arguments as untrusted data, validate them, and check the current user before reading or changing private data.
 
+## Call shape on the client
+
+Unary actions are Promise-returning handles with helpers for UI wiring:
+
+| Call                                        | What it does                                     |
+| ------------------------------------------- | ------------------------------------------------ |
+| `await ping()`                              | Run the action                                   |
+| `ping.set(...args)`                         | Same as calling with args                        |
+| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action  |
+| `ping()` with no args                       | Read the last `AsyncResult` from the client atom |
+
+```ts twoslash src/bind.ts
+// @filename: tasks.server.ts
+import { action } from "oxidejs";
+export const toggle = action(async (id: string) => id);
+// ---cut---
+// @filename: bind.ts
+import { toggle } from "./tasks.server";
+
+document.querySelector("button")!.onclick = toggle.bind("task-1");
+```
+
+Stream actions do not support `bind` / `with`. On the client they resolve to an async generator — `await` first, then `for await`.
+
 ## Reuse authorization and context
 
 Use a higher-order function for action middleware. Keep `action()` as the outer call so Oxide recognizes the export:
@@ -75,8 +93,13 @@ export declare const db: {
 // ---cut---
 // @filename: profile.server.ts
 import { action, useRequest } from "oxidejs";
-import { RpcError } from "tacho";
 import { db, type User } from "./db";
+
+class UnauthorizedError extends Error {
+  constructor() {
+    super("Unauthorized");
+  }
+}
 
 function withUser<Args extends unknown[], Result>(
   handler: (user: User, ...args: Args) => Result,
@@ -84,12 +107,12 @@ function withUser<Args extends unknown[], Result>(
   return async (...args: Args) => {
     const authorization = useRequest().headers.get("authorization");
     if (!authorization) {
-      throw new RpcError({ code: -32001, message: "Unauthorized" });
+      throw new UnauthorizedError();
     }
 
     const user = await db.users.findByToken(authorization);
     if (!user) {
-      throw new RpcError({ code: -32001, message: "Unauthorized" });
+      throw new UnauthorizedError();
     }
 
     return handler(user, ...args);
@@ -111,11 +134,11 @@ export const update = action(
 );
 ```
 
-Keep authorization wrappers server-only. Throw `RpcError` for an intentional wire error; do not return authentication tokens, database credentials, or other secrets.
+Keep authorization wrappers server-only. Throw for intentional failures; do not return authentication tokens, database credentials, or other secrets.
 
 ## Stream values
 
-Wrap an `async function*` to stream values over [tacho SSE](/tacho/sse-streaming):
+Wrap an `async function*` in `action()` to stream over Effect RPC as **chunked JSON-RPC** (not Server-Sent Events). The response is `application/json` with chunk frames, then a final result.
 
 ```ts twoslash src/ticks.server.ts
 import { action } from "oxidejs";
@@ -135,11 +158,12 @@ export const ticks = action(async function* (count: number) {
 // @filename: client-stream.ts
 import { ticks } from "./ticks.server";
 
-const stream = await ticks(3);
-for await (const value of stream) console.log(value);
+for await (const value of await ticks(3)) console.log(value);
 ```
 
-Breaking the `for await` loop or calling `await stream.return()` cleans up the server generator. Tacho does not reconnect a dropped stream automatically because repeating the POST could run action side effects twice.
+On the server, `ticks(3)` returns an async generator directly. On the client, await the call first — the stub resolves to the generator, then you iterate it.
+
+Breaking the `for await` loop or calling `return()` on the generator cleans up the server generator. Oxide does not reconnect a dropped stream automatically because repeating the POST could run action side effects twice.
 
 ## Cancel a call
 
@@ -162,6 +186,7 @@ const controller = new AbortController();
 const stream = await ticks(10, { signal: controller.signal });
 await ping({ signal: controller.signal });
 controller.abort();
+void stream;
 ```
 
 Inside the action, `useRequest().signal` follows the same abort.
@@ -182,7 +207,7 @@ export const who = action(async () => {
 
 ### `useCtx()`
 
-`useCtx()` returns tacho context: `{ req }` plus values added by middleware or `createContext`:
+`useCtx()` returns request context: `{ req }` plus values your middleware or server entry added:
 
 ```ts twoslash src/me.server.ts
 import { action, useCtx } from "oxidejs";
@@ -194,7 +219,7 @@ export const me = action(async () => {
 
 ### `useEnv()` and `useFetchCtx()`
 
-With [`preset: "celld"`](/oxide/configuration#preset), these return the Worker `env` and execution context from `fetch(request, env, ctx)`. They are `undefined` on the Node fetch preset.
+With [`preset: "celld"`](/oxide/configuration#preset), these return the Worker `env` and execution context from `fetch(request, env, ctx)`. They are `undefined` on the Node fetch preset unless you pass [`env`](/oxide/configuration#env).
 
 ```ts twoslash src/env.server.ts
 import { action, useEnv, useFetchCtx } from "oxidejs";

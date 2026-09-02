@@ -4,12 +4,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  generateActionsClientModule,
   generateActionsModule,
   generateClientModule,
   generateClientStub,
   generateWorkerWrapper,
   isServerFileId,
   loadClientStub,
+  matchesActionPath,
   moduleKey,
   nodeToWebRequest,
   parseExportedNames,
@@ -25,6 +27,7 @@ import {
   VIRTUAL_WORKER_ID,
 } from "./actions";
 import { copyPublicDir, createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { createActionHandler, createWsHooks } from "./rpc";
 import type { OxidejsOptions, ResolvedOptions } from "./types";
 import {
   applyRsbuildEnvironments,
@@ -32,30 +35,37 @@ import {
   type RsbuildUserConfig,
   type ViteUserConfig,
 } from "./worker-build";
+import { ensureWorkerDom } from "./worker-dom";
 
 type ConnectReq = IncomingMessage;
 type ConnectRes = ServerResponse;
 type ConnectNext = (err?: unknown) => void;
 
+type RpcDevModule = {
+  createActionHandler: typeof createActionHandler;
+  createWsHooks: typeof createWsHooks;
+};
+
 function actionMiddleware(
-  loadRouter: () => Promise<unknown>,
+  loadRouter: () => Promise<{ default: unknown; actionsHandlers: unknown }>,
+  loadRpc: () => Promise<RpcDevModule>,
   path: string,
   sameOrigin: boolean,
   bodyLimit: number,
   onError?: (error: unknown) => void,
 ) {
   return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
-    if ((req.url ?? "").split("?")[0] !== path) {
+    if (!matchesActionPath((req.url ?? "").split("?")[0] ?? "", path)) {
       next();
       return;
     }
     void (async () => {
-      const tachoFetch = "tacho/transport/fetch";
-      const { handle } = await import(/* @vite-ignore */ tachoFetch);
-      const response = await handle(await loadRouter(), {
+      const [mod, rpc] = await Promise.all([loadRouter(), loadRpc()]);
+      const handler = rpc.createActionHandler(mod.default as never, mod.actionsHandlers as never, {
         path,
         ...(sameOrigin ? { sameOrigin: true } : {}),
-      })(await nodeToWebRequest(req, bodyLimit));
+      });
+      const response = await handler(await nodeToWebRequest(req, bodyLimit));
       await sendWebResponseFrom(req, res, response);
     })().catch((error) => {
       if (res.headersSent) return;
@@ -84,26 +94,24 @@ function attachActionUpgrade(
       }
     | null
     | undefined,
-  loadRouter: () => Promise<unknown>,
+  loadRouter: () => Promise<{ default: unknown; actionsHandlers: unknown }>,
+  loadRpc: () => Promise<RpcDevModule>,
   path: string,
   sameOrigin: boolean,
 ) {
   if (!httpServer) return;
-  const tachoWs = "tacho/transport/ws";
   const crosswsNode = "crossws/adapters/node";
-  void Promise.all([
-    import(/* @vite-ignore */ tachoWs),
-    import(/* @vite-ignore */ crosswsNode),
-  ]).then(([{ handle }, { default: crossws }]) => {
+  void import(/* @vite-ignore */ crosswsNode).then(({ default: crossws }) => {
     httpServer.on("upgrade", (req, socket, head) => {
-      if ((req.url ?? "").split("?")[0] !== path) return;
-      void loadRouter()
-        .then((router) =>
-          crossws({ hooks: handle(router, { path, sameOrigin }) }).handleUpgrade(
-            req,
-            socket as never,
-            head,
-          ),
+      if (!matchesActionPath((req.url ?? "").split("?")[0] ?? "", path)) return;
+      void Promise.all([loadRouter(), loadRpc()])
+        .then(([mod, rpc]) =>
+          crossws({
+            hooks: rpc.createWsHooks(mod.default as never, mod.actionsHandlers as never, {
+              path,
+              sameOrigin,
+            }),
+          }).handleUpgrade(req, socket as never, head),
         )
         .catch(() => {
           socket.destroy();
@@ -143,6 +151,7 @@ function loadActions(root: string) {
   const code = generateActionsModule(scanServerFiles(root), { bust: true });
   return import(/* @vite-ignore */ `data:text/javascript,${encodeURIComponent(code)}`) as Promise<{
     default: unknown;
+    actionsHandlers: unknown;
   }>;
 }
 
@@ -177,15 +186,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           resolved?.actionPath,
         );
       }
-      if (id === RESOLVED_VIRTUAL_ACTIONS_ID || id === RESOLVED_VIRTUAL_WORKER_ID) {
-        if (pluginShouldStub(this, extra)) {
-          throw new Error(
-            `oxidejs: ${id === RESOLVED_VIRTUAL_ACTIONS_ID ? VIRTUAL_ACTIONS_ID : VIRTUAL_WORKER_ID} is server-only`,
-          );
-        }
+      if (id === RESOLVED_VIRTUAL_WORKER_ID && pluginShouldStub(this, extra)) {
+        throw new Error(`oxidejs: ${VIRTUAL_WORKER_ID} is server-only`);
       }
       if (id === RESOLVED_VIRTUAL_ACTIONS_ID) {
         const modules = scanServerFiles(resolved?.root ?? process.cwd());
+        if (pluginShouldStub(this, extra)) return generateActionsClientModule(modules);
         for (const mod of modules) this.addWatchFile(mod.abs);
         return generateActionsModule(modules);
       }
@@ -236,6 +242,23 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
         applyViteEnvironments(config as ViteUserConfig, resolved);
       },
       configureServer(server) {
+        if (resolved?.preset === "celld") {
+          ensureWorkerDom();
+          // Celld builds target Workers, but dev SSR runs on Node. Worker export
+          // conditions and noExternal:true pull in CJS deps (e.g. buffer-image-size)
+          // that call `require` and break ilha frame renders.
+          const ssr = server.environments.ssr;
+          const resolve = ssr?.config?.resolve;
+          if (resolve) {
+            resolve.conditions = ["node", "import", "module", "default"];
+            resolve.noExternal = ["effect", "oxidejs"];
+          }
+          const ssrOpts = ssr?.config?.ssr;
+          if (ssrOpts && typeof ssrOpts === "object") {
+            ssrOpts.target = "node";
+            ssrOpts.noExternal = ["effect", "oxidejs"];
+          }
+        }
         const invalidateActions = () => {
           for (const env of Object.values(server.environments)) {
             const mod = env.moduleGraph.getModuleById(RESOLVED_VIRTUAL_ACTIONS_ID);
@@ -243,12 +266,15 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           }
         };
         const fetchRouter = async () => {
-          const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as { default: unknown };
-          return mod.default;
+          const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as {
+            default: unknown;
+            actionsHandlers: unknown;
+          };
+          return mod;
         };
         // Lazy + clear-on-reject: never leave a rejected promise cached (sticky 503)
         // and never start a follow-up fetch nobody awaits (uncaught rejection → crash).
-        let routerReady: Promise<unknown> | undefined;
+        let routerReady: Promise<{ default: unknown; actionsHandlers: unknown }> | undefined;
         const loadRouter = () => {
           const current = (routerReady ??= fetchRouter());
           return current.catch((error) => {
@@ -265,6 +291,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
             refreshRouter();
           }
         });
+        const loadRpc = () => server.ssrLoadModule("oxidejs/rpc") as Promise<RpcDevModule>;
         const logActionError = (error: unknown) => {
           server.config.logger.error("oxidejs: action handler failed: " + String(error));
         };
@@ -272,6 +299,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           server.middlewares.use(
             actionMiddleware(
               loadRouter,
+              loadRpc,
               resolved!.actionPath,
               resolved!.actionSameOrigin,
               resolved!.bodyLimit,
@@ -283,6 +311,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           attachActionUpgrade(
             server.httpServer,
             loadRouter,
+            loadRpc,
             resolved.actionPath,
             resolved.actionSameOrigin,
           );
@@ -335,7 +364,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
           server.middlewares.use((creq, cres, next) => {
             // Don't touch /__oxide/action — reading the body here would empty the
             // Node stream before the action middleware runs.
-            if ((creq.url ?? "").split("?")[0] === resolved!.actionPath) {
+            if (matchesActionPath((creq.url ?? "").split("?")[0] ?? "", resolved!.actionPath)) {
               next();
               return;
             }
@@ -395,12 +424,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
         api.onBeforeStartDevServer(({ server }) => {
           const loadRouter = async () => {
             const root = resolved?.root ?? process.cwd();
-            return (await loadActions(root)).default;
+            return loadActions(root);
           };
+          const loadRpc = async (): Promise<RpcDevModule> => ({
+            createActionHandler,
+            createWsHooks,
+          });
           if (resolved?.actions === "ws")
             attachActionUpgrade(
               server.httpServer,
               loadRouter,
+              loadRpc,
               resolved.actionPath,
               resolved.actionSameOrigin,
             );
@@ -408,6 +442,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
             server.middlewares.use(
               actionMiddleware(
                 loadRouter,
+                loadRpc,
                 resolved!.actionPath,
                 resolved!.actionSameOrigin,
                 resolved!.bodyLimit,

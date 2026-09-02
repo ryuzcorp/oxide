@@ -3,12 +3,7 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "jsx": "react-jsx",
-    "jsxImportSource": "ilha",
-    "noEmit": true,
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "noEmit": true
   },
-  "include": ["pages/**/*.ts", "pages/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "blume.config.ts"]
+  "include": ["pages/**/*.ts", "blume.config.ts"]
 }

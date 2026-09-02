@@ -11,14 +11,22 @@ export const VIRTUAL_CLIENT_ID = "virtual:oxide/client";
 export const RESOLVED_VIRTUAL_CLIENT_ID = `\0${VIRTUAL_CLIENT_ID}`;
 export const ACTION_PATH = "/__oxide/action";
 
+/** Match the action endpoint with or without a trailing slash (Effect RPC posts to `path/`). */
+export function matchesActionPath(pathname: string, path: string = ACTION_PATH): boolean {
+  return pathname === path || pathname === `${path}/`;
+}
+
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 /** Only `export const name = action(...)` become remote RPC actions. Everything else stays server-local. */
 const EXPORT_RE = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?action\s*\(/gm;
+const STREAM_EXPORT_RE =
+  /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*action\s*\(\s*async\s+function\s*\*/gm;
 
 export interface ServerModule {
   abs: string;
   key: string;
   exports: string[];
+  streams: string[];
 }
 
 export function isServerFileId(id: string): boolean {
@@ -33,6 +41,15 @@ export function moduleKey(absFile: string): string {
 export function parseExportedNames(source: string): string[] {
   const names = new Set<string>();
   for (const match of source.matchAll(EXPORT_RE)) {
+    const name = match[1];
+    if (name) names.add(name);
+  }
+  return [...names];
+}
+
+export function parseStreamExports(source: string): string[] {
+  const names = new Set<string>();
+  for (const match of source.matchAll(STREAM_EXPORT_RE)) {
     const name = match[1];
     if (name) names.add(name);
   }
@@ -73,10 +90,12 @@ export function scanServerFiles(root: string): ServerModule[] {
       throw new Error(`oxidejs: duplicate server module key "${key}": ${existing} and ${abs}`);
     }
     byKey.set(key, abs);
+    const source = fs.readFileSync(abs, "utf8");
     modules.push({
       abs,
       key,
-      exports: parseExportedNames(fs.readFileSync(abs, "utf8")),
+      exports: parseExportedNames(source),
+      streams: parseStreamExports(source),
     });
   }
   return modules;
@@ -104,75 +123,118 @@ export function generateClientModule(
   headers?: OxidejsActionHeaders,
   path: string = ACTION_PATH,
 ): string {
+  const opts: { url: string; transport?: "ws"; headers?: OxidejsActionHeaders } = { url: path };
+  if (transport === "ws") opts.transport = "ws";
+  if (headers) opts.headers = headers;
   if (transport === "ws") {
-    return `import { createClient } from "tacho/client/ws";
+    return `import { createClient } from "oxidejs/rpc/client";
+import { actionsGroup } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __proto = typeof location === "undefined" ? "ws:" : location.protocol === "https:" ? "wss:" : "ws:";
 const __host = typeof location === "undefined" ? "localhost" : location.host;
-export const client = createClient({ url: __proto + "//" + __host + ${JSON.stringify(path)} });
+export const client = createClient(actionsGroup, { ...${JSON.stringify(opts)}, url: __proto + "//" + __host + ${JSON.stringify(path)} });
 `;
   }
-  const opts: { url: string; headers?: OxidejsActionHeaders } = { url: path };
-  if (headers) opts.headers = headers;
-  return `import { createClient } from "tacho/client/http";
-export const client = createClient(${JSON.stringify(opts)});
+  return `import { createClient } from "oxidejs/rpc/client";
+import { actionsGroup } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+export const client = createClient(actionsGroup, ${JSON.stringify(opts)});
 `;
 }
 
 export function generateClientStub(mod: Pick<ServerModule, "key" | "exports">): string {
   const lines = [
     `// oxidejs:client-stub`,
+    `import { wrapClientRpc } from "oxidejs";`,
     `import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`,
   ];
   for (const name of mod.exports) {
     lines.push(
-      `export const ${name} = (...args) => {
+      `export const ${name} = wrapClientRpc((...args) => {
   const opts = args.at(-1);
   // ponytail: peel last { signal } only. A lone payload { signal: AbortSignal } is treated as CallOptions.
   return opts && typeof opts === "object" && opts.signal instanceof AbortSignal && Object.keys(opts).length === 1
-    ? client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args.slice(0, -1), opts)
-    : client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](args);
-};`,
+    ? client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](...args.slice(0, -1), opts)
+    : client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](...args);
+});`,
     );
   }
   return `${lines.join("\n")}\n`;
 }
 
+export function generateActionsClientModule(modules: ServerModule[]): string {
+  const lines = [
+    `import { Schema } from "effect";`,
+    `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
+  ];
+  const rpcNames: string[] = [];
+  for (const mod of modules) {
+    for (const name of mod.exports) {
+      const rpc = `__rpc_${mod.key}_${name}`;
+      rpcNames.push(rpc);
+      const tag = `${mod.key}.${name}`;
+      const stream = mod.streams?.includes(name) ?? false;
+      lines.push(
+        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown${stream ? ", stream: true" : ""} });`,
+      );
+    }
+  }
+  lines.push(`export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`);
+  lines.push(`export default actionsGroup;`);
+  lines.push(`export { actionsGroup as actions };`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function generateActionsModule(modules: ServerModule[], opts?: { bust?: boolean }): string {
   const lines = [
+    `import { Effect } from "effect";`,
+    `import { Schema } from "effect";`,
+    `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
     `import { AsyncLocalStorage } from "node:async_hooks";`,
-    `import { tacho } from "tacho";`,
+    `import { asyncGenToStream } from "oxidejs/rpc";`,
     `const __alsKey = Symbol.for("oxidejs.requestContext");`,
     `const __als = globalThis[__alsKey] ??= new AsyncLocalStorage();`,
+    `const __store = () => {`,
+    `  const ctx = __als.getStore();`,
+    `  if (!ctx) throw new Error("oxidejs: request context is unavailable");`,
+    `  return ctx;`,
+    `};`,
+    `const __run = (fn) =>`,
+    `  Effect.promise(() => __als.run(__store(), fn)).pipe(`,
+    `    Effect.map((value) => (value === undefined ? null : value)),`,
+    `  );`,
+    `const __args = (args) => (args.length === 1 && Array.isArray(args[0]) ? args[0] : args);`,
   ];
+  const rpcNames: string[] = [];
   const aliases = modules.map((mod, i) => {
     const alias = `__m${i}`;
     const spec = opts?.bust === true ? `${mod.abs}?t=${fs.statSync(mod.abs).mtimeMs}` : mod.abs;
     lines.push(`import * as ${alias} from ${JSON.stringify(spec)};`);
-    return { alias, mod };
-  });
-  lines.push(`const rpc = tacho();`);
-  lines.push(`const actions = rpc({`);
-  for (const { alias, mod } of aliases) {
-    lines.push(`  ${JSON.stringify(mod.key)}: {`);
     for (const name of mod.exports) {
+      const rpc = `__rpc_${i}_${name}`;
+      rpcNames.push(rpc);
+      const tag = `${mod.key}.${name}`;
+      const stream = mod.streams?.includes(name) ?? false;
       lines.push(
-        `    ${JSON.stringify(name)}: rpc.run(({ input, ctx }) => __als.run(ctx, () => {
-      const out = ${alias}[${JSON.stringify(name)}].apply(null, Array.isArray(input) ? input : []);
-      if (!out || typeof out !== "object" || typeof out.next !== "function") return out;
-      return {
-        next: (v) => __als.run(ctx, () => out.next(v)),
-        return: (v) => __als.run(ctx, () => out.return(v)),
-        throw: (e) => __als.run(ctx, () => out.throw(e)),
-        [Symbol.asyncIterator]() { return this; },
-      };
-    })),`,
+        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown${stream ? ", stream: true" : ""} });`,
       );
     }
-    lines.push(`  },`);
+    return { alias, mod };
+  });
+  lines.push(`export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`);
+  lines.push(`export const actionsHandlers = actionsGroup.toLayer({`);
+  for (const { alias, mod } of aliases) {
+    for (const name of mod.exports) {
+      const tag = `${mod.key}.${name}`;
+      const stream = mod.streams?.includes(name) ?? false;
+      lines.push(
+        stream
+          ? `  ${JSON.stringify(tag)}: ({ args }) => asyncGenToStream(__als.run(__store(), () => ${alias}[${JSON.stringify(name)}].apply(null, __args(args)))),`
+          : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, __args(args))),`,
+      );
+    }
   }
   lines.push(`});`);
-  lines.push(`export default actions;`);
-  lines.push(`export { actions };`);
+  lines.push(`export default actionsGroup;`);
+  lines.push(`export { actionsGroup as actions };`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -288,13 +350,22 @@ async function __asset(request, spa) {
 `
     : "";
   const envJson = JSON.stringify(opts.env ?? {});
+  const celldAfterAction = `{
+    const hit = typeof user.fetch === "function" ? await user.fetch(request, env ?? ${envJson}, ctx) : undefined;
+    if (hit) return hit;
+    const assets = env?.ASSETS;
+    if (assets && typeof assets.fetch === "function") return assets.fetch(request);
+    return __nf();
+  }`;
   const afterAction = serveAssets
     ? `if (typeof user.fetch === "function") {
       const hit = await user.fetch(request, env ?? ${envJson}, ctx);
       if (hit) return hit;
     }
     return (await __asset(request)) ?? (__nav(request) ? await __asset(request, true) : undefined) ?? __nf();`
-    : `return typeof user.fetch === "function"
+    : preset === "celld"
+      ? celldAfterAction
+      : `return typeof user.fetch === "function"
       ? user.fetch(request, env, ctx)
       : __nf();`;
   const listen =
@@ -343,7 +414,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   import("crossws/adapters/node").then(({ default: crossws }) => {
     const ws = crossws({ hooks: __ws });
     server.on("upgrade", (req, socket, head) => {
-      if (req.url?.split("?")[0] === ${JSON.stringify(actionPath)}) ws.handleUpgrade(req, socket, head);
+      if ((__actionMatch)(req.url?.split("?")[0] ?? "")) ws.handleUpgrade(req, socket, head);
     });
   });`
       : ""
@@ -360,19 +431,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       : "";
   const actionImports = hasActions
     ? ws
-      ? `import { handle as handleWs } from "tacho/transport/ws";
-import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __ws = handleWs(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``} });
+      ? `import { createWsHooks } from "oxidejs/rpc";
+import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``} });
 `
-      : `import { handle } from "tacho/transport/fetch";
-import actions from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+      : `import { createActionHandler } from "oxidejs/rpc";
+import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __fetch = Symbol.for("oxidejs.fetch");
-const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``}, createContext: (req) => req[__fetch] ?? {} });
+const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``}, createContext: (req) => req[__fetch] ?? {} });
 `
     : "";
+  const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
   const actionGate =
     hasActions && !ws
-      ? `if (new URL(request.url).pathname === ${JSON.stringify(actionPath)}) {
+      ? `if ((__actionMatch)(new URL(request.url).pathname)) {
       return __rpc(request);
     }
     `
@@ -410,9 +482,13 @@ const __rpc = handle(actions, { path: ${JSON.stringify(actionPath)}${sameOrigin 
   const sideEffectImports = (opts.imports ?? [])
     .map((spec) => `import ${JSON.stringify(spec)};`)
     .join("\n");
-  return `${sideEffectImports}export * from ${JSON.stringify(userWorkerAbs)};
+  const celldDomBlock =
+    preset === "celld"
+      ? `import { ensureWorkerDom } from "oxidejs/worker-dom";\nensureWorkerDom();\n`
+      : "";
+  return `${sideEffectImports}${celldDomBlock}export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
-${middlewareImports}${actionImports}${assetBlock}${nfBlock}const app = {
+${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
   ...user,
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
@@ -479,9 +555,10 @@ export function pluginShouldStub(pluginThis: unknown, options?: { ssr?: boolean 
 
 export function loadClientStub(id: string): string {
   const file = id.split("?")[0] ?? id;
+  const source = fs.readFileSync(file, "utf8");
   return generateClientStub({
     key: moduleKey(file),
-    exports: parseExportedNames(fs.readFileSync(file, "utf8")),
+    exports: parseExportedNames(source),
   });
 }
 

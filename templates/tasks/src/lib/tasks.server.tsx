@@ -1,86 +1,84 @@
-import { action } from "@ilha/router/server";
-import { Badge, Button, Checkbox } from "areia";
-import { derived, each, ilha } from "ilha";
-import { useRequest } from "oxidejs";
-import { Publisher } from "tacho";
+import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
+import { action } from "oxidejs";
 import { createStorage } from "unstorage";
 import type { Task } from "../server";
 
 const g = globalThis as typeof globalThis & {
   __tasks?: ReturnType<typeof createStorage<Task>>;
-  __taskEvents?: Publisher<{ change: Task[] }>;
+  __taskHub?: PubSub.PubSub<Task[]>;
 };
-// ponytail: in-memory unstorage; KV/DO driver when celld has a binding we can deploy
+
 const tasks = (g.__tasks ??= createStorage<Task>());
-const events = (g.__taskEvents ??= new Publisher());
+const hub = (g.__taskHub ??= Effect.runSync(PubSub.unbounded<Task[]>({ replay: 1 })));
 
 const snapshot = async () => {
-  const out: Task[] = [];
-  for (const id of await tasks.getKeys()) {
-    const task = await tasks.getItem(id);
-    if (task) out.push(task);
-  }
-  return out;
+  const items = await Promise.all((await tasks.getKeys()).map((id) => tasks.getItem(id)));
+  return items.filter((task) => task != null);
 };
+
+const notify = async () => {
+  Effect.runSync(PubSub.publish(hub, await snapshot()));
+};
+
+void notify();
 
 export const add = action(async (text: string) => {
   const trimmed = text.trim();
   if (!trimmed) return;
   const id = crypto.randomUUID();
   await tasks.setItem(id, { id, text: trimmed, completed: false });
-  events.publish("change", await snapshot());
+  await notify();
 });
 
 export const toggle = action(async (id: string) => {
   const task = await tasks.getItem(id);
   if (!task) return;
   await tasks.setItem(id, { ...task, completed: !task.completed });
-  events.publish("change", await snapshot());
+  await notify();
 });
 
 export const remove = action(async (id: string) => {
   await tasks.removeItem(id);
-  events.publish("change", await snapshot());
+  await notify();
 });
 
 export const list = action(async function* () {
-  const signal = useRequest().signal;
-  try {
-    yield await snapshot();
-    for await (const next of events.subscribe("change", { signal })) yield next;
-  } catch (error) {
-    if ((error as { name?: string }).name !== "AbortError") throw error;
-  }
+  yield* Stream.toAsyncIterable(Stream.fromPubSub(hub));
 });
 
-export const TaskCount = ilha(() => {
-  const items = derived(async function* () {
-    yield* list();
-  });
-  const count = derived(() => items()?.filter((task) => !task.completed).length ?? 0);
-  return <Badge>{count()}</Badge>;
-});
+const streamError = (error: unknown) => (error instanceof Error ? error : new Error(String(error)));
 
-export const TaskList = ilha(() => {
-  const items = derived(async function* () {
-    yield* list();
-  });
-  return (
+export const TaskCount = async function TaskCount() {
+  return Stream.map(Stream.fromAsyncIterable(list(), streamError), (items) => (
+    <span class="badge badge-primary">{items.filter((task) => !task.completed).length}</span>
+  ));
+};
+
+export const TaskList = async function TaskList() {
+  return Stream.map(Stream.fromAsyncIterable(list(), streamError), (items) => (
     <div class="flex flex-col gap-2">
-      {each(items() ?? [])
-        .as((todo) => (
-          <div data-key={todo.id} class="flex items-center justify-between gap-2">
-            <Checkbox
-              checked={todo.completed}
-              label={todo.text}
-              onCheckedChange={toggle.with(todo.id)}
-            />
-            <Button type="button" onclick={remove.with(todo.id)}>
+      {items.length > 0 ? (
+        items.map((todo) => (
+          <div key={todo.id} class="flex items-center justify-between gap-2">
+            <label class="label cursor-pointer justify-start gap-2">
+              <input
+                type="checkbox"
+                class="checkbox"
+                checked={todo.completed}
+                onchange={toggle.bind(todo.id)}
+              />
+              <span>{todo.text}</span>
+            </label>
+            <button type="button" class="btn btn-sm btn-ghost" onclick={remove.bind(todo.id)}>
               Delete
-            </Button>
+            </button>
           </div>
         ))
-        .else(<p>No todos.</p>)}
+      ) : (
+        <p>No todos.</p>
+      )}
     </div>
-  );
-});
+  ));
+};

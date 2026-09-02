@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { handle } from "tacho/transport/fetch";
 import {
   assetRelPath,
+  generateActionsClientModule,
   generateActionsModule,
   generateClientModule,
   generateClientStub,
@@ -18,6 +18,43 @@ import {
   shouldStubServerModule,
 } from "./actions";
 import { action, runWithRequest, useCtx, useEnv, useFetchCtx, useRequest } from "./context";
+import { createActionHandler } from "./rpc/server";
+
+const RPC_MODULE = path.join(import.meta.dir, "rpc/index.ts");
+
+function writeActionsModule(root: string, code: string) {
+  const out = path.join(root, "actions.mjs");
+  fs.writeFileSync(out, code.replaceAll("oxidejs/rpc", RPC_MODULE));
+  return out;
+}
+
+async function loadGeneratedRouter(root: string) {
+  const out = writeActionsModule(root, generateActionsModule(scanServerFiles(root)));
+  const mod = await import(out);
+  return createActionHandler(mod.default, mod.actionsHandlers, { path: "/__oxide/action" });
+}
+
+async function rpcCall(
+  fetch: (request: Request) => Promise<Response>,
+  method: string,
+  args?: unknown[],
+  init: { headers?: HeadersInit; signal?: AbortSignal } = {},
+) {
+  const body: Record<string, unknown> = {
+    jsonrpc: "2.0",
+    id: 1,
+    method,
+    params: { args: args ?? [] },
+  };
+  const requestInit: RequestInit = {
+    method: "POST",
+    headers: { "content-type": "application/json", ...init.headers },
+    body: JSON.stringify(body),
+  };
+  if (init.signal) requestInit.signal = init.signal;
+  const res = await fetch(new Request("http://localhost/__oxide/action", requestInit));
+  return res;
+}
 
 describe("parseExportedNames", () => {
   test("finds only action-marked exports (functions, generators, consts)", () => {
@@ -119,20 +156,24 @@ describe("codegen", () => {
       actionPath: "/custom/action",
       actionSameOrigin: true,
     });
-    expect(code).toContain('pathname === "/custom/action"');
+    expect(code).toContain('p === "/custom/action" || p === "/custom/action/"');
     expect(code).toContain("sameOrigin: true");
   });
 
-  test("client stub posts through the shared tacho client", () => {
+  test("client stub posts through the shared RPC client", () => {
     const stub = generateClientStub({ key: "test", exports: ["ping"] });
     expect(stub).toContain('from "virtual:oxide/client"');
-    expect(stub).toContain('client["test"]["ping"](args.slice(0, -1), opts)');
+    expect(stub).toContain('import { wrapClientRpc } from "oxidejs"');
+    expect(stub).toContain('client["test"]["ping"](...args.slice(0, -1), opts)');
+    expect(stub).toContain('client["test"]["ping"](...args)');
     expect(stub).toContain("opts.signal instanceof AbortSignal");
-    expect(generateClientModule()).toContain('createClient({"url":"/__oxide/action"})');
+    expect(generateClientModule()).toContain(
+      'createClient(actionsGroup, {"url":"/__oxide/action"})',
+    );
     expect(generateClientModule("http", { authorization: "Bearer x" })).toContain(
       '"authorization":"Bearer x"',
     );
-    expect(generateClientModule("ws")).toContain("tacho/client/ws");
+    expect(generateClientModule("ws")).toContain('"transport":"ws"');
   });
 
   test("client stub peels { signal } and keeps other last args", async () => {
@@ -145,39 +186,51 @@ describe("codegen", () => {
         },
       },
     };
+    const { wrapClientRpc } = await import("./action");
     const fn = new Function(
       "client",
+      "wrapClientRpc",
       `${generateClientStub({ key: "test", exports: ["ticks"] })
+        .replace('import { wrapClientRpc } from "oxidejs";\n', "")
         .replace('import { client } from "virtual:oxide/client";\n', "")
         .replace("export const ticks", "const ticks")}\nreturn ticks;`,
-    )(client) as (...args: unknown[]) => unknown;
+    )(client, wrapClientRpc) as (...args: unknown[]) => unknown;
     const ac = new AbortController();
-    expect(fn(10, { signal: ac.signal })).toEqual([10]);
-    expect(fn({ signal: ac.signal })).toEqual([]);
-    expect(fn({ n: 1 })).toEqual([{ n: 1 }]);
-    expect(fn({ signal: "nope" })).toEqual([{ signal: "nope" }]);
-    expect(fn(10, { signal: ac.signal, extra: true })).toEqual([
-      10,
-      { signal: ac.signal, extra: true },
-    ]);
+    expect(await fn(10, { signal: ac.signal })).toBe(10);
+    expect(await fn({ signal: ac.signal })).toEqual({ signal: ac.signal });
+    expect(await fn({ n: 1 })).toEqual({ n: 1 });
+    expect(await fn({ signal: "nope" })).toEqual({ signal: "nope" });
+    expect(await fn(10, { signal: ac.signal, extra: true })).toBe(10);
     expect(seen).toEqual([
-      { params: [10], opts: { signal: ac.signal } },
-      { params: [], opts: { signal: ac.signal } },
-      { params: [{ n: 1 }] },
-      { params: [{ signal: "nope" }] },
-      { params: [10, { signal: ac.signal, extra: true }] },
+      { params: 10, opts: { signal: ac.signal } },
+      { params: { signal: ac.signal } },
+      { params: { n: 1 } },
+      { params: { signal: "nope" } },
+      { params: 10, opts: { signal: ac.signal, extra: true } },
     ]);
+  });
+
+  test("client actions module exposes RpcGroup only", () => {
+    const code = generateActionsClientModule([
+      { abs: "/app/src/test.server.ts", key: "test", exports: ["ping"], streams: [] },
+      { abs: "/app/src/tasks.server.ts", key: "tasks", exports: ["list"], streams: ["list"] },
+    ]);
+    expect(code).toContain('Rpc.make("test.ping"');
+    expect(code).toContain('Rpc.make("tasks.list", { payload:');
+    expect(code).toContain("stream: true");
+    expect(code).toContain("export const actionsGroup = RpcGroup.make");
+    expect(code).not.toContain("AsyncLocalStorage");
+    expect(code).not.toContain("actionsHandlers");
   });
 
   test("virtual module keys exports by file", () => {
     const code = generateActionsModule([
-      { abs: "/app/src/test.server.ts", key: "test", exports: ["ping"] },
+      { abs: "/app/src/test.server.ts", key: "test", exports: ["ping"], streams: [] },
     ]);
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
-    expect(code).toContain('"test": {');
-    expect(code).toContain('"ping": rpc.run');
-    expect(code).toContain("__als.run(ctx, () => out.next");
-    expect(code).toContain(".apply(null,");
+    expect(code).toContain('Rpc.make("test.ping"');
+    expect(code).toContain('"test.ping": ({ args }) => __run');
+    expect(code).toContain(".apply(null, __args(args))");
     expect(code).not.toContain('"_action": {');
   });
 
@@ -185,8 +238,8 @@ describe("codegen", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
     expect(code).toContain('export * from "/app/src/server.ts"');
     expect(code).toContain('import user from "/app/src/server.ts"');
-    expect(code).toContain('import actions from "virtual:oxide/actions"');
-    expect(code).toContain('pathname === "/__oxide/action"');
+    expect(code).toContain('import { actionsGroup, actionsHandlers } from "virtual:oxide/actions"');
+    expect(code).toContain('p === "/__oxide/action" || p === "/__oxide/action/"');
     expect(code).toContain("request[__fetch]");
     expect(code).toContain("await user.fetch(request, env ?? {}, ctx)");
     expect(code).toContain("if (hit) return hit");
@@ -215,7 +268,11 @@ describe("codegen", () => {
     expect(code).not.toContain("node:fs/promises");
     expect(code).not.toContain("createServer");
     expect(code).toContain('__nf = () => new Response("<h1>404 Not Found</h1>", { status: 404');
-    expect(code).toContain(": __nf()");
+    expect(code).toContain("env?.ASSETS");
+    expect(code).toContain("assets.fetch(request)");
+    expect(code).toContain('oxidejs/worker-dom"');
+    expect(code).toContain("ensureWorkerDom()");
+    expect(code).not.toContain(": __nf()");
     expect(code).toContain("export * from");
     expect(code).toContain("...user");
   });
@@ -226,9 +283,9 @@ describe("codegen", () => {
     expect(code).toContain("__nav(request)");
   });
 
-  test("wrapper without actions skips tacho", () => {
+  test("wrapper without actions skips RPC", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { hasActions: false });
-    expect(code).not.toContain("tacho");
+    expect(code).not.toContain("oxidejs/rpc");
     expect(code).not.toContain("virtual:oxide/actions");
     expect(code).not.toContain("/__oxide/action");
     expect(code).toContain("user.fetch(request, env, ctx)");
@@ -236,9 +293,9 @@ describe("codegen", () => {
 
   test("ws wrapper upgrades /__oxide/action", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { actions: "ws" });
-    expect(code).toContain("tacho/transport/ws");
+    expect(code).toContain("createWsHooks");
     expect(code).toContain("crossws/adapters/node");
-    expect(code).not.toContain("tacho/transport/fetch");
+    expect(code).not.toContain("createActionHandler");
   });
 
   test("asset helper rejects traversal and absolute joins", () => {
@@ -347,9 +404,8 @@ describe("codegen", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", { preset: "fetch", hasClient: true });
     // The generated code uses new URL(request.url).pathname to extract the path,
     // not raw string manipulation. This ensures URL parsing normalization.
+    expect(code).toContain("__actionMatch");
     expect(code).toContain("new URL(request.url).pathname");
-    // The action gate also uses pathname comparison, not raw string matching
-    expect(code).toContain('new URL(request.url).pathname === "/__oxide/action"');
   });
 
   test("generated __asset serves real files from a public/ dir", async () => {
@@ -478,7 +534,7 @@ describe("codegen", () => {
     try {
       const stub = loadClientStub(file);
       expect(stub).toContain('from "virtual:oxide/client"');
-      expect(stub).toContain('client["secret"]["ping"](args.slice(0, -1), opts)');
+      expect(stub).toContain('client["secret"]["ping"](...args.slice(0, -1), opts)');
       expect(stub).not.toContain("leak-me");
       expect(stub).not.toContain("const SECRET");
     } finally {
@@ -488,7 +544,7 @@ describe("codegen", () => {
 });
 
 describe("generated router", () => {
-  test("runs exported functions over tacho /__oxide/action", async () => {
+  test("runs exported functions over /__oxide/action", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-"));
     const file = path.join(root, "test.server.ts");
     const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
@@ -499,24 +555,14 @@ export const ping = action(async () => "pong")
 export const echo = action(async (value: string) => value)
 `,
     );
-    const code = generateActionsModule(scanServerFiles(root));
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, code);
     try {
-      const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/__oxide/action" });
-      const call = async (method: string, params?: unknown) => {
-        const res = await fetch(
-          new Request("http://localhost/__oxide/action", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-          }),
-        );
-        return res.json();
-      };
-      expect(await call("test.ping")).toEqual({ jsonrpc: "2.0", id: 1, result: "pong" });
-      expect(await call("test.echo", ["hello"])).toEqual({
+      const fetch = await loadGeneratedRouter(root);
+      expect(await (await rpcCall(fetch, "test.ping")).json()).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        result: "pong",
+      });
+      expect(await (await rpcCall(fetch, "test.echo", ["hello"])).json()).toEqual({
         jsonrpc: "2.0",
         id: 1,
         result: "hello",
@@ -526,7 +572,86 @@ export const echo = action(async (value: string) => value)
     }
   });
 
-  test("streams async generators as SSE", async () => {
+  test("accepts a trailing slash on the action path", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-slash-"));
+    const file = path.join(root, "test.server.ts");
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      file,
+      `import { action } from ${ctx};\nexport const ping = action(async () => "pong")\n`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await fetch(
+        new Request("http://localhost/__oxide/action/", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "test.ping",
+            params: { args: [] },
+          }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "pong" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("unwraps accidentally nested args arrays", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-nest-"));
+    const file = path.join(root, "test.server.ts");
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      file,
+      `import { action } from ${ctx};\nexport const echo = action(async (value: string) => value)\n`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await fetch(
+        new Request("http://localhost/__oxide/action/", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "test.echo",
+            params: { args: [["hello"]] },
+          }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "hello" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("void actions encode as null", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-void-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      path.join(root, "noop.server.ts"),
+      `import { action } from ${ctx};
+export const noop = action(async () => {})
+`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      expect(await (await rpcCall(fetch, "noop.noop")).json()).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        result: null,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("streams async generators as chunked JSON-RPC", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-stream-"));
     const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
@@ -535,26 +660,16 @@ export const echo = action(async (value: string) => value)
 export const ticks = action(async function* () { yield 0; yield 1; return 2 })
 `,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/__oxide/action" })(
-        new Request("http://localhost/__oxide/action", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ticks.ticks" }),
-        }),
-      );
-      expect(res.headers.get("content-type")).toBe("text/event-stream");
-      expect(await res.text()).toBe(
-        [
-          'data: {"jsonrpc":"2.0","result":0,"id":1}\n',
-          'data: {"jsonrpc":"2.0","result":1,"id":1}\n',
-          'event: done\ndata: {"jsonrpc":"2.0","result":2,"id":1}\n',
-          "",
-        ].join("\n"),
-      );
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "ticks.ticks");
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const body = await res.json();
+      expect(body).toEqual([
+        { jsonrpc: "2.0", chunk: true, id: 1, result: [0] },
+        { jsonrpc: "2.0", chunk: true, id: 1, result: [1] },
+        { jsonrpc: "2.0", id: 1, result: null },
+      ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -568,19 +683,11 @@ export const ticks = action(async function* () { yield 0; yield 1; return 2 })
 export const who = action(async function* () { yield useRequest().headers.get("x-user") })
 `,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/__oxide/action" })(
-        new Request("http://localhost/__oxide/action", {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-user": "ada" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
-        }),
-      );
-      expect(res.headers.get("content-type")).toBe("text/event-stream");
-      expect(await res.text()).toContain('"result":"ada"');
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "who.who", undefined, { headers: { "x-user": "ada" } });
+      const body = await res.json();
+      expect(body[0]?.result).toEqual(["ada"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -594,17 +701,9 @@ export const who = action(async function* () { yield useRequest().headers.get("x
 export const who = action(async () => useRequest().headers.get("x-user"))
 `,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
-      const res = await handle(actions, { path: "/__oxide/action" })(
-        new Request("http://localhost/__oxide/action", {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-user": "ada" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
-        }),
-      );
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "who.who", undefined, { headers: { "x-user": "ada" } });
       expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "ada" });
       expect(() => useRequest()).toThrow("request context is unavailable");
       expect(() => useCtx()).toThrow("request context is unavailable");
@@ -615,15 +714,18 @@ export const who = action(async () => useRequest().headers.get("x-user"))
     }
   });
 
-  test("action adds typed cancellation without changing the function", async () => {
+  test("action adds typed cancellation and Atom.fn-shaped handles", async () => {
     const pingFn = async () => "pong" as const;
     const ping = action(pingFn);
     const echo = action(async (value: string) => value);
     const signal = new AbortController().signal;
 
-    expect(ping).toBe(pingFn);
+    expect(ping.$$atom).toBe(1);
+    expect(typeof ping.set).toBe("function");
+    expect(typeof ping.bind).toBe("function");
     expect(await ping({ signal })).toBe("pong");
     expect(await echo("ok", { signal })).toBe("ok");
+    expect(await ping.set()).toBe("pong");
   });
 
   test("runWithRequest always provides the current Request", () => {
@@ -641,7 +743,7 @@ export const who = action(async () => useRequest().headers.get("x-user"))
     );
   });
 
-  test("useEnv() and useFetchCtx() read tacho ctx extras", async () => {
+  test("useEnv() and useFetchCtx() read RPC context extras", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-env-"));
     fs.writeFileSync(
       path.join(root, "who.server.ts"),
@@ -653,25 +755,20 @@ export const who = action(async () => {
 })
 `,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
+    const out = writeActionsModule(root, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
+      const mod = await import(out);
       const waited: Promise<unknown>[] = [];
-      const res = await handle(actions, {
+      const fetch = createActionHandler(mod.default, mod.actionsHandlers, {
         path: "/__oxide/action",
         createContext: () => ({
+          req: new Request("http://localhost/__oxide/action"),
           env: { SECRET: "from-env" },
           fetchCtx: { waitUntil: (p: Promise<unknown>) => waited.push(p) },
           user: "ada",
         }),
-      })(
-        new Request("http://localhost/__oxide/action", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "who.who" }),
-        }),
-      );
+      });
+      const res = await rpcCall(fetch, "who.who");
       expect(await res.json()).toEqual({
         jsonrpc: "2.0",
         id: 1,
@@ -696,19 +793,10 @@ export const wait = action(async () => {
 })
 `,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
+      const fetch = await loadGeneratedRouter(root);
       const ac = new AbortController();
-      const pending = handle(actions, { path: "/__oxide/action" })(
-        new Request("http://localhost/__oxide/action", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "wait.wait" }),
-          signal: ac.signal,
-        }),
-      );
+      const pending = rpcCall(fetch, "wait.wait", undefined, { signal: ac.signal });
       await Promise.resolve();
       ac.abort();
       expect(await (await pending).json()).toEqual({ jsonrpc: "2.0", id: 1, result: "aborted" });
@@ -773,11 +861,8 @@ export const wait = action(async () => {
       path.join(root, "test.server.ts"),
       `import { action } from ${ctx};\nexport const ping = action(async () => "pong")\n`,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/__oxide/action" });
+      const fetch = await loadGeneratedRouter(root);
       const get = await fetch(new Request("http://localhost/__oxide/action"));
       expect(get.status).toBe(405);
       expect(get.headers.get("allow")).toBe("POST");
@@ -789,7 +874,7 @@ export const wait = action(async () => {
         }),
       );
       expect(await miss.json()).toMatchObject({
-        error: { code: -32601 },
+        error: { _tag: "Cause" },
         id: 1,
       });
       const proto = await fetch(
@@ -799,7 +884,7 @@ export const wait = action(async () => {
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "__proto__.ping" }),
         }),
       );
-      expect(await proto.json()).toMatchObject({ error: { code: -32601 } });
+      expect(await proto.json()).toMatchObject({ error: { _tag: "Cause" } });
       const other = await fetch(
         new Request("http://localhost/api", {
           method: "POST",
@@ -813,18 +898,15 @@ export const wait = action(async () => {
     }
   });
 
-  test("non-array params do not become arguments", async () => {
+  test("invalid params are rejected", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-params-"));
     const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       path.join(root, "test.server.ts"),
       `import { action } from ${ctx};\nexport const echo = action(async (value) => value ?? "empty")\n`,
     );
-    const out = path.join(root, "actions.mjs");
-    fs.writeFileSync(out, generateActionsModule(scanServerFiles(root)));
     try {
-      const { default: actions } = await import(out);
-      const fetch = handle(actions, { path: "/__oxide/action" });
+      const fetch = await loadGeneratedRouter(root);
       const call = (params: unknown) =>
         fetch(
           new Request("http://localhost/__oxide/action", {
@@ -833,12 +915,8 @@ export const wait = action(async () => {
             body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "test.echo", params }),
           }),
         ).then((res) => res.json());
-      expect(await call({ 0: "sneak" })).toEqual({
-        jsonrpc: "2.0",
-        id: 1,
-        result: "empty",
-      });
-      expect(await call(["ok"])).toEqual({ jsonrpc: "2.0", id: 1, result: "ok" });
+      expect(await call({ 0: "sneak" })).toMatchObject({ error: { _tag: "Cause" } });
+      expect(await call({ args: ["ok"] })).toEqual({ jsonrpc: "2.0", id: 1, result: "ok" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

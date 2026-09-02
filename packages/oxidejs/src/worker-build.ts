@@ -1,6 +1,39 @@
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { VIRTUAL_WORKER_ID } from "./actions";
 import type { ResolvedOptions } from "./types";
+
+type ViteAlias = { find: string | RegExp; replacement: string };
+
+/** Dev aliases so Vite transforms RPC helpers with the app's single effect copy. */
+function oxideRpcAliases(): ViteAlias[] {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const client = path.join(root, "src/rpc/client.ts");
+  if (!fs.existsSync(client)) return [];
+  return [
+    { find: /^oxidejs\/rpc\/client$/, replacement: client },
+    { find: /^oxidejs\/rpc$/, replacement: path.join(root, "src/rpc/index.ts") },
+  ];
+}
+
+function mergeAliases(config: ViteUserConfig, extra: ViteAlias[]) {
+  if (extra.length === 0) return;
+  config.resolve ??= {};
+  const current = config.resolve.alias;
+  if (!current) {
+    config.resolve.alias = extra;
+    return;
+  }
+  if (Array.isArray(current)) {
+    config.resolve.alias = [...current, ...extra];
+    return;
+  }
+  config.resolve.alias = [
+    ...Object.entries(current).map(([find, replacement]) => ({ find, replacement })),
+    ...extra,
+  ];
+}
 
 /** Minimal Vite config surface used by this plugin. Avoids a hard vite runtime dep. */
 export type ViteInput = string | string[] | Record<string, string>;
@@ -8,6 +41,8 @@ export type ViteInput = string | string[] | Record<string, string>;
 export interface ViteUserConfig {
   root?: string;
   appType?: string;
+  resolve?: { dedupe?: string[]; alias?: ViteAlias[] | Record<string, string> };
+  optimizeDeps?: { include?: string[] };
   builder?: {
     buildApp?: (builder: {
       environments: Record<string, unknown>;
@@ -54,6 +89,13 @@ export interface ViteEnvironmentConfig {
   ssr?: { target?: string; noExternal?: boolean | string[]; external?: (string | RegExp)[] };
 }
 
+const EFFECT_DEPS = [
+  "effect",
+  "effect/unstable/rpc",
+  "effect/unstable/http",
+  "effect/unstable/socket",
+] as const;
+
 export function applyViteEnvironments(
   config: ViteUserConfig,
   opts: ResolvedOptions,
@@ -61,9 +103,26 @@ export function applyViteEnvironments(
   // Opt `vite build` into building every environment (same as `vite build --app`).
   config.builder ??= {};
 
-  config.environments ??= {};
+  config.resolve ??= {};
+  const dedupe = new Set([
+    ...(Array.isArray(config.resolve.dedupe) ? config.resolve.dedupe : []),
+    "effect",
+    "oxidejs",
+  ]);
+  config.resolve.dedupe = [...dedupe];
+
+  config.optimizeDeps ??= {};
+  const optimizeInclude = new Set([
+    ...(Array.isArray(config.optimizeDeps.include) ? config.optimizeDeps.include : []),
+    ...EFFECT_DEPS,
+  ]);
+  config.optimizeDeps.include = [...optimizeInclude];
 
   const celld = opts.preset === "celld";
+  mergeAliases(config, oxideRpcAliases());
+
+  config.environments ??= {};
+
   config.environments["ssr"] = {
     consumer: "server",
     build: {
@@ -87,10 +146,12 @@ export function applyViteEnvironments(
         },
       },
     },
-    resolve: celld ? { conditions: ["worker"], noExternal: true } : { noExternal: ["tacho"] },
+    resolve: celld
+      ? { conditions: ["worker"], noExternal: true }
+      : { noExternal: ["effect", "oxidejs"] },
     ssr: celld
       ? { target: "webworker", noExternal: true, external: [/^cloudflare:/] }
-      : { noExternal: ["tacho"] },
+      : { noExternal: ["effect", "oxidejs"] },
   };
 
   config.build ??= {};

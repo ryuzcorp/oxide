@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Oxide is a build plugin and a typed RPC layer. Start with one, or use both - they work together or on their own.
+description: Oxide is a Vite or Rsbuild plugin that turns one build into a deployable server and optional client.
 ---
 
 <CardGroup cols={2}>
@@ -8,9 +8,12 @@ description: Oxide is a build plugin and a typed RPC layer. Start with one, or u
     A Vite or Rsbuild plugin. One build writes a server bundle and, if
     you have a page, a client.
   </Card>
-  <Card title="tacho" href="/tacho/overview" icon="radio">
-    Typed RPC. Call the same procedures in the same process or from
-    another machine.
+  <Card
+    title="Configuration"
+    href="/oxide/configuration"
+    icon="settings"
+  >
+    Presets, action transport, paths, and deploy keys.
   </Card>
 </CardGroup>
 
@@ -19,14 +22,9 @@ description: Oxide is a build plugin and a typed RPC layer. Start with one, or u
 - [Oxide overview](/oxide/overview) - what the plugin builds and when to use it
 - [Oxide quickstart](/oxide/quickstart) - install the plugin and run a build
 
-## Call typed RPC
-
-- [Tacho overview](/tacho/overview) - procedures, types, and how they travel
-- [Tacho quickstart](/tacho/quickstart) - define procedures, serve them, call them
-
-## Other resources
+## Server features
 
 - [Server entry](/oxide/server-entry) - handle a request, or fall through to static files
-- [Server actions](/oxide/server-actions) - call a server function from the browser, or read `useRequest()` / `useCtx()` / `useEnv()` / `useFetchCtx()`
+- [Server actions](/oxide/server-actions) - `action()`-wrapped RPC, streams, and `useRequest()` / `useCtx()` / `useEnv()` / `useFetchCtx()`
 - [Oxide configuration](/oxide/configuration) - presets, paths, and deploy keys
-- [Tacho API reference](/tacho/api-reference) - every public export
+- [Security](/oxide/security) - what oxidejs guards by default

@@ -1,8 +1,11 @@
 declare module "virtual:oxide/actions" {
-  // Generated tacho router. Typed loosely so apps can pass it to handle().
-  const actions: Record<string, never>;
-  export default actions;
-  export { actions };
+  import type { RpcGroup } from "effect/unstable/rpc";
+  import type { Layer } from "effect";
+
+  const actionsGroup: RpcGroup.Any;
+  export const actionsHandlers: Layer.Layer<unknown, unknown, unknown>;
+  export default actionsGroup;
+  export { actionsGroup as actions };
 }
 
 declare module "virtual:oxide/client" {
