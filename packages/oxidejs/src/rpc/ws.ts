@@ -6,6 +6,7 @@ import type { ActionContext } from "../context";
 import { isSameOrigin } from "./same-origin";
 import { matchesActionPath } from "../actions";
 import { createActionHandler, type ActionHandlerOptions } from "./server";
+import { NDJSON_CONTENT } from "./scrub";
 
 type WsPeer = {
   request?: Request;
@@ -33,6 +34,35 @@ function parseMessage(message: WsMessage, maxBytes: number) {
   } catch {
     return { ok: false as const };
   }
+}
+
+/** Forward each complete NDJSON line as its own WS message (keeps streams incremental). */
+async function sendNdjsonFrames(peer: WsPeer, response: Response) {
+  if (!response.body) {
+    const text = await response.text();
+    if (text) peer.send(text);
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    let nl = pending.indexOf("\n");
+    while (nl !== -1) {
+      const line = pending.slice(0, nl);
+      pending = pending.slice(nl + 1);
+      if (line.length > 0) peer.send(`${line}\n`);
+      nl = pending.indexOf("\n");
+    }
+  }
+
+  pending += decoder.decode();
+  if (pending.length > 0) peer.send(pending.endsWith("\n") ? pending : `${pending}\n`);
 }
 
 export function createWsHooks(
@@ -79,19 +109,17 @@ export function createWsHooks(
         return;
       }
       const host = peer.request?.headers.get("host") ?? "localhost";
+      const headers = new Headers(peer.request?.headers);
+      headers.set("content-type", NDJSON_CONTENT);
       const request = new Request(`http://${host}${path}`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(peer.request ? Object.fromEntries(peer.request.headers.entries()) : {}),
-        },
+        headers,
         body: parsed.value,
       });
       (request as Request & { __oxidePeer?: WsPeer }).__oxidePeer = peer;
       const extra = (await options.createContext?.(peer)) ?? (peer.context as ActionContext);
       const response = await runWithRequest(request, () => rpc(request), extra);
-      const body = await response.text();
-      if (body) peer.send(body);
+      await sendNdjsonFrames(peer, response);
     },
   };
 }

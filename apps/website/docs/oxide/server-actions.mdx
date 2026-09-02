@@ -58,10 +58,10 @@ Unary actions are Promise-returning handles with helpers for UI wiring:
 
 | Call                                        | What it does                                     |
 | ------------------------------------------- | ------------------------------------------------ |
-| `await ping()`                              | Run the action                                   |
-| `ping.set(...args)`                         | Same as calling with args                        |
+| `await ping()`                              | Run the action (always invokes RPC on client)    |
+| `ping.set(...args)`                         | Same as calling with args; also writes the atom  |
 | `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action  |
-| `ping()` with no args                       | Read the last `AsyncResult` from the client atom |
+| `ping.result`                               | Read the last `AsyncResult` from the client atom |
 
 ```ts twoslash src/bind.ts
 // @filename: tasks.server.ts
@@ -138,7 +138,7 @@ Keep authorization wrappers server-only. Throw for intentional failures; do not 
 
 ## Stream values
 
-Wrap an `async function*` in `action()` to stream over Effect RPC as **chunked JSON-RPC** (not Server-Sent Events). The response is `application/json` with chunk frames, then a final result.
+Wrap an `async function*` in `action()` to stream over Effect RPC as **newline-delimited JSON-RPC** (not Server-Sent Events). The response is `application/json-rpc` with one JSON object per line — chunk frames as the generator yields, then a final result. Scrubbing runs per frame so clients see early chunks without waiting for the generator to finish.
 
 ```ts twoslash src/ticks.server.ts
 import { action } from "oxidejs";

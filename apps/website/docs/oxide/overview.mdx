@@ -17,7 +17,7 @@ Choose `oxidejs` when you want a deployable tree from [Vite](https://vite.dev/) 
 ## What you get
 
 - **One output tree** - a server bundle, plus a client when you have a page.
-- **Server actions** - wrap exports in [`action()`](/oxide/server-actions) and call them from the browser over Effect RPC. Types stay in sync. The function never ships to the client. Stream with `async function*` (chunked JSON-RPC). Call [`useRequest()`](/oxide/server-actions#userequest) for the inbound `Request`, [`useCtx()`](/oxide/server-actions#usectx) for request context, [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx) on celld.
+- **Server actions** - wrap exports in [`action()`](/oxide/server-actions) and call them from the browser over Effect RPC. Types stay in sync. The function never ships to the client. Stream with `async function*` (newline-delimited JSON-RPC). Call [`useRequest()`](/oxide/server-actions#userequest) for the inbound `Request`, [`useCtx()`](/oxide/server-actions#usectx) for request context, [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx) on celld.
 - **Two [presets](/oxide/configuration#preset)** - fetch serves static files from Node. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers.
 - **[Vite](https://vite.dev/) and [Rsbuild](https://rsbuild.rs/)** - same plugin, same output.
 

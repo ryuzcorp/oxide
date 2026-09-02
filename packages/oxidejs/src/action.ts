@@ -59,10 +59,11 @@ function unpackArgs<Args extends unknown[]>(packed: PackArgs<Args>, arity: numbe
 
 export type ServerActionHandle<Args extends unknown[], A> = {
   (...args: Args | [...Args, CallOptions]): Promise<A>;
-  (): AsyncResult.AsyncResult<A, unknown>;
   set(...args: Args): Promise<A>;
   bind(...args: Args): (...ev: unknown[]) => void;
   with(...args: Args): (...ev: unknown[]) => void;
+  /** Last `AsyncResult` for this action's client atom (does not invoke RPC). */
+  readonly result: AsyncResult.AsyncResult<A, unknown>;
   readonly atom: Atom.Atom<unknown>;
   readonly $$atom: 1;
 };
@@ -90,16 +91,13 @@ function bindHandler<Args extends unknown[]>(
 function defineServerAction<Args extends unknown[], A>(
   atom: Atom.Atom<unknown>,
   invoke: (...args: Args | [...Args, CallOptions]) => A | Promise<A>,
-  opts?: { readOnEmpty?: boolean; captureKey?: string },
+  opts?: { captureKey?: string; stripCallOptions?: boolean },
 ): ServerActionHandle<Args, A> {
-  const readOnEmpty = opts?.readOnEmpty ?? false;
   const captureKey = opts?.captureKey;
+  const stripCallOptions = opts?.stripCallOptions ?? true;
 
-  const run = ((...allArgs: Args | [...Args, CallOptions] | []) => {
-    if (readOnEmpty && allArgs.length === 0) {
-      return registry().get(atom) as AsyncResult.AsyncResult<A, unknown>;
-    }
-    if (readOnEmpty) {
+  const run = ((...allArgs: Args | [...Args, CallOptions]) => {
+    if (!stripCallOptions) {
       return Promise.resolve(invoke(...(allArgs as Args | [...Args, CallOptions])));
     }
     const { args } = splitCallOptions(allArgs as Args | [...Args, CallOptions]);
@@ -125,6 +123,10 @@ function defineServerAction<Args extends unknown[], A>(
     with: bind,
     atom,
     $$atom: 1 as const,
+  });
+  Object.defineProperty(run, "result", {
+    enumerable: true,
+    get: () => registry().get(atom) as AsyncResult.AsyncResult<A, unknown>,
   });
 
   if (captureKey) (run as { [ACTION_KEY]?: string })[ACTION_KEY] = captureKey;
@@ -181,14 +183,15 @@ export function wrapClientRpc<Args extends unknown[], A>(
   );
 
   return defineServerAction(atom, (...args: Args | [...Args, CallOptions]) => invoke(...args), {
-    readOnEmpty: true,
+    // Client stubs forward optional `{ signal }` into Effect RPC — do not peel it here.
+    stripCallOptions: false,
   });
 }
 
 /**
  * Marks a `*.server.ts` export as a remote RPC action. On the server the
  * underlying function runs locally; on the client the build replaces the module
- * with an `Atom.fn`-shaped RPC handle (`set`, `bind`, `AsyncResult` read).
+ * with an `Atom.fn`-shaped RPC handle (`set`, `bind`, `result`).
  */
 export function action<Args extends unknown[], Y, R = void>(
   fn: (...args: Args) => AsyncGenerator<Y, R, unknown>,

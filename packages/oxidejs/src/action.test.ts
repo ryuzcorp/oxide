@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { action, ACTION_CALL, brandServerAction } from "./action";
+import { action, ACTION_CALL, brandServerAction, wrapClientRpc } from "./action";
 
 test("action wraps Atom.fn with set, bind, and invoke", async () => {
   const ping = action(async () => "pong");
@@ -16,6 +16,17 @@ test("action wraps Atom.fn with set, bind, and invoke", async () => {
     k: "x:echo",
     a: ["hi"],
   });
+});
+
+test("wrapClientRpc zero-arg call invokes RPC (does not read the atom)", async () => {
+  const calls: unknown[][] = [];
+  const ping = wrapClientRpc(async (...args: []) => {
+    calls.push(args);
+    return "pong";
+  });
+  expect(await ping()).toBe("pong");
+  expect(calls).toEqual([[]]);
+  expect(ping.result).toBeDefined();
 });
 
 test("with is an alias for bind", () => {

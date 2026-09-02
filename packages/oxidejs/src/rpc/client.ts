@@ -59,12 +59,12 @@ function httpLayer(options: RpcClientOptions) {
             }),
         }
       : {}),
-  }).pipe(Layer.provide(RpcSerialization.layerJsonRpc()), Layer.provide(FetchHttpClient.layer));
+  }).pipe(Layer.provide(RpcSerialization.layerNdJsonRpc()), Layer.provide(FetchHttpClient.layer));
 }
 
 function wsLayer(url: string) {
   return RpcClient.layerProtocolSocket().pipe(
-    Layer.provide(RpcSerialization.layerJsonRpc()),
+    Layer.provide(RpcSerialization.layerNdJsonRpc()),
     Layer.provide(Socket.layerWebSocket(url)),
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
   );

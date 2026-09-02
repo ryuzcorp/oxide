@@ -78,7 +78,7 @@ export default {
 };
 ```
 
-`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as chunked JSON-RPC (`application/json` frames, not SSE). On the client, await the call to get the async generator. Inside server code, always read the non-optional signal from `useRequest().signal`:
+`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (`application/json-rpc` frames, not SSE). On the client, await the call to get the async generator. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts
 // src/test.server.ts

@@ -5,3 +5,11 @@ export type { ActionHandlerOptions } from "./server";
 export { createWsHooks } from "./ws";
 export type { WsHooksOptions } from "./ws";
 export { asyncGenToStream, streamToAsyncGen } from "./stream";
+export {
+  scrubRpcJson,
+  scrubRpcMessage,
+  scrubNdjsonTransform,
+  extractJsonRpcRequestId,
+  extractJsonRpcRequestIds,
+  ensureNdjsonBody,
+} from "./scrub";

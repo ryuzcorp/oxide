@@ -34,6 +34,30 @@ async function loadGeneratedRouter(root: string) {
   return createActionHandler(mod.default, mod.actionsHandlers, { path: "/__oxide/action" });
 }
 
+/** Parse NDJSON (`application/json-rpc`) or a legacy JSON array/object body. */
+async function readRpcFrames(res: Response): Promise<unknown[]> {
+  const text = await res.text();
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    const parsed: unknown = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  }
+  if (!trimmed.includes("\n") && trimmed.startsWith("{")) {
+    return [JSON.parse(trimmed)];
+  }
+  return trimmed
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+async function readRpcFrame(res: Response): Promise<unknown> {
+  const frames = await readRpcFrames(res);
+  expect(frames.length).toBeGreaterThan(0);
+  return frames[0];
+}
+
 async function rpcCall(
   fetch: (request: Request) => Promise<Response>,
   method: string,
@@ -557,12 +581,12 @@ export const echo = action(async (value: string) => value)
     );
     try {
       const fetch = await loadGeneratedRouter(root);
-      expect(await (await rpcCall(fetch, "test.ping")).json()).toEqual({
+      expect(await readRpcFrame(await rpcCall(fetch, "test.ping"))).toEqual({
         jsonrpc: "2.0",
         id: 1,
         result: "pong",
       });
-      expect(await (await rpcCall(fetch, "test.echo", ["hello"])).json()).toEqual({
+      expect(await readRpcFrame(await rpcCall(fetch, "test.echo", ["hello"]))).toEqual({
         jsonrpc: "2.0",
         id: 1,
         result: "hello",
@@ -595,7 +619,7 @@ export const echo = action(async (value: string) => value)
         }),
       );
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "pong" });
+      expect(await readRpcFrame(res)).toEqual({ jsonrpc: "2.0", id: 1, result: "pong" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -624,7 +648,7 @@ export const echo = action(async (value: string) => value)
         }),
       );
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "hello" });
+      expect(await readRpcFrame(res)).toEqual({ jsonrpc: "2.0", id: 1, result: "hello" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -641,7 +665,7 @@ export const noop = action(async () => {})
     );
     try {
       const fetch = await loadGeneratedRouter(root);
-      expect(await (await rpcCall(fetch, "noop.noop")).json()).toEqual({
+      expect(await readRpcFrame(await rpcCall(fetch, "noop.noop"))).toEqual({
         jsonrpc: "2.0",
         id: 1,
         result: null,
@@ -663,13 +687,79 @@ export const ticks = action(async function* () { yield 0; yield 1; return 2 })
     try {
       const fetch = await loadGeneratedRouter(root);
       const res = await rpcCall(fetch, "ticks.ticks");
-      expect(res.headers.get("content-type")).toContain("application/json");
-      const body = await res.json();
+      expect(res.headers.get("content-type")).toContain("application/json-rpc");
+      const body = await readRpcFrames(res);
       expect(body).toEqual([
         { jsonrpc: "2.0", chunk: true, id: 1, result: [0] },
         { jsonrpc: "2.0", chunk: true, id: 1, result: [1] },
         { jsonrpc: "2.0", id: 1, result: null },
       ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("stream frames flush before the generator finishes", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-stream-live-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    const gateFile = path.join(root, "gate");
+    fs.writeFileSync(
+      path.join(root, "ticks.server.ts"),
+      `import { action } from ${ctx};
+import fs from "node:fs";
+export const ticks = action(async function* () {
+  yield 0;
+  while (!fs.existsSync(${JSON.stringify(gateFile)})) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  yield 1;
+})
+`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "ticks.ticks");
+      expect(res.body).toBeTruthy();
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (!buf.includes("\n")) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+      expect(JSON.parse(buf.split("\n")[0]!)).toEqual({
+        jsonrpc: "2.0",
+        chunk: true,
+        id: 1,
+        result: [0],
+      });
+
+      // Second frame must not arrive until the gate opens.
+      const second = reader.read().then((chunk) => ({ kind: "frame" as const, chunk }));
+      const premature = await Promise.race([
+        second,
+        new Promise<{ kind: "timeout" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "timeout" }), 40),
+        ),
+      ]);
+      expect(premature.kind).toBe("timeout");
+
+      fs.writeFileSync(gateFile, "go");
+      const rest = premature.kind === "frame" ? premature.chunk : await second;
+      let restText = decoder.decode(rest.chunk.value, { stream: true });
+      while (!restText.includes("\n") && !rest.chunk.done) {
+        const next = await reader.read();
+        if (next.done) break;
+        restText += decoder.decode(next.value, { stream: true });
+      }
+      expect(JSON.parse(restText.split("\n").find((l) => l.length > 0)!)).toEqual({
+        jsonrpc: "2.0",
+        chunk: true,
+        id: 1,
+        result: [1],
+      });
+      await reader.cancel();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -686,8 +776,8 @@ export const who = action(async function* () { yield useRequest().headers.get("x
     try {
       const fetch = await loadGeneratedRouter(root);
       const res = await rpcCall(fetch, "who.who", undefined, { headers: { "x-user": "ada" } });
-      const body = await res.json();
-      expect(body[0]?.result).toEqual(["ada"]);
+      const body = await readRpcFrames(res);
+      expect((body[0] as { result?: unknown })?.result).toEqual(["ada"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -704,7 +794,7 @@ export const who = action(async () => useRequest().headers.get("x-user"))
     try {
       const fetch = await loadGeneratedRouter(root);
       const res = await rpcCall(fetch, "who.who", undefined, { headers: { "x-user": "ada" } });
-      expect(await res.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "ada" });
+      expect(await readRpcFrame(res)).toEqual({ jsonrpc: "2.0", id: 1, result: "ada" });
       expect(() => useRequest()).toThrow("request context is unavailable");
       expect(() => useCtx()).toThrow("request context is unavailable");
       expect(() => useEnv()).toThrow("request context is unavailable");
@@ -769,7 +859,7 @@ export const who = action(async () => {
         }),
       });
       const res = await rpcCall(fetch, "who.who");
-      expect(await res.json()).toEqual({
+      expect(await readRpcFrame(res)).toEqual({
         jsonrpc: "2.0",
         id: 1,
         result: { secret: "from-env", user: "ada" },
@@ -799,7 +889,11 @@ export const wait = action(async () => {
       const pending = rpcCall(fetch, "wait.wait", undefined, { signal: ac.signal });
       await Promise.resolve();
       ac.abort();
-      expect(await (await pending).json()).toEqual({ jsonrpc: "2.0", id: 1, result: "aborted" });
+      expect(await readRpcFrame(await pending)).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        result: "aborted",
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -873,9 +967,10 @@ export const wait = action(async () => {
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "test.secret" }),
         }),
       );
-      expect(await miss.json()).toMatchObject({
-        error: { _tag: "Cause" },
+      expect(await readRpcFrame(miss)).toEqual({
+        jsonrpc: "2.0",
         id: 1,
+        error: { code: -32601, message: "Method not found" },
       });
       const proto = await fetch(
         new Request("http://localhost/__oxide/action", {
@@ -884,7 +979,11 @@ export const wait = action(async () => {
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "__proto__.ping" }),
         }),
       );
-      expect(await proto.json()).toMatchObject({ error: { _tag: "Cause" } });
+      expect(await readRpcFrame(proto)).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32601, message: "Method not found" },
+      });
       const other = await fetch(
         new Request("http://localhost/api", {
           method: "POST",
@@ -914,9 +1013,37 @@ export const wait = action(async () => {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "test.echo", params }),
           }),
-        ).then((res) => res.json());
-      expect(await call({ 0: "sneak" })).toMatchObject({ error: { _tag: "Cause" } });
+        ).then((res) => readRpcFrame(res));
+      expect(await call({ 0: "sneak" })).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32602, message: "Invalid params" },
+      });
       expect(await call({ args: ["ok"] })).toEqual({ jsonrpc: "2.0", id: 1, result: "ok" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("thrown errors scrub Defect payloads (no message leak)", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-scrub-"));
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      path.join(root, "test.server.ts"),
+      `import { action } from ${ctx};\nexport const boom = action(async () => { throw new Error("secret-leak-check"); })\n`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "test.boom");
+      const body = await readRpcFrame(res);
+      expect(body).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32603, message: "Internal error" },
+      });
+      expect(JSON.stringify(body)).not.toContain("secret-leak-check");
+      expect(JSON.stringify(body)).not.toContain("Defect");
+      expect(JSON.stringify(body)).not.toContain("_tag");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
