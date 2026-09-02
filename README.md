@@ -33,13 +33,13 @@ export default defineConfig({
 Vite or Rsbuild. Switch the import. Keep the rest.
 
 ```sh
-bun add oxidejs tacho
+bun add oxidejs
 ```
 
 It guides you. It doesn't frame you.
 
 - **Single bundle** — One folder to deploy. A server, and a client if you have a page.
-- **Server actions** — Wrap a `*.server.ts` export in `action()`, then import and call it from the client.
+- **Server actions** — Wrap a `*.server.ts` export in `action()`, then import and call it from the client over Effect RPC.
 - **Fetch or celld** — Run the generated server on Node-compatible hosts, or emit a celld worker.
 
 ## Packages
@@ -47,11 +47,10 @@ It guides you. It doesn't frame you.
 | Package                     | Purpose                                                                 |
 | --------------------------- | ----------------------------------------------------------------------- |
 | [oxidejs](packages/oxidejs) | Turns Vite or Rsbuild into a backend. One plugin, one folder to deploy. |
-| [tacho](packages/tacho)     | Typed JSON-RPC. The wire those actions ride on. Also usable on its own. |
 
-Need RPC without the plugin? Use [tacho](packages/tacho). `typeof router` is the client. The `templates/simple` and `templates/tasks` apps show fetch and celld deployments.
+Server actions ride [Effect](https://effect.website) RPC (`application/json-rpc`). The `templates/simple` and `templates/tasks` apps show fetch and celld deployments.
 
-[Docs](https://oxide.build) · [oxidejs](packages/oxidejs) · [tacho](packages/tacho)
+[Docs](https://oxide.build) · [oxidejs](packages/oxidejs)
 
 ## License
 

@@ -45,11 +45,11 @@ oxide({
 });
 ```
 
-`"celld"` writes `dist/wrangler.jsonc` for celld, a self-hosted alternative to Cloudflare Workers, and skips asset serving (`ASSETS` does that).
+`"celld"` writes `dist/wrangler.jsonc` for celld, a self-hosted alternative to Cloudflare Workers, and skips asset serving (`ASSETS` does that). The generated worker imports `oxidejs/worker-dom/install` so Ilha SSR has a DOM before your entry evaluates. Oxide merges `nodejs_compat` into `compatibility_flags` when you do not set it.
 
 ## Server actions
 
-Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an RPC stub that POSTs `/__oxide/action`. The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`.
+Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`.
 
 ```ts
 // src/test.server.ts
@@ -78,7 +78,18 @@ export default {
 };
 ```
 
-`action()` is runtime identity — it marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (`application/json-rpc` frames, not SSE). On the client, await the call to get the async generator. Inside server code, always read the non-optional signal from `useRequest().signal`:
+### Call shape
+
+Unary actions return a Promise and expose helpers for UI wiring:
+
+| Call                                        | What it does                                     |
+| ------------------------------------------- | ------------------------------------------------ |
+| `await ping()`                              | Run the action (always invokes RPC on client)    |
+| `ping.set(...args)`                         | Same as calling with args; also writes the atom  |
+| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action  |
+| `ping.result`                               | Read the last `AsyncResult` from the client atom |
+
+`action()` marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (not SSE). On the client the stub returns an async generator — iterate it directly. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts
 // src/test.server.ts
@@ -93,11 +104,13 @@ export const ticks = action(async function* (n: number) {
 import { ticks } from "./test.server";
 
 const ac = new AbortController();
-for await (const value of await ticks(10, { signal: ac.signal })) {
+for await (const value of ticks(10, { signal: ac.signal })) {
   console.log(value);
 }
 ac.abort();
 ```
+
+Stream actions do not support `bind` / `with`. Breaking the `for await` loop or calling `return()` on the generator cleans up the server generator.
 
 `vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
@@ -125,7 +138,7 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | `clientDir`                    | `client`                 | Must stay inside `outDir`                                                                   |
 | `wrangler.name`                | required if `emitConfig` |                                                                                             |
 | `wrangler.compatibility_date`  | required if `emitConfig` |                                                                                             |
-| `wrangler.compatibility_flags` | —                        | optional                                                                                    |
+| `wrangler.compatibility_flags` | —                        | optional; `nodejs_compat` is merged in automatically on `celld`                             |
 | `wrangler.durable_objects`     | —                        | optional                                                                                    |
 | `wrangler.migrations`          | —                        | optional                                                                                    |
 | `wrangler.services`            | —                        | optional                                                                                    |
@@ -178,13 +191,16 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 
 ### Server actions (`*.server.{ts,tsx,js,jsx}`)
 
-- Server action code is **never bundled into the client**. Client imports are replaced with RPC stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
+- Server action code is **never bundled into the client**. Client imports are replaced with Effect RPC stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
 - Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
+- Stream actions use newline-delimited JSON-RPC (`application/json-rpc`) over that same endpoint — not Server-Sent Events. Frames are scrubbed as they flush on HTTP and WebSocket.
 - The endpoint is POST-only. Non-POST requests return `405`.
 - Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
 - Unknown or missing content-types → `415`.
 - Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
 - Batch requests capped at 20 items (both HTTP and WebSocket transports).
+- Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. Clients see plain JSON-RPC errors (`code` + `message` only). Thrown messages become `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
+- `actions.sameOrigin` defaults to `true`. Requests without both `Origin` and `Sec-Fetch-Site` are rejected when that check is on.
 
 ### Host header
 
