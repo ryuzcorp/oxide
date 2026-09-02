@@ -57,6 +57,10 @@
       "types": "./dist/worker-dom.d.mts",
       "import": "./dist/worker-dom.mjs"
     },
+    "./worker-dom/install": {
+      "types": "./dist/worker-dom/install.d.mts",
+      "import": "./dist/worker-dom/install.mjs"
+    },
     "./tsconfig": "./tsconfig.app.json"
   },
   "scripts": {
@@ -68,7 +72,7 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "effect": "^4.0.0-rc.112",
+    "effect": "~4.0.0-rc.112",
     "linkedom": "^0.18.13",
     "unplugin": "^3.3.0"
   },

@@ -1,3 +1,3 @@
 export const Greeting = async function Greeting(props: Record<string, unknown>) {
-  return <p>Hello, {String(props.name) || "Ilha"}!</p>;
+  return <p>Hello, {props.name == null ? "Ilha" : String(props.name)}!</p>;
 };

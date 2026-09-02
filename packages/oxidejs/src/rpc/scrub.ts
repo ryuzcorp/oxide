@@ -8,7 +8,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function classifyCause(error: Record<string, unknown>): { code: number; message: string } {
-  const blob = `${String(error.message ?? "")}${JSON.stringify(error.data ?? "")}`;
+  const blob = `${String(error["message"] ?? "")}${JSON.stringify(error["data"] ?? "")}`;
   if (/Unknown request tag/i.test(blob)) {
     return { code: -32601, message: "Method not found" };
   }
@@ -26,22 +26,22 @@ function classifyCause(error: Record<string, unknown>): { code: number; message:
 function scrubError(error: unknown): { code: number; message: string } {
   if (!isRecord(error)) return { ...INTERNAL };
 
-  if (error._tag === "Defect") return { ...INTERNAL };
-  if (error._tag === "Cause") return classifyCause(error);
+  if (error["_tag"] === "Defect") return { ...INTERNAL };
+  if (error["_tag"] === "Cause") return classifyCause(error);
 
   // Plain JSON-RPC (Forbidden, parse errors, etc.) — keep code/message, drop data.
-  if (typeof error.code === "number" && typeof error.message === "string") {
-    return { code: error.code, message: error.message };
+  if (typeof error["code"] === "number" && typeof error["message"] === "string") {
+    return { code: error["code"], message: error["message"] };
   }
   return { ...INTERNAL };
 }
 
 /** Scrub one JSON-RPC response object. `requestIds` repairs Defect ids (= -32603). */
 export function scrubRpcMessage(msg: unknown, requestIds: readonly unknown[] = []): unknown {
-  if (!isRecord(msg) || !("error" in msg) || msg.error == null) return msg;
+  if (!isRecord(msg) || !("error" in msg) || msg["error"] == null) return msg;
 
-  const error = scrubError(msg.error);
-  let id = msg.id;
+  const error = scrubError(msg["error"]);
+  let id = msg["id"];
   if (id === -32603) {
     id = requestIds.length === 1 ? requestIds[0] : null;
   }
@@ -93,9 +93,12 @@ function scrubRpcLine(line: string, requestIds: readonly unknown[]): string {
 }
 
 /** Collect JSON-RPC request ids from a unary object or batch array body. */
-export function extractJsonRpcRequestIds(body: ArrayBuffer | string): unknown[] {
+export function extractJsonRpcRequestIds(body: ArrayBuffer | Uint8Array | string): unknown[] {
   try {
-    let text = typeof body === "string" ? body : new TextDecoder().decode(body);
+    let text =
+      typeof body === "string"
+        ? body
+        : new TextDecoder().decode(body instanceof Uint8Array ? body : new Uint8Array(body));
     text = text.replace(/^\uFEFF/, "").trimEnd();
     // NDJSON request batch: one object per line.
     if (text.includes("\n")) {
@@ -103,7 +106,7 @@ export function extractJsonRpcRequestIds(body: ArrayBuffer | string): unknown[] 
       for (const line of text.split("\n")) {
         if (!line) continue;
         const parsed: unknown = JSON.parse(line);
-        if (isRecord(parsed) && "id" in parsed) ids.push(parsed.id);
+        if (isRecord(parsed) && "id" in parsed) ids.push(parsed["id"]);
       }
       return ids;
     }
@@ -112,9 +115,9 @@ export function extractJsonRpcRequestIds(body: ArrayBuffer | string): unknown[] 
       return parsed
         .filter(isRecord)
         .filter((item) => "id" in item)
-        .map((item) => item.id);
+        .map((item) => item["id"]);
     }
-    if (isRecord(parsed) && "id" in parsed) return [parsed.id];
+    if (isRecord(parsed) && "id" in parsed) return [parsed["id"]];
   } catch {
     /* ignore */
   }
@@ -127,13 +130,15 @@ export function extractJsonRpcRequestId(body: ArrayBuffer | string): unknown {
 }
 
 /** Ensure a body is a valid NDJSON frame (Effect's ndJsonRpc decode requires a trailing newline). */
-export function ensureNdjsonBody(buf: ArrayBuffer): Uint8Array {
+export function ensureNdjsonBody(buf: ArrayBuffer): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(buf);
-  if (bytes.length > 0 && bytes[bytes.length - 1] === 0x0a) return bytes;
+  if (bytes.length > 0 && bytes[bytes.length - 1] === 0x0a) {
+    return bytes as Uint8Array<ArrayBuffer>;
+  }
   const out = new Uint8Array(bytes.length + 1);
   out.set(bytes);
   out[bytes.length] = 0x0a;
-  return out;
+  return out as Uint8Array<ArrayBuffer>;
 }
 
 /**

@@ -12,11 +12,8 @@ const AsyncGeneratorFunction = Object.getPrototypeOf(async function* () {}).cons
 
 type CallOptions = { signal?: AbortSignal };
 
-type PackArgs<Args extends unknown[]> = Args extends []
-  ? void
-  : Args extends [infer Head]
-    ? Head
-    : Args;
+/** Atom write payload is always the argument list (never collapsed), so rest stubs / single-array args stay intact. */
+type PackArgs<Args extends unknown[]> = Args;
 
 let defaultRegistry: Registry.AtomRegistry | undefined;
 
@@ -43,18 +40,6 @@ function splitCallOptions<Args extends unknown[]>(
     return { args: args.slice(0, -1) as Args, options: last as CallOptions };
   }
   return { args: args as Args };
-}
-
-function packArgs<Args extends unknown[]>(args: Args): PackArgs<Args> {
-  if (args.length === 0) return undefined as PackArgs<Args>;
-  if (args.length === 1) return args[0] as PackArgs<Args>;
-  return args as PackArgs<Args>;
-}
-
-function unpackArgs<Args extends unknown[]>(packed: PackArgs<Args>, arity: number): Args {
-  if (arity === 0) return [] as unknown as Args;
-  if (arity === 1) return [packed] as Args;
-  return packed as Args;
 }
 
 export type ServerActionHandle<Args extends unknown[], A> = {
@@ -105,10 +90,7 @@ function defineServerAction<Args extends unknown[], A>(
   }) as ServerActionHandle<Args, A>;
 
   const set = (...args: Args) => {
-    registry().set(
-      atom as Atom.Writable<unknown, PackArgs<Args>>,
-      packArgs(args) as PackArgs<Args>,
-    );
+    registry().set(atom as Atom.Writable<unknown, PackArgs<Args>>, args as PackArgs<Args>);
     return Promise.resolve(invoke(...args));
   };
 
@@ -170,13 +152,12 @@ export function brandServerAction<Args extends unknown[], A>(
 export function wrapClientRpc<Args extends unknown[], A>(
   rpc: (...args: Args | [...Args, CallOptions]) => Promise<A>,
 ): ServerActionHandle<Args, A> {
-  const arity = rpc.length;
   const invoke = (...args: Args | [...Args, CallOptions]) => Promise.resolve(rpc(...args));
 
   const atom = Atom.make(
     Atom.fn((packed: PackArgs<Args>) =>
       Effect.tryPromise({
-        try: () => invoke(...unpackArgs<Args>(packed, arity)),
+        try: () => invoke(...(packed as Args)),
         catch: (error) => (error instanceof Error ? error : new Error(String(error))),
       }),
     ),
@@ -186,6 +167,16 @@ export function wrapClientRpc<Args extends unknown[], A>(
     // Client stubs forward optional `{ signal }` into Effect RPC — do not peel it here.
     stripCallOptions: false,
   });
+}
+
+/**
+ * Wrap a streaming RPC caller so the client handle returns an async generator
+ * (awaiting the underlying client lazily), not `Promise<AsyncGenerator>`.
+ */
+export function wrapClientStreamRpc<Args extends unknown[], Y, R = void>(
+  rpc: (...args: Args | [...Args, CallOptions]) => AsyncGenerator<Y, R, undefined>,
+): StreamActionHandle<Args, Y, R> {
+  return defineStreamAction((...args: Args) => rpc(...args));
 }
 
 /**
@@ -206,14 +197,13 @@ export function action<Args extends unknown[], Result>(
     return defineStreamAction(fn as (...args: Args) => AsyncGenerator<unknown, void, unknown>);
   }
 
-  const arity = fn.length;
   const invoke = (...args: Args) =>
     Promise.resolve((fn as (...args: Args) => Result)(...args)) as Promise<Awaited<Result>>;
 
   const atom = Atom.make(
     Atom.fn((packed: PackArgs<Args>) =>
       Effect.tryPromise({
-        try: () => invoke(...unpackArgs<Args>(packed, arity)),
+        try: () => invoke(...(packed as Args)),
         catch: (error) => (error instanceof Error ? error : new Error(String(error))),
       }),
     ),

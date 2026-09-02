@@ -2,6 +2,7 @@ export {
   action,
   brandServerAction,
   wrapClientRpc,
+  wrapClientStreamRpc,
   ACTION_CALL,
   useCtx,
   useEnv,

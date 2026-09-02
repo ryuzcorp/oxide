@@ -30,7 +30,7 @@
       "name": "oxidejs",
       "version": "0.3.0",
       "dependencies": {
-        "effect": "^4.0.0-rc.112",
+        "effect": "~4.0.0-rc.112",
         "linkedom": "^0.18.13",
         "unplugin": "^3.3.0",
       },

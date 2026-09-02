@@ -1,6 +1,7 @@
 import { createUnplugin } from "unplugin";
 import type { UnpluginFactory } from "unplugin";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -15,6 +16,7 @@ import {
   moduleKey,
   nodeToWebRequest,
   parseExportedNames,
+  parseStreamExports,
   pluginShouldStub,
   RequestBodyTooLargeError,
   RESOLVED_VIRTUAL_ACTIONS_ID,
@@ -63,7 +65,7 @@ function actionMiddleware(
       const [mod, rpc] = await Promise.all([loadRouter(), loadRpc()]);
       const handler = rpc.createActionHandler(mod.default as never, mod.actionsHandlers as never, {
         path,
-        ...(sameOrigin ? { sameOrigin: true } : {}),
+        sameOrigin,
       });
       const response = await handler(await nodeToWebRequest(req, bodyLimit));
       await sendWebResponseFrom(req, res, response);
@@ -149,7 +151,12 @@ interface RsbuildPluginApi {
 
 function loadActions(root: string) {
   const code = generateActionsModule(scanServerFiles(root), { bust: true });
-  return import(/* @vite-ignore */ `data:text/javascript,${encodeURIComponent(code)}`) as Promise<{
+  const dir = fs.mkdtempSync(path.join(root, ".oxide-actions-"));
+  const file = path.join(dir, "actions.mjs");
+  fs.writeFileSync(file, code);
+  return import(pathToFileURL(file).href).finally(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }) as Promise<{
     default: unknown;
     actionsHandlers: unknown;
   }>;
@@ -233,6 +240,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (opt
       return generateClientStub({
         key: moduleKey(id.split("?")[0] ?? id),
         exports: parseExportedNames(code),
+        streams: parseStreamExports(code),
       });
     },
     vite: {

@@ -170,7 +170,7 @@ test("scrubNdjsonTransform flushes frames without waiting for the stream end", a
   await reader.cancel();
 });
 
-test("scrubNdjsonTransform reassembles a line split across chunks", async () => {
+test("scrubNdjsonTransform reassembles a line split across multi-byte UTF-8", async () => {
   const transform = scrubNdjsonTransform([3]);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -178,14 +178,18 @@ test("scrubNdjsonTransform reassembles a line split across chunks", async () => 
     JSON.stringify({
       jsonrpc: "2.0",
       id: -32603,
-      error: { _tag: "Defect", data: { message: "secret" } },
+      error: { _tag: "Defect", data: { message: "sécret-café" } },
     }) + "\n";
+  const bytes = encoder.encode(line);
+  // Split inside the multi-byte UTF-8 sequence for é (C3 A9).
+  const é = bytes.indexOf(0xc3);
+  expect(é).toBeGreaterThan(0);
+  const mid = é + 1;
 
-  const mid = Math.floor(line.length / 2);
   const input = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(line.slice(0, mid)));
-      controller.enqueue(encoder.encode(line.slice(mid)));
+      controller.enqueue(bytes.subarray(0, mid));
+      controller.enqueue(bytes.subarray(mid));
       controller.close();
     },
   });
@@ -198,6 +202,7 @@ test("scrubNdjsonTransform reassembles a line split across chunks", async () => 
     out += decoder.decode(value, { stream: true });
   }
   expect(out).toBe('{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal error"}}\n');
+  expect(out).not.toContain("sécret");
 });
 
 test("extractJsonRpcRequestIds reads unary, batch array, and NDJSON ids", () => {

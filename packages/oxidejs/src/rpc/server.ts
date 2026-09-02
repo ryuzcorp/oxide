@@ -98,10 +98,12 @@ function scrubJsonResponse(response: Response, requestIds: readonly unknown[]): 
 
   // Framed NDJSON stream — scrub line-by-line without buffering the generator.
   if (response.body && (contentType.includes(NDJSON_CONTENT) || contentType.includes("ndjson"))) {
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
     return new Response(response.body.pipeThrough(scrubNdjsonTransform(requestIds)), {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers,
     });
   }
 
@@ -114,10 +116,12 @@ async function scrubBufferedJson(
   requestIds: readonly unknown[],
 ): Promise<Response> {
   const text = await response.text();
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
   return new Response(scrubRpcJson(text, requestIds), {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
+    headers,
   });
 }
 
@@ -128,7 +132,7 @@ export function createActionHandler(
 ) {
   const path = options.path ?? ACTION_PATH;
   const transport = options.transport ?? "http";
-  const sameOrigin = options.sameOrigin ?? false;
+  const sameOrigin = options.sameOrigin ?? true;
 
   return async (request: Request): Promise<Response> => {
     if (!matchesActionPath(new URL(request.url).pathname, path)) {

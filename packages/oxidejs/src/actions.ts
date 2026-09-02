@@ -140,22 +140,27 @@ export const client = createClient(actionsGroup, ${JSON.stringify(opts)});
 `;
 }
 
-export function generateClientStub(mod: Pick<ServerModule, "key" | "exports">): string {
+export function generateClientStub(mod: Pick<ServerModule, "key" | "exports" | "streams">): string {
+  const streams = new Set(mod.streams ?? []);
   const lines = [
     `// oxidejs:client-stub`,
-    `import { wrapClientRpc } from "oxidejs";`,
+    `import { wrapClientRpc, wrapClientStreamRpc } from "oxidejs";`,
     `import { client } from ${JSON.stringify(VIRTUAL_CLIENT_ID)};`,
   ];
   for (const name of mod.exports) {
-    lines.push(
-      `export const ${name} = wrapClientRpc((...args) => {
+    const call = `client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}]`;
+    const peel = `(...args) => {
   const opts = args.at(-1);
   // ponytail: peel last { signal } only. A lone payload { signal: AbortSignal } is treated as CallOptions.
   return opts && typeof opts === "object" && opts.signal instanceof AbortSignal && Object.keys(opts).length === 1
-    ? client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](...args.slice(0, -1), opts)
-    : client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}](...args);
-});`,
-    );
+    ? ${call}(...args.slice(0, -1), opts)
+    : ${call}(...args);
+}`;
+    if (streams.has(name)) {
+      lines.push(`export const ${name} = wrapClientStreamRpc(${peel});`);
+    } else {
+      lines.push(`export const ${name} = wrapClientRpc(${peel});`);
+    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -166,9 +171,9 @@ export function generateActionsClientModule(modules: ServerModule[]): string {
     `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
   ];
   const rpcNames: string[] = [];
-  for (const mod of modules) {
+  modules.forEach((mod, i) => {
     for (const name of mod.exports) {
-      const rpc = `__rpc_${mod.key}_${name}`;
+      const rpc = `__rpc_${i}_${name}`;
       rpcNames.push(rpc);
       const tag = `${mod.key}.${name}`;
       const stream = mod.streams?.includes(name) ?? false;
@@ -176,7 +181,7 @@ export function generateActionsClientModule(modules: ServerModule[]): string {
         `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown${stream ? ", stream: true" : ""} });`,
       );
     }
-  }
+  });
   lines.push(`export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`);
   lines.push(`export default actionsGroup;`);
   lines.push(`export { actionsGroup as actions };`);
@@ -201,7 +206,6 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     `  Effect.promise(() => __als.run(__store(), fn)).pipe(`,
     `    Effect.map((value) => (value === undefined ? null : value)),`,
     `  );`,
-    `const __args = (args) => (args.length === 1 && Array.isArray(args[0]) ? args[0] : args);`,
   ];
   const rpcNames: string[] = [];
   const aliases = modules.map((mod, i) => {
@@ -227,8 +231,8 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
       const stream = mod.streams?.includes(name) ?? false;
       lines.push(
         stream
-          ? `  ${JSON.stringify(tag)}: ({ args }) => asyncGenToStream(__als.run(__store(), () => ${alias}[${JSON.stringify(name)}].apply(null, __args(args)))),`
-          : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, __args(args))),`,
+          ? `  ${JSON.stringify(tag)}: ({ args }) => asyncGenToStream(__als.run(__store(), () => ${alias}[${JSON.stringify(name)}].apply(null, args))),`
+          : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, args)),`,
       );
     }
   }
@@ -433,12 +437,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     ? ws
       ? `import { createWsHooks } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``} });
+const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin} });
 `
       : `import { createActionHandler } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __fetch = Symbol.for("oxidejs.fetch");
-const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}${sameOrigin ? `, sameOrigin: true` : ``}, createContext: (req) => req[__fetch] ?? {} });
+const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}, createContext: (req) => req[__fetch] ?? {} });
 `
     : "";
   const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
@@ -482,10 +486,7 @@ const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.
   const sideEffectImports = (opts.imports ?? [])
     .map((spec) => `import ${JSON.stringify(spec)};`)
     .join("\n");
-  const celldDomBlock =
-    preset === "celld"
-      ? `import { ensureWorkerDom } from "oxidejs/worker-dom";\nensureWorkerDom();\n`
-      : "";
+  const celldDomBlock = preset === "celld" ? `import "oxidejs/worker-dom/install";\n` : "";
   return `${sideEffectImports}${celldDomBlock}export * from ${JSON.stringify(userWorkerAbs)};
 import user from ${JSON.stringify(userWorkerAbs)};
 ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
@@ -559,6 +560,7 @@ export function loadClientStub(id: string): string {
   return generateClientStub({
     key: moduleKey(file),
     exports: parseExportedNames(source),
+    streams: parseStreamExports(source),
   });
 }
 

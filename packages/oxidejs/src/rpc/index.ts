@@ -9,7 +9,6 @@ export {
   scrubRpcJson,
   scrubRpcMessage,
   scrubNdjsonTransform,
-  extractJsonRpcRequestId,
   extractJsonRpcRequestIds,
   ensureNdjsonBody,
 } from "./scrub";

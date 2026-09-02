@@ -1,8 +1,8 @@
 declare module "virtual:oxide/actions" {
-  import type { RpcGroup } from "effect/unstable/rpc";
+  import type { Rpc, RpcGroup } from "effect/unstable/rpc";
   import type { Layer } from "effect";
 
-  const actionsGroup: RpcGroup.Any;
+  const actionsGroup: RpcGroup.RpcGroup<Rpc.Any>;
   export const actionsHandlers: Layer.Layer<unknown, unknown, unknown>;
   export default actionsGroup;
   export { actionsGroup as actions };

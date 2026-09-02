@@ -9,6 +9,7 @@ export default defineConfig({
     "rpc/client": "src/rpc/client.ts",
     rpc: "src/rpc/index.ts",
     "worker-dom": "src/worker-dom.ts",
+    "worker-dom/install": "src/worker-dom/install.ts",
   },
   dts: true,
   format: "esm",

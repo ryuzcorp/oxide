@@ -60,5 +60,11 @@ const HOOK_KEY = Symbol.for("oxidejs.runWithRequest");
   return runWithRequest(req, fn as () => unknown, extra);
 };
 
-export { action, brandServerAction, wrapClientRpc, ACTION_CALL } from "./action";
+export {
+  action,
+  brandServerAction,
+  wrapClientRpc,
+  wrapClientStreamRpc,
+  ACTION_CALL,
+} from "./action";
 export type { ServerActionHandle, StreamActionHandle } from "./action";

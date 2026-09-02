@@ -31,7 +31,10 @@ function writeActionsModule(root: string, code: string) {
 async function loadGeneratedRouter(root: string) {
   const out = writeActionsModule(root, generateActionsModule(scanServerFiles(root)));
   const mod = await import(out);
-  return createActionHandler(mod.default, mod.actionsHandlers, { path: "/__oxide/action" });
+  return createActionHandler(mod.default, mod.actionsHandlers, {
+    path: "/__oxide/action",
+    sameOrigin: false,
+  });
 }
 
 /** Parse NDJSON (`application/json-rpc`) or a legacy JSON array/object body. */
@@ -185,9 +188,9 @@ describe("codegen", () => {
   });
 
   test("client stub posts through the shared RPC client", () => {
-    const stub = generateClientStub({ key: "test", exports: ["ping"] });
+    const stub = generateClientStub({ key: "test", exports: ["ping"], streams: [] });
     expect(stub).toContain('from "virtual:oxide/client"');
-    expect(stub).toContain('import { wrapClientRpc } from "oxidejs"');
+    expect(stub).toContain('import { wrapClientRpc, wrapClientStreamRpc } from "oxidejs"');
     expect(stub).toContain('client["test"]["ping"](...args.slice(0, -1), opts)');
     expect(stub).toContain('client["test"]["ping"](...args)');
     expect(stub).toContain("opts.signal instanceof AbortSignal");
@@ -210,15 +213,16 @@ describe("codegen", () => {
         },
       },
     };
-    const { wrapClientRpc } = await import("./action");
+    const { wrapClientRpc, wrapClientStreamRpc } = await import("./action");
     const fn = new Function(
       "client",
       "wrapClientRpc",
-      `${generateClientStub({ key: "test", exports: ["ticks"] })
-        .replace('import { wrapClientRpc } from "oxidejs";\n', "")
+      "wrapClientStreamRpc",
+      `${generateClientStub({ key: "test", exports: ["ticks"], streams: [] })
+        .replace('import { wrapClientRpc, wrapClientStreamRpc } from "oxidejs";\n', "")
         .replace('import { client } from "virtual:oxide/client";\n', "")
         .replace("export const ticks", "const ticks")}\nreturn ticks;`,
-    )(client, wrapClientRpc) as (...args: unknown[]) => unknown;
+    )(client, wrapClientRpc, wrapClientStreamRpc) as (...args: unknown[]) => unknown;
     const ac = new AbortController();
     expect(await fn(10, { signal: ac.signal })).toBe(10);
     expect(await fn({ signal: ac.signal })).toEqual({ signal: ac.signal });
@@ -254,8 +258,9 @@ describe("codegen", () => {
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('Rpc.make("test.ping"');
     expect(code).toContain('"test.ping": ({ args }) => __run');
-    expect(code).toContain(".apply(null, __args(args))");
+    expect(code).toContain(".apply(null, args))");
     expect(code).not.toContain('"_action": {');
+    expect(code).not.toContain("__args");
   });
 
   test("fetch wrapper tries server.ts then assets", () => {
@@ -294,8 +299,8 @@ describe("codegen", () => {
     expect(code).toContain('__nf = () => new Response("<h1>404 Not Found</h1>", { status: 404');
     expect(code).toContain("env?.ASSETS");
     expect(code).toContain("assets.fetch(request)");
-    expect(code).toContain('oxidejs/worker-dom"');
-    expect(code).toContain("ensureWorkerDom()");
+    expect(code).toContain('oxidejs/worker-dom/install"');
+    expect(code).not.toContain("ensureWorkerDom()");
     expect(code).not.toContain(": __nf()");
     expect(code).toContain("export * from");
     expect(code).toContain("...user");
@@ -625,13 +630,13 @@ export const echo = action(async (value: string) => value)
     }
   });
 
-  test("unwraps accidentally nested args arrays", async () => {
+  test("preserves a single array argument without unwrapping", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-nest-"));
     const file = path.join(root, "test.server.ts");
     const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
     fs.writeFileSync(
       file,
-      `import { action } from ${ctx};\nexport const echo = action(async (value: string) => value)\n`,
+      `import { action } from ${ctx};\nexport const echo = action(async (value: string[]) => value)\n`,
     );
     try {
       const fetch = await loadGeneratedRouter(root);
@@ -648,7 +653,7 @@ export const echo = action(async (value: string) => value)
         }),
       );
       expect(res.status).toBe(200);
-      expect(await readRpcFrame(res)).toEqual({ jsonrpc: "2.0", id: 1, result: "hello" });
+      expect(await readRpcFrame(res)).toEqual({ jsonrpc: "2.0", id: 1, result: ["hello"] });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -736,9 +741,9 @@ export const ticks = action(async function* () {
       });
 
       // Second frame must not arrive until the gate opens.
-      const second = reader.read().then((chunk) => ({ kind: "frame" as const, chunk }));
+      const second = reader.read();
       const premature = await Promise.race([
-        second,
+        second.then((chunk) => ({ kind: "frame" as const, chunk })),
         new Promise<{ kind: "timeout" }>((resolve) =>
           setTimeout(() => resolve({ kind: "timeout" }), 40),
         ),
@@ -747,8 +752,8 @@ export const ticks = action(async function* () {
 
       fs.writeFileSync(gateFile, "go");
       const rest = premature.kind === "frame" ? premature.chunk : await second;
-      let restText = decoder.decode(rest.chunk.value, { stream: true });
-      while (!restText.includes("\n") && !rest.chunk.done) {
+      let restText = rest.value ? decoder.decode(rest.value, { stream: true }) : "";
+      while (!restText.includes("\n") && !rest.done) {
         const next = await reader.read();
         if (next.done) break;
         restText += decoder.decode(next.value, { stream: true });
@@ -851,6 +856,7 @@ export const who = action(async () => {
       const waited: Promise<unknown>[] = [];
       const fetch = createActionHandler(mod.default, mod.actionsHandlers, {
         path: "/__oxide/action",
+        sameOrigin: false,
         createContext: () => ({
           req: new Request("http://localhost/__oxide/action"),
           env: { SECRET: "from-env" },

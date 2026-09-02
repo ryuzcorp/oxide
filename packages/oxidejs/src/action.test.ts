@@ -29,6 +29,18 @@ test("wrapClientRpc zero-arg call invokes RPC (does not read the atom)", async (
   expect(ping.result).toBeDefined();
 });
 
+test("wrapClientRpc rest stubs preserve argument lists on call and set", async () => {
+  const calls: unknown[][] = [];
+  const echo = wrapClientRpc(async (...args: unknown[]) => {
+    calls.push(args);
+    return args;
+  });
+  expect(await echo("a")).toEqual(["a"]);
+  expect(await echo("a", "b")).toEqual(["a", "b"]);
+  expect(await echo.set(["x", "y"])).toEqual([["x", "y"]]);
+  expect(calls).toEqual([["a"], ["a", "b"], [["x", "y"]]]);
+});
+
 test("with is an alias for bind", () => {
   const echo = action(async (value: string) => value);
   const BRAND = ACTION_CALL;

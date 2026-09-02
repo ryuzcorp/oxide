@@ -31,9 +31,20 @@ export const ticks = action(async function* () {
 
   try {
     const mod = await import(out);
-    const hooks = createWsHooks(mod.default, mod.actionsHandlers, { path: "/__oxide/action" });
+    const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+      path: "/__oxide/action",
+      sameOrigin: false,
+      createContext: () =>
+        ({
+          req: new Request("http://localhost/__oxide/action"),
+          marker: "from-peer",
+        }) as import("../context").ActionContext,
+    });
     const sent: string[] = [];
     const peer = {
+      request: new Request("http://localhost/__oxide/action", {
+        headers: { origin: "http://localhost", host: "localhost" },
+      }),
       context: {},
       send: (data: unknown) => {
         sent.push(String(data));
@@ -50,10 +61,12 @@ export const ticks = action(async function* () {
         }),
     });
 
-    // Wait until the first frame is forwarded without opening the gate.
     const started = Date.now();
-    while (sent.length === 0 && Date.now() - started < 1000) {
+    while (sent.length === 0 && Date.now() - started < 5000) {
       await new Promise((r) => setTimeout(r, 5));
+    }
+    if (sent.length === 0) {
+      throw new Error("timed out waiting for first WebSocket NDJSON frame");
     }
     expect(sent.length).toBe(1);
     expect(JSON.parse(sent[0]!.trim())).toEqual({

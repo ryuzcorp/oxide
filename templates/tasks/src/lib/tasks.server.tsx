@@ -8,40 +8,57 @@ import type { Task } from "../server";
 const g = globalThis as typeof globalThis & {
   __tasks?: ReturnType<typeof createStorage<Task>>;
   __taskHub?: PubSub.PubSub<Task[]>;
+  __taskMutate?: Promise<void>;
 };
 
 const tasks = (g.__tasks ??= createStorage<Task>());
-const hub = (g.__taskHub ??= Effect.runSync(PubSub.unbounded<Task[]>({ replay: 1 })));
+/** Sliding hub: slow consumers drop old snapshots; replay keeps the latest for late subscribers. */
+const hub = (g.__taskHub ??= Effect.runSync(PubSub.sliding<Task[]>({ capacity: 16, replay: 1 })));
 
 const snapshot = async () => {
   const items = await Promise.all((await tasks.getKeys()).map((id) => tasks.getItem(id)));
   return items.filter((task) => task != null);
 };
 
-const notify = async () => {
-  Effect.runSync(PubSub.publish(hub, await snapshot()));
+/** Run a storage mutation and its snapshot publish as one critical section. */
+const mutate = async (fn: () => Promise<void>) => {
+  const prev = g.__taskMutate ?? Promise.resolve();
+  let release!: () => void;
+  g.__taskMutate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await prev;
+  try {
+    await fn();
+    Effect.runSync(PubSub.publish(hub, await snapshot()));
+  } finally {
+    release();
+  }
 };
 
-void notify();
+void mutate(async () => {});
 
 export const add = action(async (text: string) => {
   const trimmed = text.trim();
   if (!trimmed) return;
   const id = crypto.randomUUID();
-  await tasks.setItem(id, { id, text: trimmed, completed: false });
-  await notify();
+  await mutate(async () => {
+    await tasks.setItem(id, { id, text: trimmed, completed: false });
+  });
 });
 
 export const toggle = action(async (id: string) => {
-  const task = await tasks.getItem(id);
-  if (!task) return;
-  await tasks.setItem(id, { ...task, completed: !task.completed });
-  await notify();
+  await mutate(async () => {
+    const task = await tasks.getItem(id);
+    if (!task) return;
+    await tasks.setItem(id, { ...task, completed: !task.completed });
+  });
 });
 
 export const remove = action(async (id: string) => {
-  await tasks.removeItem(id);
-  await notify();
+  await mutate(async () => {
+    await tasks.removeItem(id);
+  });
 });
 
 export const list = action(async function* () {
