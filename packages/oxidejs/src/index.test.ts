@@ -209,6 +209,8 @@ describe("factory shape", () => {
         "effect/unstable/rpc",
         "effect/unstable/http",
         "effect/unstable/socket",
+        "oxidejs",
+        "oxidejs/rpc/client",
       ]);
       expect(config.build?.outDir).toBe(path.join(resolved.outDir, "client"));
       expect(config.build?.manifest).toBe(true);

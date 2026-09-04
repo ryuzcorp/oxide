@@ -1,6 +1,6 @@
 import { Effect, Layer, Scope, Stream } from "effect";
 import type { Rpc } from "effect/unstable/rpc";
-import { RpcClient, RpcGroup, RpcSchema, RpcSerialization } from "effect/unstable/rpc";
+import { RpcClient, type RpcGroup, RpcSchema, RpcSerialization } from "effect/unstable/rpc";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Socket } from "effect/unstable/socket";
 import type { OxidejsActionHeaders } from "../types";
@@ -83,9 +83,12 @@ function clientLayer(options: RpcClientOptions) {
 function loadClient(group: ActionGroup, options: RpcClientOptions) {
   return Effect.gen(function* () {
     const scope = yield* Scope.make();
-    return yield* Scope.provide(scope)(
-      RpcClient.make(group).pipe(Effect.provide(clientLayer(options))),
-    );
+    // Build the layer inside the long-lived scope and provide its Context.
+    // `Effect.provide(layer)` builds in a transient scope that closes as soon as
+    // `RpcClient.make` returns — killing the socket protocol's forked read loop
+    // before it ever dials, so every WS action call hangs forever.
+    const context = yield* Scope.provide(scope)(Layer.build(clientLayer(options)));
+    return yield* Scope.provide(scope)(RpcClient.make(group).pipe(Effect.provide(context)));
   });
 }
 
@@ -160,7 +163,10 @@ export function createClient(group: ActionGroup, options: RpcClientOptions): Nes
   let entry = clientCache.get(key);
   if (!entry) {
     const pending = Effect.runPromise(loadClient(group, options))
-      .then((flat) => nestClient(group, flat as unknown as FlatClient))
+      .then((flat) => {
+        // SAFETY: RpcClient yields a tag-keyed flat client; cast collapses the generated service shape to the string-keyed callers nestClient builds.
+        return nestClient(group, flat as unknown as FlatClient);
+      })
       .catch((error) => {
         clientCache.delete(key);
         throw error;

@@ -89,11 +89,16 @@ export interface ViteEnvironmentConfig {
   ssr?: { target?: string; noExternal?: boolean | string[]; external?: (string | RegExp)[] };
 }
 
-const EFFECT_DEPS = [
+// Pre-bundle so Vite does not discover these mid-load and reload the page
+// (which aborts in-flight RPC streams). `oxidejs/rpc/client` is imported by
+// `virtual:oxide/client` on first action/stream use.
+const OPTIMIZE_DEPS = [
   "effect",
   "effect/unstable/rpc",
   "effect/unstable/http",
   "effect/unstable/socket",
+  "oxidejs",
+  "oxidejs/rpc/client",
 ] as const;
 
 export function applyViteEnvironments(
@@ -114,7 +119,7 @@ export function applyViteEnvironments(
   config.optimizeDeps ??= {};
   const optimizeInclude = new Set([
     ...(Array.isArray(config.optimizeDeps.include) ? config.optimizeDeps.include : []),
-    ...EFFECT_DEPS,
+    ...OPTIMIZE_DEPS,
   ]);
   config.optimizeDeps.include = [...optimizeInclude];
 

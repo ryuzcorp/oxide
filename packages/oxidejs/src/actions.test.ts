@@ -601,6 +601,26 @@ export const echo = action(async (value: string) => value)
     }
   });
 
+  test("returning a Response from an action yields a clear error", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-resp-"));
+    const file = path.join(root, "test.server.ts");
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      file,
+      `import { action } from ${ctx};\nexport const raw = action(() => new Response("RAW"))\n`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      expect(await readRpcFrame(await rpcCall(fetch, "test.raw"))).toMatchObject({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32603, message: "Internal error" },
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("accepts a trailing slash on the action path", async () => {
     const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-rpc-slash-"));
     const file = path.join(root, "test.server.ts");

@@ -6,6 +6,44 @@ import { createWsHooks } from "./ws";
 
 const RPC_MODULE = path.join(import.meta.dir, "index.ts");
 
+test("WebSocket answers effect keepalive pings without touching the action handler", async () => {
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-ping-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const boom = action(() => {
+  throw new Error("ping must not reach the action handler");
+})
+`,
+  );
+  const out = path.join(root, "actions.mjs");
+  fs.writeFileSync(
+    out,
+    generateActionsModule(scanServerFiles(root)).replaceAll("oxidejs/rpc", RPC_MODULE),
+  );
+
+  try {
+    const mod = await import(out);
+    const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+      path: "/__oxide/action",
+      sameOrigin: false,
+    });
+    const sent: string[] = [];
+    const peer = {
+      request: new Request("http://localhost/__oxide/action"),
+      context: {},
+      send: (data: unknown) => sent.push(String(data)),
+    };
+    await hooks.message(peer, {
+      text: () => JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
+    });
+    expect(sent).toEqual([JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" })]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("WebSocket stream sends NDJSON frames before the generator finishes", async () => {
   const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-live-"));
   const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
