@@ -6,6 +6,18 @@ import { generateActionsModule, scanServerFiles } from "../actions";
 import { createWsHooks } from "./ws";
 
 const RPC_MODULE = path.join(import.meta.dir, "index.ts");
+const OXIDE_RUNTIME = path.join(import.meta.dir, "../context.ts");
+
+function writeGeneratedActions(root: string) {
+  const out = path.join(root, "actions.mjs");
+  fs.writeFileSync(
+    out,
+    generateActionsModule(scanServerFiles(root))
+      .replaceAll("oxidejs/rpc", RPC_MODULE)
+      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`),
+  );
+  return out;
+}
 
 test("createClient over ws transport resolves calls through a real socket", async () => {
   // Regression: loadClient used to build the protocol layer in a transient
@@ -20,11 +32,7 @@ export const hello = action(async (name: string) => ` +
       `)
 `,
   );
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root)).replaceAll("oxidejs/rpc", RPC_MODULE),
-  );
+  const out = writeGeneratedActions(root);
 
   const server = http.createServer();
   const { default: crossws } = await import("crossws/adapters/node");
@@ -83,11 +91,7 @@ export const ticks = action(async function* () {
 })
 `,
   );
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root)).replaceAll("oxidejs/rpc", RPC_MODULE),
-  );
+  const out = writeGeneratedActions(root);
 
   const mod = await import(out);
   const server = http.createServer();

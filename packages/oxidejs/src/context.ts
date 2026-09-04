@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import process from "node:process";
 
 const ALS_KEY = Symbol.for("oxidejs.requestContext");
 const FETCH_KEY = Symbol.for("oxidejs.fetch");
@@ -18,16 +19,96 @@ export type ActionContext = {
 
 type AlsGlobal = typeof globalThis & { [key: symbol]: unknown };
 
+/** Override for tests. `null` uses `process.versions.webcontainer`. */
+let webcontainerOverride: boolean | null = null;
+
+/** StackBlitz WebContainers lose AsyncLocalStorage across `async/await`. */
+export const inWebcontainer = (): boolean => {
+  if (webcontainerOverride !== null) return webcontainerOverride;
+  if (typeof process === "undefined") return false;
+  const versions = process.versions as NodeJS.ProcessVersions & {
+    webcontainer?: string;
+  };
+  return Boolean(versions.webcontainer);
+};
+
+/** Test-only: force or clear the WebContainer detection path. */
+export const __setInWebcontainerForTests = (value: boolean | null): void => {
+  webcontainerOverride = value;
+};
+
+/** Module fallback when ALS does not survive awaits (WebContainer). */
+let syncStore: ActionContext | null = null;
+
+/** Serialize handler *entry* on WebContainer so syncStore is not stomped. */
+let entryTail: Promise<void> = Promise.resolve();
+
 function als(): AsyncLocalStorage<ActionContext> {
   const g = globalThis as AlsGlobal;
   return (g[ALS_KEY] ??=
     new AsyncLocalStorage<ActionContext>()) as AsyncLocalStorage<ActionContext>;
 }
 
-function store(): ActionContext {
-  const current = als().getStore();
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  value !== null &&
+  (typeof value === "object" || typeof value === "function") &&
+  typeof (value as PromiseLike<unknown>).then === "function";
+
+/** Current request context: ALS first, then the WebContainer sync fallback. */
+export function getRequestStore(): ActionContext {
+  const current = als().getStore() ?? syncStore;
   if (!current) throw new Error("oxidejs: request context is unavailable");
   return current;
+}
+
+function store(): ActionContext {
+  return getRequestStore();
+}
+
+/**
+ * Run `fn` with `store` on ALS and the sync fallback. On WebContainer the sync
+ * slot is restored only after an async `fn` settles (streams capture the store
+ * at invoke time and re-enter via this helper on each pull). Sync returns and
+ * throws restore immediately so a completed request is not left visible.
+ */
+export function withRequestStore<T>(ctx: ActionContext, fn: () => T): T {
+  const previous = syncStore;
+  syncStore = ctx;
+  let deferRestore = false;
+  try {
+    const result = als().run(ctx, fn);
+    if (inWebcontainer() && isPromiseLike(result)) {
+      deferRestore = true;
+      return Promise.resolve(result).finally(() => {
+        if (syncStore === ctx) syncStore = previous;
+      }) as T;
+    }
+    return result;
+  } finally {
+    if (!deferRestore) {
+      syncStore = previous;
+    }
+  }
+}
+
+/**
+ * Serialize async work that installs request context on WebContainer.
+ * Release as soon as `fn` settles — do not wait for streamed response bodies.
+ */
+export async function withRequestEntry<T>(fn: () => Promise<T>): Promise<T> {
+  if (!inWebcontainer()) return fn();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = entryTail;
+  entryTail = gate;
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 /** Current RPC or host request context. Throws outside request handling. */
@@ -51,7 +132,7 @@ export function useFetchCtx(): ExecutionContext | undefined {
 }
 
 export function runWithRequest<T>(req: Request, fn: () => T, extra?: Partial<ActionContext>): T {
-  return als().run({ ...extra, req }, fn);
+  return withRequestStore({ ...extra, req }, fn);
 }
 
 const HOOK_KEY = Symbol.for("oxidejs.runWithRequest");

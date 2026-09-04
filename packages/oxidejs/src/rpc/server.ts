@@ -3,7 +3,7 @@ import type { Rpc } from "effect/unstable/rpc";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { HttpRouter } from "effect/unstable/http";
 import { ACTION_PATH, matchesActionPath } from "../actions";
-import { runWithRequest } from "../context";
+import { runWithRequest, withRequestEntry } from "../context";
 import type { ActionContext } from "../context";
 import { isSameOrigin } from "./same-origin";
 import {
@@ -145,31 +145,33 @@ export function createActionHandler(
       return forbidden();
     }
 
-    const rawBody = ensureNdjsonBody(await request.arrayBuffer());
-    const requestIds = extractJsonRpcRequestIds(rawBody);
-    const headers = new Headers(request.headers);
-    // Body is always NDJSON (trailing newline). Match the serialization layer.
-    headers.set("content-type", NDJSON_CONTENT);
+    return withRequestEntry(async () => {
+      const rawBody = ensureNdjsonBody(await request.arrayBuffer());
+      const requestIds = extractJsonRpcRequestIds(rawBody);
+      const headers = new Headers(request.headers);
+      // Body is always NDJSON (trailing newline). Match the serialization layer.
+      headers.set("content-type", NDJSON_CONTENT);
 
-    const forwarded = new Request(request.url, {
-      method: request.method,
-      headers,
-      body: rawBody,
-      signal: request.signal,
+      const forwarded = new Request(request.url, {
+        method: request.method,
+        headers,
+        body: rawBody,
+        signal: request.signal,
+      });
+
+      const extra = (await options.createContext?.(forwarded)) ?? {};
+      const { handler } = bundleFor(group, handlers, path, transport);
+      const response = await runWithRequest(forwarded, () => handler(forwarded), extra);
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes(NDJSON_CONTENT) || contentType.includes("ndjson")) {
+        return scrubJsonResponse(response, requestIds);
+      }
+      if (contentType.includes("json")) {
+        return scrubBufferedJson(response, requestIds);
+      }
+      return response;
     });
-
-    const extra = (await options.createContext?.(forwarded)) ?? {};
-    const { handler } = bundleFor(group, handlers, path, transport);
-    const response = await runWithRequest(forwarded, () => handler(forwarded), extra);
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes(NDJSON_CONTENT) || contentType.includes("ndjson")) {
-      return scrubJsonResponse(response, requestIds);
-    }
-    if (contentType.includes("json")) {
-      return scrubBufferedJson(response, requestIds);
-    }
-    return response;
   };
 }
 

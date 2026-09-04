@@ -201,6 +201,7 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 - Batch requests capped at 20 items (both HTTP and WebSocket transports).
 - Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. Clients see plain JSON-RPC errors (`code` + `message` only). Thrown messages become `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
 - `actions.sameOrigin` defaults to `true`. Requests without both `Origin` and `Sec-Fetch-Site` are rejected when that check is on.
+- StackBlitz WebContainers do not keep `AsyncLocalStorage` across `async/await`. Oxide detects `process.versions.webcontainer` and falls back to a sync request store, capturing context before Effect schedules work and serializing handler entry so concurrent requests do not stomp that store. Stream pulls re-enter the captured store. This is a demo/dev workaround, not a concurrency model for production.
 
 ### Host header
 

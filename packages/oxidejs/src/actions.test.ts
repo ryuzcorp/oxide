@@ -17,14 +17,31 @@ import {
   scanServerFiles,
   shouldStubServerModule,
 } from "./actions";
-import { action, runWithRequest, useCtx, useEnv, useFetchCtx, useRequest } from "./context";
+import {
+  __setInWebcontainerForTests,
+  action,
+  getRequestStore,
+  runWithRequest,
+  useCtx,
+  useEnv,
+  useFetchCtx,
+  useRequest,
+  withRequestEntry,
+  withRequestStore,
+} from "./context";
 import { createActionHandler } from "./rpc/server";
 
 const RPC_MODULE = path.join(import.meta.dir, "rpc/index.ts");
+const OXIDE_RUNTIME = path.join(import.meta.dir, "context.ts");
 
 function writeActionsModule(root: string, code: string) {
   const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(out, code.replaceAll("oxidejs/rpc", RPC_MODULE));
+  fs.writeFileSync(
+    out,
+    code
+      .replaceAll("oxidejs/rpc", RPC_MODULE)
+      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`),
+  );
   return out;
 }
 
@@ -257,8 +274,11 @@ describe("codegen", () => {
     ]);
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('Rpc.make("test.ping"');
+    expect(code).toContain('import { getRequestStore, withRequestStore } from "oxidejs"');
     expect(code).toContain('"test.ping": ({ args }) => __run');
+    expect(code).toContain("const __s = getRequestStore()");
     expect(code).toContain(".apply(null, args))");
+    expect(code).not.toContain("AsyncLocalStorage");
     expect(code).not.toContain('"_action": {');
     expect(code).not.toContain("__args");
   });
@@ -881,6 +901,97 @@ export const who = action(async () => useRequest().headers.get("x-user"))
       },
       { req: new Request("http://wrong/"), env: { TASKS: true } },
     );
+  });
+
+  test("WebContainer sync store survives await when ALS would be empty", async () => {
+    __setInWebcontainerForTests(true);
+    try {
+      const request = new Request("http://localhost/wc");
+      const seen = await runWithRequest(request, async () => {
+        await Promise.resolve();
+        return useRequest().url;
+      });
+      expect(seen).toBe("http://localhost/wc");
+    } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("WebContainer withRequestStore reinstalls a captured store after the entry settles", async () => {
+    __setInWebcontainerForTests(true);
+    try {
+      const request = new Request("http://localhost/capture");
+      const captured = await runWithRequest(request, async () => {
+        await Promise.resolve();
+        return getRequestStore();
+      });
+      expect(() => getRequestStore()).toThrow("request context is unavailable");
+      expect(withRequestStore(captured, () => useRequest())).toBe(request);
+      expect(() => getRequestStore()).toThrow("request context is unavailable");
+    } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("WebContainer withRequestStore restores sync store after sync throw", () => {
+    __setInWebcontainerForTests(true);
+    try {
+      const request = new Request("http://localhost/throw");
+      expect(() =>
+        withRequestStore({ req: request }, () => {
+          throw new Error("boom");
+        }),
+      ).toThrow("boom");
+      expect(() => getRequestStore()).toThrow("request context is unavailable");
+    } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("WebContainer withRequestEntry serializes overlapping entries", async () => {
+    __setInWebcontainerForTests(true);
+    try {
+      const order: string[] = [];
+      const a = withRequestEntry(async () => {
+        order.push("a-start");
+        await Bun.sleep(20);
+        order.push("a-end");
+      });
+      const b = withRequestEntry(async () => {
+        order.push("b-start");
+        order.push("b-end");
+      });
+      await Promise.all([a, b]);
+      expect(order).toEqual(["a-start", "a-end", "b-start", "b-end"]);
+    } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("WebContainer unary action resolves useRequest after awaits", async () => {
+    __setInWebcontainerForTests(true);
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-wc-"));
+    fs.writeFileSync(
+      path.join(root, "who.server.ts"),
+      `import { action, useRequest } from ${JSON.stringify(OXIDE_RUNTIME)};
+export const who = action(async () => {
+  await Promise.resolve();
+  return useRequest().url;
+})
+`,
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const res = await rpcCall(fetch, "who.who");
+      expect(await readRpcFrame(res)).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        result: "http://localhost/__oxide/action",
+      });
+    } finally {
+      __setInWebcontainerForTests(null);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("useEnv() and useFetchCtx() read RPC context extras", async () => {
