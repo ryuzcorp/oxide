@@ -1,6 +1,6 @@
 {
   "name": "oxidejs",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
   "keywords": [
     "cloudflare",
