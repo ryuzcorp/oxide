@@ -193,17 +193,12 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     `import { Effect } from "effect";`,
     `import { Schema } from "effect";`,
     `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
-    `import { AsyncLocalStorage } from "node:async_hooks";`,
+    `import { getRequestStore, withRequestStore } from "oxidejs";`,
     `import { asyncGenToStreamInContext } from "oxidejs/rpc";`,
-    `const __alsKey = Symbol.for("oxidejs.requestContext");`,
-    `const __als = globalThis[__alsKey] ??= new AsyncLocalStorage();`,
-    `const __store = () => {`,
-    `  const ctx = __als.getStore();`,
-    `  if (!ctx) throw new Error("oxidejs: request context is unavailable");`,
-    `  return ctx;`,
-    `};`,
-    `const __run = (fn) =>`,
-    `  Effect.promise(() => __als.run(__store(), fn)).pipe(`,
+    // Capture the store before Effect.promise: WebContainer ALS does not survive awaits.
+    `const __run = (fn) => {`,
+    `  const __s = getRequestStore();`,
+    `  return Effect.promise(() => withRequestStore(__s, fn)).pipe(`,
     `    Effect.map((value) => {`,
     `      if (value instanceof Response) {`,
     `        console.error("oxidejs: action() returned a Response; actions must return serializable data. Return a Response from src/server.ts for raw HTTP responses.");`,
@@ -212,7 +207,8 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
     `      return value === undefined ? null : value;`,
     `    }),`,
     `  );`,
-    `const __withStore = (store, fn) => __als.run(store, fn);`,
+    `};`,
+    `const __withStore = (store, fn) => withRequestStore(store, fn);`,
   ];
   const rpcNames: string[] = [];
   const aliases = modules.map((mod, i) => {
@@ -238,7 +234,7 @@ export function generateActionsModule(modules: ServerModule[], opts?: { bust?: b
       const stream = mod.streams?.includes(name) ?? false;
       lines.push(
         stream
-          ? `  ${JSON.stringify(tag)}: ({ args }) => { const __s = __store(); return asyncGenToStreamInContext(() => ${alias}[${JSON.stringify(name)}].apply(null, args), (fn) => __withStore(__s, fn)); },`
+          ? `  ${JSON.stringify(tag)}: ({ args }) => { const __s = getRequestStore(); return asyncGenToStreamInContext(() => ${alias}[${JSON.stringify(name)}].apply(null, args), (fn) => __withStore(__s, fn)); },`
           : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, args)),`,
       );
     }

@@ -5,6 +5,18 @@ import { generateActionsModule, scanServerFiles } from "../actions";
 import { createWsHooks } from "./ws";
 
 const RPC_MODULE = path.join(import.meta.dir, "index.ts");
+const OXIDE_RUNTIME = path.join(import.meta.dir, "../context.ts");
+
+function writeGeneratedActions(root: string) {
+  const out = path.join(root, "actions.mjs");
+  fs.writeFileSync(
+    out,
+    generateActionsModule(scanServerFiles(root))
+      .replaceAll("oxidejs/rpc", RPC_MODULE)
+      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`),
+  );
+  return out;
+}
 
 test("WebSocket answers effect keepalive pings without touching the action handler", async () => {
   const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-ping-"));
@@ -17,11 +29,7 @@ export const boom = action(() => {
 })
 `,
   );
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root)).replaceAll("oxidejs/rpc", RPC_MODULE),
-  );
+  const out = writeGeneratedActions(root);
 
   try {
     const mod = await import(out);
@@ -61,11 +69,7 @@ export const ticks = action(async function* () {
 })
 `,
   );
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root)).replaceAll("oxidejs/rpc", RPC_MODULE),
-  );
+  const out = writeGeneratedActions(root);
 
   try {
     const mod = await import(out);

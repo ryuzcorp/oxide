@@ -7,8 +7,9 @@ export function asyncGenToStream<T>(gen: AsyncGenerator<T, unknown, unknown>) {
 }
 
 /**
- * Re-enter `run` for every generator pull so AsyncLocalStorage request context
- * stays available across yields (Effect may drain the stream after the outer ALS scope ends).
+ * Re-enter `run` for every generator pull so request context stays available
+ * across yields (Effect may drain the stream after the outer ALS scope ends;
+ * WebContainer also loses ALS across awaits, so `run` must reinstall the store).
  */
 export function bindAsyncGenContext<T>(
   gen: AsyncGenerator<T, unknown, unknown>,
