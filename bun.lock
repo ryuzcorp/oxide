@@ -28,7 +28,7 @@
     },
     "packages/oxidejs": {
       "name": "oxidejs",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "dependencies": {
         "effect": "~4.0.0-rc.112",
         "linkedom": "^0.18.13",
@@ -48,14 +48,14 @@
     "templates/simple": {
       "name": "@oxidejs/template-simple",
       "dependencies": {
-        "@ilha/router": "^0.11.4",
+        "@ilha/router": "^0.11.5",
         "effect": "^4.0.0-rc.112",
         "ilha": "^0.14.4",
       },
       "devDependencies": {
         "@tailwindcss/vite": "^4.3.3",
         "daisyui": "^5.7.22",
-        "oxidejs": "^0.3.0",
+        "oxidejs": "^0.3.1",
         "tailwindcss": "^4.3.3",
         "typescript": "^6",
         "vite": "^8.2.1",
@@ -64,7 +64,7 @@
     "templates/tasks": {
       "name": "@oxidejs/template-tasks",
       "dependencies": {
-        "@ilha/router": "^0.11.4",
+        "@ilha/router": "^0.11.5",
         "effect": "^4.0.0-rc.112",
         "ilha": "^0.14.4",
         "unstorage": "^2.0.0-alpha.9",
@@ -73,7 +73,7 @@
         "@cloudflare/workers-types": "^5.20260818.1",
         "@tailwindcss/vite": "^4.3.3",
         "daisyui": "^5.7.22",
-        "oxidejs": "^0.3.0",
+        "oxidejs": "^0.3.1",
         "tailwindcss": "^4.3.3",
         "typescript": "^6",
         "vite": "^8.2.1",
@@ -293,7 +293,7 @@
 
     "@ilha/astro": ["@ilha/astro@0.3.4", "", { "peerDependencies": { "astro": "^7.2.9", "ilha": "^0.14.4" } }, "sha512-SWCVPZeTjJqBGGGtPFDmIR6I7ltgFYYaC9kAd3Sp0+6woeMaNr9Lpm/DW9fEZrlxZ5deLoaAgPSB8GqfWySA0g=="],
 
-    "@ilha/router": ["@ilha/router@0.11.4", "", { "dependencies": { "effect": "4.0.0-rc.112", "unplugin": "3.3.0" }, "peerDependencies": { "ilha": ">=0.14.4", "oxidejs": ">=0.3.0" }, "optionalPeers": ["oxidejs"] }, "sha512-k37w4v6pAv5iGlP4ClkTTqrt1xX6SSMNWTJf4v1FmRWRaBR2jv5qcwAWYmX+uy0y7mgtGI+SNXz0fqNAAhSJng=="],
+    "@ilha/router": ["@ilha/router@0.11.5", "", { "dependencies": { "effect": "4.0.0-rc.112", "unplugin": "3.3.0" }, "peerDependencies": { "ilha": ">=0.14.4", "oxidejs": ">=0.3.1" }, "optionalPeers": ["oxidejs"] }, "sha512-mSBuh5bfjrX8qBvH7qWagavsLOq91MtrkATleSpO8hnnOL16ZPak9ZqKYETdQgLQXVzc5TP5xc70tLRqgqbHYQ=="],
 
     "@img/colour": ["@img/colour@1.1.0", "", {}, "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ=="],
 
