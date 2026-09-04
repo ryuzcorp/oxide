@@ -37,6 +37,27 @@ function parseMessage(message: WsMessage, maxBytes: number) {
   }
 }
 
+/**
+ * Effect's socket client sends `@effect/rpc/Ping` keepalives (no id) and hangs
+ * up unless the server answers `@effect/rpc/Pong`. Handle control messages here
+ * so they never reach the action handler.
+ */
+function controlReply(raw: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      (parsed as { method?: unknown }).method === "@effect/rpc/Ping"
+    ) {
+      return JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" });
+    }
+  } catch {
+    // Not JSON — let the action handler produce the parse error.
+  }
+  return undefined;
+}
+
 /** Forward each complete NDJSON line as its own WS message (keeps streams incremental). */
 async function sendNdjsonFrames(peer: WsPeer, response: Response, signal: AbortSignal) {
   if (signal.aborted) {
@@ -96,7 +117,13 @@ export function createWsHooks(
 
   return {
     upgrade(req: Request) {
-      if (!matchesActionPath(new URL(req.url).pathname, path)) {
+      let pathname: string;
+      try {
+        pathname = new URL(req.url).pathname;
+      } catch {
+        return new Response("Bad Request", { status: 400 });
+      }
+      if (!matchesActionPath(pathname, path)) {
         return new Response("Not Found", { status: 404 });
       }
       if (sameOrigin && !isSameOrigin(req)) {
@@ -117,6 +144,12 @@ export function createWsHooks(
             id: null,
           }),
         );
+        return;
+      }
+
+      const pingReply = controlReply(parsed.value);
+      if (pingReply !== undefined) {
+        peer.send(pingReply);
         return;
       }
 

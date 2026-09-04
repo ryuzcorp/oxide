@@ -2,7 +2,7 @@ import { atom } from "ilha";
 import { Greeting } from "$lib/greet.server";
 import { head } from "@ilha/router";
 
-export default function Home() {
+export default async function Home() {
   head({ title: "Home" });
   const name = atom("");
 
