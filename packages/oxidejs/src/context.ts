@@ -68,21 +68,24 @@ function store(): ActionContext {
 /**
  * Run `fn` with `store` on ALS and the sync fallback. On WebContainer the sync
  * slot is restored only after an async `fn` settles (streams capture the store
- * at invoke time and re-enter via this helper on each pull).
+ * at invoke time and re-enter via this helper on each pull). Sync returns and
+ * throws restore immediately so a completed request is not left visible.
  */
 export function withRequestStore<T>(ctx: ActionContext, fn: () => T): T {
   const previous = syncStore;
   syncStore = ctx;
+  let deferRestore = false;
   try {
     const result = als().run(ctx, fn);
     if (inWebcontainer() && isPromiseLike(result)) {
+      deferRestore = true;
       return Promise.resolve(result).finally(() => {
         if (syncStore === ctx) syncStore = previous;
       }) as T;
     }
     return result;
   } finally {
-    if (!inWebcontainer()) {
+    if (!deferRestore) {
       syncStore = previous;
     }
   }

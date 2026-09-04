@@ -927,6 +927,22 @@ export const who = action(async () => useRequest().headers.get("x-user"))
       });
       expect(() => getRequestStore()).toThrow("request context is unavailable");
       expect(withRequestStore(captured, () => useRequest())).toBe(request);
+      expect(() => getRequestStore()).toThrow("request context is unavailable");
+    } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("WebContainer withRequestStore restores sync store after sync throw", () => {
+    __setInWebcontainerForTests(true);
+    try {
+      const request = new Request("http://localhost/throw");
+      expect(() =>
+        withRequestStore({ req: request }, () => {
+          throw new Error("boom");
+        }),
+      ).toThrow("boom");
+      expect(() => getRequestStore()).toThrow("request context is unavailable");
     } finally {
       __setInWebcontainerForTests(null);
     }
