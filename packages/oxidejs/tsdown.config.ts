@@ -1,19 +1,17 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
+  dts: true,
   entry: {
     index: "src/index.ts",
     plugin: "src/plugin.ts",
-    vite: "src/vite.ts",
-    rsbuild: "src/rsbuild.ts",
-    "rpc/client": "src/rpc/client.ts",
     rpc: "src/rpc/index.ts",
+    "rpc/client": "src/rpc/client.ts",
+    rsbuild: "src/rsbuild.ts",
+    vite: "src/vite.ts",
     "worker-dom": "src/worker-dom.ts",
     "worker-dom/install": "src/worker-dom/install.ts",
   },
-  dts: true,
-  format: "esm",
-  platform: "node",
   external: [
     "unplugin",
     "effect",
@@ -22,4 +20,6 @@ export default defineConfig({
     "effect/unstable/socket",
     "crossws/adapters/node",
   ],
+  format: "esm",
+  platform: "node",
 });

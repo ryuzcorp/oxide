@@ -14,7 +14,10 @@ export {
 export type {
   ActionContext,
   ExecutionContext,
+  FetchHandler,
+  FetchResult,
   ServerActionHandle,
+  ServerEntry,
   StreamActionHandle,
 } from "./context";
 export type {

@@ -1,8 +1,8 @@
-import { atom } from "ilha";
 import { Greeting } from "$lib/greet.server";
 import { head } from "@ilha/router";
+import { atom } from "ilha";
 
-export default async function Home() {
+export default function Home() {
   head({ title: "Home" });
   const name = atom("");
 
@@ -16,7 +16,12 @@ export default async function Home() {
             class="input input-bordered"
             name="name"
             value={name()}
-            oninput={(event: Event) => name.set((event.currentTarget as HTMLInputElement).value)}
+            oninput={(event: Event) => {
+              const target = event.currentTarget;
+              if (target instanceof HTMLInputElement) {
+                name.set(target.value);
+              }
+            }}
           />
         </label>
         <Greeting name={name() || "Ilha"} />

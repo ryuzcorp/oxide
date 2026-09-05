@@ -15,14 +15,19 @@
     "lint": "oxlint",
     "fmt": "oxfmt --write .",
     "docs:dev": "bun run --filter website dev",
-    "docs:build": "bun run --filter website build"
+    "docs:build": "bun run --filter website build",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@tsconfig/strictest": "^2.0.8",
     "@types/bun": "latest",
-    "oxfmt": "^0.63.0",
-    "oxlint": "^1.78.0",
+    "husky": "^9.1.7",
+    "oxfmt": "^0.66.0",
+    "oxlint": "^1.81.0",
     "tsdown": "^0.22.14",
-    "typescript": "^6"
+    "typescript": "^6",
+    "ultracite": "7.10.8"
   }
 }

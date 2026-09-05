@@ -2,10 +2,14 @@ import { setFrameAuth } from "@ilha/router/ssr";
 
 setFrameAuth({ defaultAction: "open" });
 
-export type Task = { id: string; text: string; completed: boolean };
+export interface Task {
+  completed: boolean;
+  id: string;
+  text: string;
+}
 
 export default {
   fetch() {
-    return undefined;
+    // Fall through to static assets / index.html.
   },
 };

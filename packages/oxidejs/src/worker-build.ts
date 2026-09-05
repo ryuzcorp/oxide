@@ -1,24 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+
 import { VIRTUAL_WORKER_ID } from "./actions";
 import type { ResolvedOptions } from "./types";
 
-type ViteAlias = { find: string | RegExp; replacement: string };
-
-/** Dev aliases so Vite transforms RPC helpers with the app's single effect copy. */
-function oxideRpcAliases(): ViteAlias[] {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const client = path.join(root, "src/rpc/client.ts");
-  if (!fs.existsSync(client)) return [];
-  return [
-    { find: /^oxidejs\/rpc\/client$/, replacement: client },
-    { find: /^oxidejs\/rpc$/, replacement: path.join(root, "src/rpc/index.ts") },
-  ];
+interface ViteAlias {
+  find: string | RegExp;
+  replacement: string;
 }
 
-function mergeAliases(config: ViteUserConfig, extra: ViteAlias[]) {
-  if (extra.length === 0) return;
+/** Dev aliases so Vite transforms RPC helpers with the app's single effect copy. */
+const oxideRpcAliases = function oxideRpcAliases(): ViteAlias[] {
+  const root = path.resolve(import.meta.dirname, "..");
+  const client = path.join(root, "src/rpc/client.ts");
+  if (!fs.existsSync(client)) {
+    return [];
+  }
+  return [
+    { find: /^oxidejs\/rpc\/client$/u, replacement: client },
+    {
+      find: /^oxidejs\/rpc$/u,
+      replacement: path.join(root, "src/rpc/index.ts"),
+    },
+  ];
+};
+
+const mergeAliases = function mergeAliases(
+  config: ViteUserConfig,
+  extra: ViteAlias[]
+) {
+  if (extra.length === 0) {
+    return;
+  }
   config.resolve ??= {};
   const current = config.resolve.alias;
   if (!current) {
@@ -30,26 +43,34 @@ function mergeAliases(config: ViteUserConfig, extra: ViteAlias[]) {
     return;
   }
   config.resolve.alias = [
-    ...Object.entries(current).map(([find, replacement]) => ({ find, replacement })),
+    ...Object.entries(current).map(([find, replacement]) => ({
+      find,
+      replacement,
+    })),
     ...extra,
   ];
-}
+};
 
 /** Minimal Vite config surface used by this plugin. Avoids a hard vite runtime dep. */
-export type ViteInput = string | string[] | Record<string, string>;
+export type ViteInput = string | string[] | { [key: string]: string };
+
+export interface ViteBuilder {
+  build: (environment: ViteEnvironmentConfig) => Promise<void>;
+  environments: { [key: string]: ViteEnvironmentConfig | undefined };
+}
 
 export interface ViteUserConfig {
   root?: string;
   appType?: string;
-  resolve?: { dedupe?: string[]; alias?: ViteAlias[] | Record<string, string> };
+  resolve?: {
+    dedupe?: string[];
+    alias?: ViteAlias[] | { [key: string]: string };
+  };
   optimizeDeps?: { include?: string[] };
   builder?: {
-    buildApp?: (builder: {
-      environments: Record<string, unknown>;
-      build: (environment: unknown) => Promise<unknown>;
-    }) => Promise<void>;
+    buildApp?: (builder: ViteBuilder) => Promise<void>;
   };
-  environments?: Record<string, ViteEnvironmentConfig | undefined>;
+  environments?: { [key: string]: ViteEnvironmentConfig | undefined };
   build?: {
     outDir?: string;
     manifest?: boolean;
@@ -86,7 +107,11 @@ export interface ViteEnvironmentConfig {
     };
   };
   resolve?: { conditions?: string[]; noExternal?: boolean | string[] };
-  ssr?: { target?: string; noExternal?: boolean | string[]; external?: (string | RegExp)[] };
+  ssr?: {
+    target?: string;
+    noExternal?: boolean | string[];
+    external?: (string | RegExp)[];
+  };
 }
 
 // Pre-bundle so Vite does not discover these mid-load and reload the page
@@ -101,9 +126,9 @@ const OPTIMIZE_DEPS = [
   "oxidejs/rpc/client",
 ] as const;
 
-export function applyViteEnvironments(
+export const applyViteEnvironments = function applyViteEnvironments(
   config: ViteUserConfig,
-  opts: ResolvedOptions,
+  opts: ResolvedOptions
 ): ViteUserConfig {
   // Opt `vite build` into building every environment (same as `vite build --app`).
   config.builder ??= {};
@@ -118,7 +143,9 @@ export function applyViteEnvironments(
 
   config.optimizeDeps ??= {};
   const optimizeInclude = new Set([
-    ...(Array.isArray(config.optimizeDeps.include) ? config.optimizeDeps.include : []),
+    ...(Array.isArray(config.optimizeDeps.include)
+      ? config.optimizeDeps.include
+      : []),
     ...OPTIMIZE_DEPS,
   ]);
   config.optimizeDeps.include = [...optimizeInclude];
@@ -128,36 +155,38 @@ export function applyViteEnvironments(
 
   config.environments ??= {};
 
-  config.environments["ssr"] = {
-    consumer: "server",
-    build: {
-      outDir: opts.outDir,
-      emptyOutDir: true,
-      ssr: true,
-      rolldownOptions: {
-        input: VIRTUAL_WORKER_ID,
-        external: celld ? [/^cloudflare:/] : [],
-        output: {
-          format: "es",
-          entryFileNames: "server.js",
-        },
-      },
-      rollupOptions: {
-        input: VIRTUAL_WORKER_ID,
-        external: celld ? [/^cloudflare:/] : [],
-        output: {
-          format: "es",
-          entryFileNames: "server.js",
-        },
+  const ssrBuild = {
+    emptyOutDir: true,
+    outDir: opts.outDir,
+    rolldownOptions: {
+      external: celld ? [/^cloudflare:/u] : [],
+      input: VIRTUAL_WORKER_ID,
+      output: {
+        entryFileNames: "server.js",
+        format: "es",
       },
     },
+    rollupOptions: {
+      external: celld ? [/^cloudflare:/u] : [],
+      input: VIRTUAL_WORKER_ID,
+      output: {
+        entryFileNames: "server.js",
+        format: "es",
+      },
+    },
+    ssr: true,
+  };
+  const ssrEnvironment: ViteEnvironmentConfig = {
+    build: ssrBuild,
+    consumer: "server",
     resolve: celld
       ? { conditions: ["worker"], noExternal: true }
       : { noExternal: ["effect", "oxidejs"] },
     ssr: celld
-      ? { target: "webworker", noExternal: true, external: [/^cloudflare:/] }
+      ? { external: [/^cloudflare:/u], noExternal: true, target: "webworker" }
       : { noExternal: ["effect", "oxidejs"] },
   };
+  config.environments["ssr"] = ssrEnvironment;
 
   config.build ??= {};
   if (opts.hasClient) {
@@ -165,15 +194,15 @@ export function applyViteEnvironments(
     const existingClient = config.environments["client"];
     config.environments["client"] = {
       ...existingClient,
-      consumer: "client",
       build: {
         ...existingClient?.build,
-        outDir: clientOutDir,
         emptyOutDir: true,
         manifest: true,
+        outDir: clientOutDir,
       },
+      consumer: "client",
     };
-    config.environments["ssr"]!.build!.emptyOutDir = false;
+    ssrBuild.emptyOutDir = false;
     config.build.outDir ??= clientOutDir;
     config.build.manifest ??= true;
   } else {
@@ -183,20 +212,24 @@ export function applyViteEnvironments(
     config.build.emptyOutDir ??= true;
     config.builder.buildApp ??= async (builder) => {
       const server = builder.environments["ssr"];
-      if (server) await builder.build(server);
+      if (server) {
+        await builder.build(server);
+      }
     };
   }
   return config;
-}
+};
 
 /** Minimal Rsbuild config surface. Avoids a hard @rsbuild/core runtime dep. */
 export interface RsbuildUserConfig {
   root?: string;
-  environments?: Record<string, RsbuildEnvironmentConfig | undefined>;
+  environments?: { [key: string]: RsbuildEnvironmentConfig | undefined };
 }
 
 export interface RsbuildEnvironmentConfig {
-  source?: { entry?: Record<string, string | { import: string; html?: boolean }> };
+  source?: {
+    entry?: { [key: string]: string | { import: string; html?: boolean } };
+  };
   output?: {
     target?: string;
     filename?: string | { js?: string };
@@ -206,21 +239,22 @@ export interface RsbuildEnvironmentConfig {
   resolve?: { conditionNames?: string[] };
 }
 
-export function applyRsbuildEnvironments(
+export const applyRsbuildEnvironments = function applyRsbuildEnvironments(
   config: RsbuildUserConfig,
-  opts: ResolvedOptions,
+  opts: ResolvedOptions
 ): RsbuildUserConfig {
   config.environments ??= {};
   if (opts.hasClient) {
     const clientOutDir = path.join(opts.outDir, opts.clientDir);
-    const existingClient = config.environments["web"] ?? config.environments["client"];
+    const existingClient =
+      config.environments["web"] ?? config.environments["client"];
     config.environments["web"] = {
       ...existingClient,
       output: {
         ...existingClient?.output,
-        target: "web",
         distPath: { ...existingClient?.output?.distPath, root: clientOutDir },
         manifest: true,
+        target: "web",
       },
     };
   } else {
@@ -229,17 +263,16 @@ export function applyRsbuildEnvironments(
   }
 
   const server: RsbuildEnvironmentConfig = {
-    source: { entry: { server: { import: VIRTUAL_WORKER_ID, html: false } } },
     output: {
-      target: opts.preset === "celld" ? "web-worker" : "node",
-      filename: { js: "server.js" },
       distPath: { root: opts.outDir },
+      filename: { js: "server.js" },
+      target: opts.preset === "celld" ? "web-worker" : "node",
     },
+    source: { entry: { server: { html: false, import: VIRTUAL_WORKER_ID } } },
   };
-  if (opts.preset === "celld") server.resolve = { conditionNames: ["worker", "..."] };
+  if (opts.preset === "celld") {
+    server.resolve = { conditionNames: ["worker", "..."] };
+  }
   config.environments["server"] = server;
   return config;
-}
-
-/** @deprecated Use applyViteEnvironments. Kept for existing call sites. */
-export const applyViteWorkerEnvironment = applyViteEnvironments;
+};

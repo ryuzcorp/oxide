@@ -7,27 +7,27 @@ description: Choose the build target, output folders, and server-action transpor
 
 Pass options to `oxide()` in your Vite or Rsbuild config. You can start with `oxide()` and add options only when your app needs them.
 
-| Option                                      | Default                  | What it controls                                            |
-| ------------------------------------------- | ------------------------ | ----------------------------------------------------------- |
-| [`preset`](#preset)                         | `"fetch"`                | Node-style fetch server or celld worker output              |
-| [`workerEntry`](#workerentry)               | `src/server.ts`          | Server entry file                                           |
-| [`outDir`](#outdir)                         | `dist`                   | Build output folder                                         |
-| [`clientDir`](#clientdir)                   | `client`                 | Client folder inside `outDir`                               |
-| [`wrangler.name`](#wrangler)                | required if `emitConfig` | Worker name                                                 |
-| [`wrangler.compatibility_date`](#wrangler)  | required if `emitConfig` | Worker compatibility date                                   |
-| [`wrangler.compatibility_flags`](#wrangler) | -                        | Optional worker flags                                       |
-| [`wrangler.durable_objects`](#wrangler)     | -                        | Optional Durable Object config                              |
-| [`wrangler.migrations`](#wrangler)          | -                        | Optional migrations                                         |
-| [`wrangler.services`](#wrangler)            | -                        | Optional service bindings                                   |
-| [`wrangler.vars`](#wrangler)                | -                        | Optional variables                                          |
-| [`emitConfig`](#emitconfig)                 | `true` on `celld`        | Whether to write `wrangler.jsonc`                           |
-| [`actions`](#actions)                       | `"http"`                 | Action transport, endpoint path, and same-origin protection |
-| [`actionHeaders`](#actionheaders)           | -                        | Public static headers added by the browser action client    |
-| [`middleware`](#middleware)                 | `[]`                     | Production request middleware, in order                     |
-| [`imports`](#imports)                       | `[]`                     | Side-effect modules loaded at server startup                |
-| [`bodyLimit`](#bodylimit)                   | `1048576`                | Max Node request body size (413 when exceeded)              |
-| [`notFound`](#notfound)                     | -                        | Custom HTML 404 body on the fetch preset                    |
-| [`env`](#env)                               | -                        | Node preset value passed to `fetch(request, env, ctx)`      |
+| Option | Default | What it controls |
+| --- | --- | --- |
+| [`preset`](#preset) | `"fetch"` | Node-style fetch server or celld worker output |
+| [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file |
+| [`outDir`](#outdir) | `dist` | Build output folder |
+| [`clientDir`](#clientdir) | `client` | Client folder inside `outDir` |
+| [`wrangler.name`](#wrangler) | required if `emitConfig` | Worker name |
+| [`wrangler.compatibility_date`](#wrangler) | required if `emitConfig` | Worker compatibility date |
+| [`wrangler.compatibility_flags`](#wrangler) | - | Optional worker flags |
+| [`wrangler.durable_objects`](#wrangler) | - | Optional Durable Object config |
+| [`wrangler.migrations`](#wrangler) | - | Optional migrations |
+| [`wrangler.services`](#wrangler) | - | Optional service bindings |
+| [`wrangler.vars`](#wrangler) | - | Optional variables |
+| [`emitConfig`](#emitconfig) | `true` on `celld` | Whether to write `wrangler.jsonc` |
+| [`actions`](#actions) | `"http"` | Action transport, endpoint path, and same-origin protection |
+| [`actionHeaders`](#actionheaders) | - | Public static headers added by the browser action client |
+| [`middleware`](#middleware) | `[]` | Production request middleware, in order |
+| [`imports`](#imports) | `[]` | Side-effect modules loaded at server startup |
+| [`bodyLimit`](#bodylimit) | `1048576` | Max Node request body size (413 when exceeded) |
+| [`notFound`](#notfound) | - | Custom HTML 404 body on the fetch preset |
+| [`env`](#env) | - | Node preset value passed to `fetch(request, env, ctx)` |
 
 `main` is always `./server.js`. Oxide adds `assets` only when the project has an `index.html`. Unknown Wrangler keys fail the build instead of being silently ignored.
 
@@ -124,7 +124,7 @@ List modules that run before server actions, your server entry, and static files
 // src/auth.ts
 export default function auth(
   request: Request,
-  context: { env: unknown; ctx: unknown },
+  context: { env: unknown; ctx: unknown }
 ) {
   if (!request.headers.has("authorization")) {
     return new Response("Unauthorized", { status: 401 });

@@ -9,8 +9,8 @@ export default defineConfig({
       middleware: ["@ilha/router/ssr"],
       preset: "celld",
       wrangler: {
-        name: "celld-tasks",
         compatibility_date: "2026-01-01",
+        name: "celld-tasks",
       },
     }),
     pages(),

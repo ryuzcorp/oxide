@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { generateWorkerWrapper } from "./actions";
 
-const BASE = { preset: "fetch" as const, clientDir: "client", hasClient: true, hasPublic: true };
+const BASE = {
+  clientDir: "client",
+  hasClient: true,
+  hasPublic: true,
+  preset: "fetch" as const,
+};
 
 describe("generateWorkerWrapper", () => {
   test("middleware handlers run before the action gate", () => {
@@ -21,22 +26,32 @@ describe("generateWorkerWrapper", () => {
   });
 
   test("imports option emits side-effect imports at the top", () => {
-    const out = generateWorkerWrapper("/x/server.ts", { ...BASE, imports: ["ilha:pages/server"] });
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      imports: ["ilha:pages/server"],
+    });
     const firstImport = out.indexOf("import");
-    expect(out.slice(firstImport, firstImport + 60)).toContain('"ilha:pages/server"');
+    expect(out.slice(firstImport, firstImport + 60)).toContain(
+      '"ilha:pages/server"'
+    );
   });
 
   test("middleware object entries emit their side-effect imports", () => {
     const out = generateWorkerWrapper("/x/server.ts", {
       ...BASE,
-      middleware: [{ module: "@ilha/router/ssr", imports: ["ilha:pages/server"] }],
+      middleware: [
+        { imports: ["ilha:pages/server"], module: "@ilha/router/ssr" },
+      ],
     });
     expect(out).toContain('"ilha:pages/server"');
     expect(out).toContain('"@ilha/router/ssr"');
   });
 
   test("bodyLimit interpolates into the request cap", () => {
-    const out = generateWorkerWrapper("/x/server.ts", { ...BASE, bodyLimit: 4096 });
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      bodyLimit: 4096,
+    });
     expect(out).toContain("if (size > 4096)");
   });
 
@@ -52,13 +67,19 @@ describe("generateWorkerWrapper", () => {
   });
 
   test("notFound option replaces the plain 404 body", () => {
-    const out = generateWorkerWrapper("/x/server.ts", { ...BASE, notFound: "<h1>custom</h1>" });
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      notFound: "<h1>custom</h1>",
+    });
     expect(out).toContain("<h1>custom</h1>");
     expect(out).not.toContain('"Not Found"');
   });
 
   test("env option passes through to user fetch", () => {
-    const out = generateWorkerWrapper("/x/server.ts", { ...BASE, env: { FOO: "1" } });
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      env: { FOO: "1" },
+    });
     expect(out).toContain('"FOO":"1"');
   });
 

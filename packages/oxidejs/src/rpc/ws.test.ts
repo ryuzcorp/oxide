@@ -1,22 +1,10 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { generateActionsModule, scanServerFiles } from "../actions";
+
+import type { ActionContext } from "../context";
+import { waitUntil, writeGeneratedActions } from "./test-harness";
 import { createWsHooks } from "./ws";
-
-const RPC_MODULE = path.join(import.meta.dir, "index.ts");
-const OXIDE_RUNTIME = path.join(import.meta.dir, "../context.ts");
-
-function writeGeneratedActions(root: string) {
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root))
-      .replaceAll("oxidejs/rpc", RPC_MODULE)
-      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`),
-  );
-  return out;
-}
 
 test("WebSocket answers effect keepalive pings without touching the action handler", async () => {
   const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-ping-"));
@@ -27,7 +15,7 @@ test("WebSocket answers effect keepalive pings without touching the action handl
 export const boom = action(() => {
   throw new Error("ping must not reach the action handler");
 })
-`,
+`
   );
   const out = writeGeneratedActions(root);
 
@@ -39,16 +27,21 @@ export const boom = action(() => {
     });
     const sent: string[] = [];
     const peer = {
-      request: new Request("http://localhost/__oxide/action"),
       context: {},
-      send: (data: unknown) => sent.push(String(data)),
+      request: new Request("http://localhost/__oxide/action"),
+      send: (data: string) => {
+        sent.push(data);
+      },
     };
     await hooks.message(peer, {
-      text: () => JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
+      text: () =>
+        JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
     });
-    expect(sent).toEqual([JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" })]);
+    expect(sent).toEqual([
+      JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" }),
+    ]);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { force: true, recursive: true });
   }
 });
 
@@ -63,71 +56,74 @@ import fs from "node:fs";
 export const ticks = action(async function* () {
   yield 0;
   while (!fs.existsSync(${JSON.stringify(gateFile)})) {
-    await new Promise((r) => setTimeout(r, 5));
+    await Bun.sleep(5);
   }
   yield 1;
 })
-`,
+`
   );
   const out = writeGeneratedActions(root);
 
   try {
     const mod = await import(out);
     const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+      createContext: () =>
+        // SAFETY: test peer context only needs req + a marker field for this assertion.
+        ({
+          marker: "from-peer",
+          req: new Request("http://localhost/__oxide/action"),
+        }) as ActionContext,
       path: "/__oxide/action",
       sameOrigin: false,
-      createContext: () =>
-        ({
-          req: new Request("http://localhost/__oxide/action"),
-          marker: "from-peer",
-        }) as import("../context").ActionContext,
     });
     const sent: string[] = [];
     const peer = {
-      request: new Request("http://localhost/__oxide/action", {
-        headers: { origin: "http://localhost", host: "localhost" },
-      }),
       context: {},
-      send: (data: unknown) => {
-        sent.push(String(data));
+      request: new Request("http://localhost/__oxide/action", {
+        headers: { host: "localhost", origin: "http://localhost" },
+      }),
+      send: (data: string) => {
+        sent.push(data);
       },
     };
 
     const pending = hooks.message(peer, {
       text: () =>
         JSON.stringify({
-          jsonrpc: "2.0",
           id: 1,
+          jsonrpc: "2.0",
           method: "ticks.ticks",
           params: { args: [] },
         }),
     });
 
-    const started = Date.now();
-    while (sent.length === 0 && Date.now() - started < 5000) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
-    if (sent.length === 0) {
+    await waitUntil(() => sent.length > 0, 5000);
+    const first = sent.at(0);
+    if (first === undefined) {
       throw new Error("timed out waiting for first WebSocket NDJSON frame");
     }
     expect(sent.length).toBe(1);
-    expect(JSON.parse(sent[0]!.trim())).toEqual({
-      jsonrpc: "2.0",
+    expect(JSON.parse(first.trim())).toEqual({
       chunk: true,
       id: 1,
+      jsonrpc: "2.0",
       result: [0],
     });
 
     fs.writeFileSync(gateFile, "go");
     await pending;
     expect(sent.length).toBeGreaterThanOrEqual(2);
-    expect(JSON.parse(sent[1]!.trim())).toEqual({
-      jsonrpc: "2.0",
+    const second = sent.at(1);
+    if (second === undefined) {
+      throw new Error("missing second WebSocket NDJSON frame");
+    }
+    expect(JSON.parse(second.trim())).toEqual({
       chunk: true,
       id: 1,
+      jsonrpc: "2.0",
       result: [1],
     });
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { force: true, recursive: true });
   }
 });

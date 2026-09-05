@@ -6,7 +6,8 @@
     "paths": {
       "$lib/*": ["./src/lib/*"]
     },
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "strictNullChecks": true
   },
   "include": ["src", "vite.config.ts", ".ilha/pages.d.ts"]
 }

@@ -76,13 +76,14 @@ Add scripts to `package.json`:
 ## Write a server entry
 
 ```ts twoslash src/server.ts
-export default {
-  fetch(request: Request) {
-    if (new URL(request.url).pathname === "/api/ok") {
-      return new Response("ok");
-    }
-  },
-};
+import type { FetchHandler } from "oxidejs";
+
+export const fetch = ((request) => {
+  if (new URL(request.url).pathname === "/api/ok") {
+    return new Response("ok");
+  }
+  return;
+}) satisfies FetchHandler;
 ```
 
 Return `undefined` to fall through to static files. Missing files fall back to `index.html` only for navigations.
