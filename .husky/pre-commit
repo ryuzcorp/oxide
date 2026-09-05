@@ -7,9 +7,18 @@ if [ -z "$STAGED_FILES" ]; then
   exit 0
 fi
 
-# Run formatter, capturing the exit code so we can still re-stage and report
+# Park unstaged hunks so formatting cannot stage them by accident.
+STASHED=0
+if ! git diff --quiet; then
+  if git stash push --keep-index --quiet -m "husky-pre-commit-unstaged"; then
+    STASHED=1
+  fi
+fi
+
+# Format only the staged paths, capturing the exit code so we can still re-stage and report
 FORMAT_EXIT_CODE=0
-bun x ultracite fix || FORMAT_EXIT_CODE=$?
+# shellcheck disable=SC2086
+printf '%s\n' "$STAGED_FILES" | tr '\n' '\0' | xargs -0 bun x ultracite fix || FORMAT_EXIT_CODE=$?
 
 # Re-stage files that were already staged
 echo "$STAGED_FILES" | while IFS= read -r file; do
@@ -17,6 +26,10 @@ echo "$STAGED_FILES" | while IFS= read -r file; do
     git add -- "$file"
   fi
 done
+
+if [ "$STASHED" -eq 1 ]; then
+  git stash pop --quiet || true
+fi
 
 if [ $FORMAT_EXIT_CODE -ne 0 ]; then
   echo "Ultracite found issues that could not be auto-fixed."

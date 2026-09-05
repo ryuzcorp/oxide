@@ -9,7 +9,18 @@ declare module "virtual:oxide/actions" {
 }
 
 declare module "virtual:oxide/client" {
-  type ActionFn = (...args: never[]) => Promise<never>;
+  type ActionValue =
+    | string
+    | number
+    | boolean
+    | null
+    | ActionValue[]
+    | { [key: string]: ActionValue };
+  type ActionFn = (
+    ...args: ActionValue[]
+  ) =>
+    | Promise<ActionValue>
+    | AsyncGenerator<ActionValue, ActionValue | undefined, undefined>;
   type ActionModule = Record<string, ActionFn>;
   export const client: Record<string, ActionModule>;
 }

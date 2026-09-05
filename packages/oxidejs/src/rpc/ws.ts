@@ -105,24 +105,27 @@ const sendNdjsonFrames = async function sendNdjsonFrames(
   signal.addEventListener("abort", onAbort, { once: true });
 
   const pump = async function pump(): Promise<void> {
-    if (signal.aborted) {
-      return;
-    }
-    const { done, value } = await reader.read();
-    if (done) {
-      return;
-    }
-    pending += decoder.decode(value, { stream: true });
-    let nl = pending.indexOf("\n");
-    while (nl !== -1) {
-      const line = pending.slice(0, nl);
-      pending = pending.slice(nl + 1);
-      if (line.length > 0 && !signal.aborted) {
-        peer.send(`${line}\n`);
+    for (;;) {
+      if (signal.aborted) {
+        return;
       }
-      nl = pending.indexOf("\n");
+      // Sequential stream pull — must await each chunk before the next.
+      // oxlint-disable-next-line eslint/no-await-in-loop -- body must be drained in order
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      pending += decoder.decode(value, { stream: true });
+      let nl = pending.indexOf("\n");
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        if (line.length > 0 && !signal.aborted) {
+          peer.send(`${line}\n`);
+        }
+        nl = pending.indexOf("\n");
+      }
     }
-    await pump();
   };
 
   try {

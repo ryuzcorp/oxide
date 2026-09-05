@@ -14,10 +14,10 @@ import type { FetchHandler } from "oxidejs";
 
 type Env = { SECRET?: string };
 
-export const fetch = ((request, env, ctx) => {
+export const fetch = ((request, _env, ctx) => {
   if (new URL(request.url).pathname === "/api/ok") {
     ctx.waitUntil?.(Promise.resolve(null));
-    return new Response(env.SECRET ?? "ok");
+    return new Response("ok");
   }
   return;
 }) satisfies FetchHandler<Env>;
@@ -36,11 +36,12 @@ On the Node preset the generated server also handles `SIGTERM`/`SIGINT`: it stop
 ## `FetchHandler`
 
 ```ts
-type FetchHandler<Env = { [key: string]: OxidejsJson }> = (
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext
-) => FetchResult | Promise<FetchResult>;
+type FetchHandler<Env extends object = { [key: string]: OxidejsJson }> =
+  (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ) => FetchResult | Promise<FetchResult>;
 ```
 
 `Env` defaults to a JSON-compatible binding bag. Pass your Worker / [`env`](/oxide/configuration#env) shape as the type argument. The wrapper always supplies `env` and `ctx`.
@@ -50,7 +51,9 @@ Prefer `satisfies FetchHandler<Env>` on the function so `request`, `env`, and `c
 ## `ServerEntry`
 
 ```ts
-interface ServerEntry<Env = { [key: string]: OxidejsJson }> {
+interface ServerEntry<
+  Env extends object = { [key: string]: OxidejsJson },
+> {
   fetch: FetchHandler<Env>;
 }
 ```
@@ -62,9 +65,9 @@ import type { FetchHandler, ServerEntry } from "oxidejs";
 
 type Env = { SECRET?: string };
 
-const fetch = ((request, env) => {
+const fetch = ((request, _env) => {
   if (new URL(request.url).pathname === "/api/ok") {
-    return new Response(env.SECRET ?? "ok");
+    return new Response("ok");
   }
   return;
 }) satisfies FetchHandler<Env>;

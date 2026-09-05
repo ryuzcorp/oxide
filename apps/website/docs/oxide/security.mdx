@@ -16,7 +16,7 @@ The generated server serves static files from `dist/client/` (or the `public/` d
 | **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments. |
 | **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`. |
 | **Null byte** (`%00`, `\0`) | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`. |
-| **Absolute path** (`/etc/passwd`) | `__rel()` returns `null` for paths not starting with `/`. |
+| **Absolute path** (`/etc/passwd`) | `__rel()` strips the leading `/` (`etc/passwd`) and keeps serving relative to the asset root; containment is the `..` / double-slash checks, not rejecting `/`. |
 | **SPA fallback** | Unknown paths → `index.html`, never a directory listing. |
 | **`clientDir` escape** | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`. |
 | **Hashed assets** | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |

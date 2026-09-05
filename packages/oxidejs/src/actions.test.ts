@@ -31,6 +31,7 @@ import {
   withRequestStore,
 } from "./context";
 import { createActionHandler } from "./rpc/server";
+import { writeGeneratedActions } from "./rpc/test-harness";
 
 const RPC_MODULE = path.join(import.meta.dir, "rpc/index.ts");
 const OXIDE_RUNTIME = path.join(import.meta.dir, "context.ts");
@@ -73,14 +74,11 @@ const writeActionsModule = function writeActionsModule(
   root: string,
   code: string
 ) {
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    code
-      .replaceAll("oxidejs/rpc", RPC_MODULE)
-      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`)
-  );
-  return out;
+  return writeGeneratedActions(root, {
+    code,
+    oxideRuntime: OXIDE_RUNTIME,
+    rpcModule: RPC_MODULE,
+  });
 };
 
 const loadGeneratedRouter = async function loadGeneratedRouter(root: string) {
@@ -443,9 +441,7 @@ ${stubSource}`
       preset: "fetch",
     });
     expect(code).toContain('export * from "/app/src/server.ts"');
-    expect(code).toContain(
-      'import user, { fetch as __namedFetch } from "/app/src/server.ts"'
-    );
+    expect(code).toContain('import * as __userMod from "/app/src/server.ts"');
     expect(code).toContain(
       'import { actionsGroup, actionsHandlers } from "virtual:oxide/actions"'
     );
@@ -464,7 +460,7 @@ ${stubSource}`
     expect(code).toContain("signal: ac.signal");
     expect(code).toContain('req.once("aborted"');
     expect(code).toContain("response.body.getReader()");
-    expect(code).toContain("...user");
+    expect(code).toContain("...(user ?? {})");
   });
 
   test("fetch wrapper without client skips assets", () => {
@@ -492,7 +488,7 @@ ${stubSource}`
     expect(code).not.toContain("ensureWorkerDom()");
     expect(code).not.toContain(": __nf()");
     expect(code).toContain("export * from");
-    expect(code).toContain("...user");
+    expect(code).toContain("...(user ?? {})");
   });
 
   test("fetch wrapper with public/ still serves assets", () => {

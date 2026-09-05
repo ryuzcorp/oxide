@@ -61,12 +61,16 @@ test("wrapClientRpc rest stubs preserve argument lists on call and set", async (
 });
 
 test("with is an alias for bind", () => {
-  const echo = action((value: string) => value);
+  const echo = brandServerAction(
+    "x:echo",
+    action((value: string) => value)
+  );
   // SAFETY: with attaches ACTION_CALL payload for ilha capture.
   const viaWith = actionCall(echo.with("hi") as ActionCallCarrier);
   // SAFETY: bind attaches ACTION_CALL payload for ilha capture.
   const viaBind = actionCall(echo.bind("hi") as ActionCallCarrier);
-  expect(viaWith?.a).toEqual(viaBind?.a);
+  expect(viaWith).toEqual({ a: ["hi"], k: "x:echo" });
+  expect(viaBind).toEqual({ a: ["hi"], k: "x:echo" });
 });
 
 test("stream actions return async generators", async () => {

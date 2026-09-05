@@ -336,19 +336,22 @@ const pipeResponse = async function pipeResponse(
     void reader.cancel();
   };
   req.once("aborted", abort);
-  const pull = async function pull(): Promise<void> {
-    const { done, value } = await reader.read();
-    if (done) {
-      req.off("aborted", abort);
-      res.end();
-      return;
+  try {
+    for (;;) {
+      // Sequential stream pull — must await each chunk before the next.
+      // oxlint-disable-next-line eslint/no-await-in-loop -- body must be drained in order
+      const { done, value } = await reader.read();
+      if (done) {
+        res.end();
+        return;
+      }
+      if (value) {
+        res.write(value);
+      }
     }
-    if (value) {
-      res.write(value);
-    }
-    await pull();
-  };
-  await pull();
+  } finally {
+    req.off("aborted", abort);
+  }
 };
 
 interface WorkerWrapperOpts {
@@ -516,13 +519,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     res.end();
   });${wsUpgrade}
   server.listen(port, () => console.log(\`oxidejs listening on \${port}\`));
-}
   for (const signal of ["SIGTERM", "SIGINT"]) {
     process.on(signal, () => {
       server.close(() => process.exit(0));
       setTimeout(() => process.exit(0), 5000).unref();
     });
   }
+}
 `;
 };
 
@@ -658,15 +661,16 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
     .join("\n");
   const celldDomBlock = buildCelldDomBlock(preset);
   return `${sideEffectImports}${celldDomBlock}export * from ${JSON.stringify(userWorkerAbs)};
-import user, { fetch as __namedFetch } from ${JSON.stringify(userWorkerAbs)};
+import * as __userMod from ${JSON.stringify(userWorkerAbs)};
+const user = __userMod.default;
 const __userFetch =
   user != null && typeof user.fetch === "function"
     ? user.fetch.bind(user)
-    : typeof __namedFetch === "function"
-      ? __namedFetch
+    : typeof __userMod.fetch === "function"
+      ? __userMod.fetch
       : undefined;
 ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
-  ...user,
+  ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
     ${middlewareGate}${actionGate}${afterAction}

@@ -430,6 +430,63 @@ const loadDevMiddlewareHandlers = async function loadDevMiddlewareHandlers(
   }
 };
 
+/** Register the Connect bridge that runs production middleware modules in Vite dev. */
+const attachDevMiddlewareBridge = function attachDevMiddlewareBridge(
+  server: DevSsrServer & {
+    middlewares: {
+      use: (
+        handler: (req: ConnectReq, res: ConnectRes, next: ConnectNext) => void
+      ) => void;
+    };
+  },
+  opts: ResolvedOptions
+): Promise<MwHandler[]> {
+  if (
+    (opts.middleware?.length ?? 0) === 0 &&
+    (opts.imports?.length ?? 0) === 0
+  ) {
+    return Promise.resolve([]);
+  }
+  const handlersPromise = loadDevMiddlewareHandlers(server, opts);
+  server.middlewares.use((creq, cres, next) => {
+    // Don't touch /__oxide/action — reading the body here would empty the
+    // Node stream before the action middleware runs.
+    if (
+      matchesActionPath((creq.url ?? "").split("?")[0] ?? "", opts.actionPath)
+    ) {
+      return next();
+    }
+    void (async () => {
+      try {
+        const handlers = await handlersPromise;
+        if (handlers.length === 0) {
+          return next();
+        }
+        const request = await nodeToWebRequest(creq, opts.bodyLimit);
+        const context: MiddlewareContext = {
+          ctx: undefined,
+          env: opts.env,
+        };
+        const hit = await runMiddlewareHandlers(handlers, request, context, 0);
+        if (hit) {
+          await sendWebResponseFrom(creq, cres, hit);
+          return;
+        }
+        return next();
+      } catch (error) {
+        if (cres.headersSent) {
+          return;
+        }
+        cres.statusCode = error instanceof RequestBodyTooLargeError ? 413 : 500;
+        cres.end(
+          error instanceof RequestBodyTooLargeError ? undefined : String(error)
+        );
+      }
+    })();
+  });
+  return handlersPromise;
+};
+
 export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
   options
 ) => {
@@ -640,15 +697,6 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
             opts.actionPath,
             opts.actionSameOrigin
           );
-          return async () => {
-            try {
-              await loadRouter();
-            } catch (error) {
-              server.config.logger.error(
-                `oxidejs: failed to prewarm actions: ${String(error)}`
-              );
-            }
-          };
         }
 
         // Register both the production-middleware bridge and /__oxide/action
@@ -656,65 +704,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
         // middleware modules is async; the bridge awaits that on first use.
         // Deferring `middlewares.use` until after `ssrLoadModule` used to put
         // actions behind Vite's catch-all → empty 404 on POST /__oxide/action.
-        let handlersPromise: Promise<MwHandler[]> = Promise.resolve([]);
+        const handlersPromise = opts
+          ? attachDevMiddlewareBridge(
+              // SAFETY: ViteDevServer exposes ssrLoadModule, logger, and Connect middlewares.
+              server as never,
+              opts
+            )
+          : Promise.resolve([]);
 
-        if (
-          opts &&
-          ((opts.middleware?.length ?? 0) > 0 ||
-            (opts.imports?.length ?? 0) > 0)
-        ) {
-          handlersPromise = loadDevMiddlewareHandlers(server, opts);
-
-          server.middlewares.use((creq, cres, next) => {
-            // Don't touch /__oxide/action — reading the body here would empty the
-            // Node stream before the action middleware runs.
-            if (
-              matchesActionPath(
-                (creq.url ?? "").split("?")[0] ?? "",
-                opts.actionPath
-              )
-            ) {
-              return next();
-            }
-            void (async () => {
-              try {
-                const handlers = await handlersPromise;
-                if (handlers.length === 0) {
-                  return next();
-                }
-                const request = await nodeToWebRequest(creq, opts.bodyLimit);
-                const context: MiddlewareContext = {
-                  ctx: undefined,
-                  env: opts.env,
-                };
-                const hit = await runMiddlewareHandlers(
-                  handlers,
-                  request,
-                  context,
-                  0
-                );
-                if (hit) {
-                  await sendWebResponseFrom(creq, cres, hit);
-                  return;
-                }
-                return next();
-              } catch (error) {
-                if (cres.headersSent) {
-                  return;
-                }
-                cres.statusCode =
-                  error instanceof RequestBodyTooLargeError ? 413 : 500;
-                cres.end(
-                  error instanceof RequestBodyTooLargeError
-                    ? undefined
-                    : String(error)
-                );
-              }
-            })();
-          });
+        if (opts?.actions !== "ws") {
+          wireActions();
         }
-
-        wireActions();
 
         // Prewarm the SSR action router (and production middleware imports)
         // before Vite prints "ready", so the first client hydration RPC does

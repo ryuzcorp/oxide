@@ -21,17 +21,16 @@ export type FetchResult = Response | undefined;
  * `fetch(request, env, ctx)` — `env` may be `{}` on Node without the `env` option.
  * Return `undefined` (or bare `return`) to fall through to assets.
  */
-export type FetchHandler<
-  Env extends { [key: string]: OxidejsJson } = { [key: string]: OxidejsJson },
-> = (
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext
-) => FetchResult | Promise<FetchResult>;
+export type FetchHandler<Env extends object = { [key: string]: OxidejsJson }> =
+  (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ) => FetchResult | Promise<FetchResult>;
 
 /** Default export shape for `src/server.ts`. */
 export interface ServerEntry<
-  Env extends { [key: string]: OxidejsJson } = { [key: string]: OxidejsJson },
+  Env extends object = { [key: string]: OxidejsJson },
 > {
   fetch: FetchHandler<Env>;
 }

@@ -84,13 +84,30 @@ const isStringPropertyKey = function isStringPropertyKey(
   return typeof key === "string";
 };
 
+interface ActionHeaderMap {
+  [key: string]: string;
+}
+
+const normalizeActionHeaders = function normalizeActionHeaders(
+  headers: OxidejsActionHeaders
+): ActionHeaderMap {
+  if (Array.isArray(headers)) {
+    const out: ActionHeaderMap = {};
+    for (const [key, value] of headers) {
+      out[key] = value;
+    }
+    return out;
+  }
+  return headers;
+};
+
 const cacheKey = function cacheKey(
   group: ActionGroup,
   options: RpcClientOptions
 ) {
   let headerKey = "";
   if (options.headers) {
-    const entries = Object.entries(options.headers);
+    const entries = Object.entries(normalizeActionHeaders(options.headers));
     // oxlint-disable-next-line unicorn/no-array-sort -- Array#toSorted needs ES2023 lib; entries is already a copy
     entries.sort(([a], [b]) => a.localeCompare(b));
     headerKey = entries.map(([k, v]) => `${k}=${v}`).join("&");
@@ -117,11 +134,12 @@ const httpLayer = function httpLayer(options: RpcClientOptions) {
     );
   }
 
+  const headerMap = normalizeActionHeaders(headers);
   return RpcClient.layerProtocolHttp({
     transformClient: <E, R>(client: HttpClient.HttpClient.With<E, R>) =>
       HttpClient.mapRequest(client, (req) => {
         let next = req;
-        for (const [key, value] of Object.entries(headers)) {
+        for (const [key, value] of Object.entries(headerMap)) {
           next = HttpClientRequest.setHeader(next, key, value);
         }
         return next;
@@ -198,15 +216,18 @@ const streamToAsyncGenerator = function streamToAsyncGenerator<T>(
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const pull = async function* pull(): AsyncGenerator<T> {
-      if (signal?.aborted) {
-        throw new DOMException("Aborted", "AbortError");
+      for (;;) {
+        if (signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        // Sequential iterator pull — must await each step before the next.
+        // oxlint-disable-next-line eslint/no-await-in-loop -- async iterator is ordered
+        const next = await iterator.next();
+        if (next.done) {
+          return;
+        }
+        yield next.value;
       }
-      const next = await iterator.next();
-      if (next.done) {
-        return;
-      }
-      yield next.value;
-      yield* pull();
     };
 
     try {
