@@ -1,6 +1,6 @@
 {
   "name": "oxidejs",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
   "keywords": [
     "cloudflare",
@@ -93,6 +93,6 @@
     }
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.11"
   }
 }

@@ -1,23 +1,47 @@
 import { expect, test } from "bun:test";
-import http from "node:http";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { generateActionsModule, scanServerFiles } from "../actions";
+
+import type { ActionContext } from "../context";
+import { createClient } from "./client";
+import { waitUntil, writeGeneratedActions } from "./test-harness";
 import { createWsHooks } from "./ws";
 
-const RPC_MODULE = path.join(import.meta.dir, "index.ts");
-const OXIDE_RUNTIME = path.join(import.meta.dir, "../context.ts");
+const listenPort = function listenPort(server: http.Server) {
+  const { promise, resolve } = Promise.withResolvers<number>();
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address();
+    if (address === null) {
+      resolve(0);
+      return;
+    }
+    // SAFETY: listen(0, host) binds TCP; address is AddressInfo, not a pipe path string.
+    resolve((address as AddressInfo).port);
+  });
+  return promise;
+};
 
-function writeGeneratedActions(root: string) {
-  const out = path.join(root, "actions.mjs");
-  fs.writeFileSync(
-    out,
-    generateActionsModule(scanServerFiles(root))
-      .replaceAll("oxidejs/rpc", RPC_MODULE)
-      .replaceAll('from "oxidejs"', `from ${JSON.stringify(OXIDE_RUNTIME)}`),
+const openWebSocket = function openWebSocket(url: string) {
+  const ws = new WebSocket(url);
+  const { promise, reject, resolve } = Promise.withResolvers<WebSocket>();
+  ws.addEventListener(
+    "open",
+    () => {
+      resolve(ws);
+    },
+    { once: true }
   );
-  return out;
-}
+  ws.addEventListener(
+    "error",
+    () => {
+      reject(new Error("WebSocket failed to open"));
+    },
+    { once: true }
+  );
+  return promise;
+};
 
 test("createClient over ws transport resolves calls through a real socket", async () => {
   // Regression: loadClient used to build the protocol layer in a transient
@@ -27,10 +51,8 @@ test("createClient over ws transport resolves calls through a real socket", asyn
   fs.writeFileSync(
     path.join(root, "hello.server.ts"),
     `import { action } from ${ctx};
-export const hello = action(async (name: string) => ` +
-      "`hi ${name}`" +
-      `)
-`,
+export const hello = action(async (name: string) => \`hi \${name}\`)
+`
   );
   const out = writeGeneratedActions(root);
 
@@ -45,32 +67,35 @@ export const hello = action(async (name: string) => ` +
     }) as never,
   });
   server.on("upgrade", (req, socket, head) => {
+    // SAFETY: Node upgrade socket is Duplex; crossws adapter accepts it at runtime.
     wss.handleUpgrade(req, socket as never, head);
   });
-  const port = await new Promise<number>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as { port: number }).port);
-    });
-  });
+  const port = await listenPort(server);
 
-  const { createClient } = await import("./client");
   const client = createClient(mod.default, {
     transport: "ws",
     url: `ws://127.0.0.1:${port}/__oxide/action`,
   });
   try {
-    const result = await Promise.race([
-      (client as Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>)[
-        "hello"
-      ]!["hello"]!("Regression"),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("ws client call timed out")), 5000),
-      ),
-    ]);
-    expect(result).toBe("hi Regression");
+    const helloMod = client["hello"];
+    const helloFn = helloMod?.["hello"];
+    if (helloFn === undefined) {
+      throw new Error("hello.hello action missing from client");
+    }
+    const { promise: timeout, reject: rejectTimeout } =
+      Promise.withResolvers<never>();
+    const timer = setTimeout(() => {
+      rejectTimeout(new Error("ws client call timed out"));
+    }, 5000);
+    try {
+      const result = await Promise.race([helloFn("Regression"), timeout]);
+      expect(result).toBe("hi Regression");
+    } finally {
+      clearTimeout(timer);
+    }
   } finally {
     server.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { force: true, recursive: true });
   }
 });
 
@@ -85,80 +110,81 @@ import fs from "node:fs";
 export const ticks = action(async function* () {
   yield 0;
   while (!fs.existsSync(${JSON.stringify(gateFile)})) {
-    await new Promise((r) => setTimeout(r, 5));
+    await Bun.sleep(5);
   }
   yield 1;
 })
-`,
+`
   );
   const out = writeGeneratedActions(root);
 
   const mod = await import(out);
   const server = http.createServer();
   const { default: crossws } = await import("crossws/adapters/node");
-  // Same cast shape as plugin.ts: crossws' hook types are structurally looser than ours.
+  // SAFETY: crossws hook types are structurally looser than ours (see plugin.ts).
   const wss = crossws({
     hooks: createWsHooks(mod.default as never, mod.actionsHandlers as never, {
+      createContext: () =>
+        // SAFETY: test peer context only needs req + a marker field for this assertion.
+        ({
+          marker: "from-peer",
+          req: new Request("http://localhost/__oxide/action"),
+        }) as ActionContext,
       path: "/__oxide/action",
       sameOrigin: false,
-      createContext: () =>
-        ({
-          req: new Request("http://localhost/__oxide/action"),
-          marker: "from-peer",
-        }) as import("../context").ActionContext,
     }) as never,
   });
   server.on("upgrade", (req, socket, head) => {
+    // SAFETY: Node upgrade socket is Duplex; crossws adapter accepts it at runtime.
     wss.handleUpgrade(req, socket as never, head);
   });
-  const port = await new Promise<number>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as { port: number }).port);
-    });
-  });
+  const port = await listenPort(server);
 
   const frames: string[] = [];
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/__oxide/action`);
-  ws.onmessage = (event) => frames.push(String(event.data));
-
-  const openPromise = new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = () => reject(new Error("WebSocket failed to open"));
+  const ws = await openWebSocket(`ws://127.0.0.1:${port}/__oxide/action`);
+  ws.addEventListener("message", (event) => {
+    frames.push(String(event.data));
   });
-  await openPromise;
 
   try {
-    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ticks.ticks", params: { args: [] } }));
+    ws.send(
+      JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "ticks.ticks",
+        params: { args: [] },
+      })
+    );
 
-    const started = Date.now();
-    while (frames.length === 0 && Date.now() - started < 5000) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
-    if (frames.length === 0) {
+    await waitUntil(() => frames.length > 0, 5000);
+    const first = frames.at(0);
+    if (first === undefined) {
       throw new Error("timed out waiting for first WebSocket NDJSON frame");
     }
     expect(frames.length).toBe(1);
-    expect(JSON.parse(frames[0]!.trim())).toEqual({
-      jsonrpc: "2.0",
+    expect(JSON.parse(first.trim())).toEqual({
       chunk: true,
       id: 1,
+      jsonrpc: "2.0",
       result: [0],
     });
 
     fs.writeFileSync(gateFile, "go");
-    while (frames.length < 2 && Date.now() - started < 5000) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
+    await waitUntil(() => frames.length >= 2, 5000);
     expect(frames.length).toBeGreaterThanOrEqual(2);
-    expect(JSON.parse(frames[1]!.trim())).toEqual({
-      jsonrpc: "2.0",
+    const second = frames.at(1);
+    if (second === undefined) {
+      throw new Error("missing second WebSocket NDJSON frame");
+    }
+    expect(JSON.parse(second.trim())).toEqual({
       chunk: true,
       id: 1,
+      jsonrpc: "2.0",
       result: [1],
     });
   } finally {
     ws.close();
     server.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { force: true, recursive: true });
   }
 });

@@ -1,148 +1,174 @@
 import type { Layer } from "effect";
-import type { Rpc } from "effect/unstable/rpc";
-import type { RpcGroup } from "effect/unstable/rpc";
-import type { ActionContext } from "../context";
-import { isSameOrigin } from "./same-origin";
-import { matchesActionPath } from "../actions";
-import { createActionHandler, type ActionHandlerOptions } from "./server";
-import { NDJSON_CONTENT } from "./scrub";
+import type { Rpc, RpcGroup } from "effect/unstable/rpc";
 
-type WsPeer = {
-  request?: Request;
-  context: Record<string, unknown>;
-  send: (data: unknown) => unknown;
+import { matchesActionPath } from "../actions";
+import type { ActionContext, ActionContextValue } from "../context";
+import type { OxidejsJson } from "../types";
+import { isSameOrigin } from "./same-origin";
+import { NDJSON_CONTENT } from "./scrub";
+import type { ActionHandlerOptions } from "./server";
+import { createActionHandler } from "./server";
+
+interface WsPeerContext {
+  [key: string]: ActionContextValue;
+}
+
+interface WsPeer {
+  context: WsPeerContext;
   /** Optional: register a listener when the peer disconnects. */
   onClose?: (fn: () => void) => void;
-};
+  request?: Request;
+  send: (data: string) => void;
+}
 
-type WsMessage = {
+interface WsMessage {
   text: () => string;
-};
+}
 
-export type WsHooksOptions = {
+export interface WsHooksOptions {
+  createContext?: (peer: WsPeer) => ActionContext | Promise<ActionContext>;
+  maxMessageSize?: number;
   path?: string;
   sameOrigin?: boolean;
-  maxMessageSize?: number;
-  createContext?: (peer: WsPeer) => ActionContext | Promise<ActionContext>;
-};
+}
 
-function parseMessage(message: WsMessage, maxBytes: number) {
+const parseMessage = function parseMessage(
+  message: WsMessage,
+  maxBytes: number
+) {
   try {
     const raw = message.text();
     const size = new TextEncoder().encode(raw).byteLength;
-    if (size > maxBytes) return { ok: false as const, tooLarge: true };
+    if (size > maxBytes) {
+      return { ok: false as const, tooLarge: true };
+    }
     return { ok: true as const, value: raw };
   } catch {
     return { ok: false as const };
   }
-}
+};
+
+const isJsonRpcPing = function isJsonRpcPing(
+  value: OxidejsJson
+): value is { [key: string]: OxidejsJson } {
+  return (
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value === "object" &&
+    value["method"] === "@effect/rpc/Ping"
+  );
+};
 
 /**
  * Effect's socket client sends `@effect/rpc/Ping` keepalives (no id) and hangs
  * up unless the server answers `@effect/rpc/Pong`. Handle control messages here
  * so they never reach the action handler.
  */
-function controlReply(raw: string): string | undefined {
+const controlReply = function controlReply(raw: string): string | undefined {
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      (parsed as { method?: unknown }).method === "@effect/rpc/Ping"
-    ) {
+    // SAFETY: JSON.parse yields JSON values; OxidejsJson is the repo's JSON union.
+    const parsed = JSON.parse(raw) as OxidejsJson;
+    if (isJsonRpcPing(parsed)) {
       return JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" });
     }
   } catch {
     // Not JSON — let the action handler produce the parse error.
   }
+  // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
   return undefined;
-}
+};
 
 /** Forward each complete NDJSON line as its own WS message (keeps streams incremental). */
-async function sendNdjsonFrames(peer: WsPeer, response: Response, signal: AbortSignal) {
+const sendNdjsonFrames = async function sendNdjsonFrames(
+  peer: WsPeer,
+  response: Response,
+  signal: AbortSignal
+) {
   if (signal.aborted) {
     await response.body?.cancel();
     return;
   }
   if (!response.body) {
     const text = await response.text();
-    if (text && !signal.aborted) peer.send(text);
+    if (text && !signal.aborted) {
+      peer.send(text);
+    }
     return;
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
-  const onAbort = () => {
+  const onAbort = function onAbort() {
     void reader.cancel();
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  try {
-    while (!signal.aborted) {
+  const pump = async function pump(): Promise<void> {
+    for (;;) {
+      if (signal.aborted) {
+        return;
+      }
+      // Sequential stream pull — must await each chunk before the next.
+      // oxlint-disable-next-line eslint/no-await-in-loop -- body must be drained in order
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        return;
+      }
       pending += decoder.decode(value, { stream: true });
       let nl = pending.indexOf("\n");
       while (nl !== -1) {
         const line = pending.slice(0, nl);
         pending = pending.slice(nl + 1);
-        if (line.length > 0 && !signal.aborted) peer.send(`${line}\n`);
+        if (line.length > 0 && !signal.aborted) {
+          peer.send(`${line}\n`);
+        }
         nl = pending.indexOf("\n");
       }
     }
+  };
+
+  try {
+    await pump();
 
     if (!signal.aborted) {
       pending += decoder.decode();
-      if (pending.length > 0) peer.send(pending.endsWith("\n") ? pending : `${pending}\n`);
+      if (pending.length > 0) {
+        peer.send(pending.endsWith("\n") ? pending : `${pending}\n`);
+      }
     }
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
-}
+};
 
-export function createWsHooks(
+export const createWsHooks = function createWsHooks(
   group: RpcGroup.RpcGroup<Rpc.Any>,
   handlers: Layer.Layer<unknown, unknown, unknown>,
-  options: WsHooksOptions = {},
+  options: WsHooksOptions = {}
 ) {
   const path = options.path ?? "/__oxide/action";
   const maxBytes = options.maxMessageSize ?? 1_048_576;
   const sameOrigin = options.sameOrigin ?? true;
   const baseOptions: ActionHandlerOptions = {
     path,
-    transport: "http",
     sameOrigin,
+    transport: "http",
   };
 
   return {
-    upgrade(req: Request) {
-      let pathname: string;
-      try {
-        pathname = new URL(req.url).pathname;
-      } catch {
-        return new Response("Bad Request", { status: 400 });
-      }
-      if (!matchesActionPath(pathname, path)) {
-        return new Response("Not Found", { status: 404 });
-      }
-      if (sameOrigin && !isSameOrigin(req)) {
-        return new Response("Forbidden", { status: 403 });
-      }
-      return undefined;
-    },
     async message(peer: WsPeer, message: WsMessage) {
       const parsed = parseMessage(message, maxBytes);
       if (!parsed.ok) {
         peer.send(
           JSON.stringify({
-            jsonrpc: "2.0",
             error: {
-              code: -32600,
+              code: -32_600,
               message: parsed.tooLarge ? "Payload too large" : "Parse error",
             },
             id: null,
-          }),
+            jsonrpc: "2.0",
+          })
         );
         return;
       }
@@ -161,21 +187,40 @@ export function createWsHooks(
       headers.set("content-type", NDJSON_CONTENT);
 
       // Resolve once per message. Handler clones the Request, so do not key context by Request identity.
-      const peerCtx = (await options.createContext?.(peer)) ?? (peer.context as ActionContext);
+      // SAFETY: peer.context is the host-supplied ActionContext bag; req is attached below.
+      const peerCtx =
+        (await options.createContext?.(peer)) ??
+        (peer.context as ActionContext);
       const rpc = createActionHandler(group, handlers, {
         ...baseOptions,
         createContext: (req) => ({ ...peerCtx, req }),
       });
 
       const request = new Request(`http://${host}${path}`, {
-        method: "POST",
-        headers,
         body: parsed.value,
+        headers,
+        method: "POST",
         signal: abort.signal,
       });
 
       const response = await rpc(request);
       await sendNdjsonFrames(peer, response, abort.signal);
     },
+    upgrade(req: Request): Response | undefined {
+      let pathname: string;
+      try {
+        ({ pathname } = new URL(req.url));
+      } catch {
+        return new Response("Bad Request", { status: 400 });
+      }
+      if (!matchesActionPath(pathname, path)) {
+        return new Response("Not Found", { status: 404 });
+      }
+      if (sameOrigin && !isSameOrigin(req)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+      return undefined;
+    },
   };
-}
+};

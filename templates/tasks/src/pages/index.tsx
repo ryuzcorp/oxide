@@ -1,16 +1,21 @@
 import { add, TaskCount, TaskList } from "$lib/tasks.server";
 import { head } from "@ilha/router";
 
+const addItem = async (event: SubmitEvent) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  const text = String(new FormData(form).get("text") ?? "").trim();
+  if (text) {
+    await add(text);
+  }
+  form.reset();
+};
+
 export default function Home() {
   head({ title: "Home" });
-
-  const addItem = async (event: SubmitEvent) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const text = String(new FormData(form).get("text") ?? "").trim();
-    if (text) await add(text);
-    form.reset();
-  };
 
   return (
     <div class="mx-auto mt-8 flex max-w-xl flex-col gap-4">
@@ -21,7 +26,11 @@ export default function Home() {
             <TaskCount />
           </div>
           <form onsubmit={addItem} class="flex items-center gap-2">
-            <input name="text" class="input input-bordered w-full" placeholder="Add a new todo" />
+            <input
+              name="text"
+              class="input input-bordered w-full"
+              placeholder="Add a new todo"
+            />
             <button type="submit" class="btn btn-primary">
               Add
             </button>

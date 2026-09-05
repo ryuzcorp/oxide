@@ -56,12 +56,12 @@ This explicit marker prevents an exported helper from accidentally becoming a pu
 
 Unary actions are Promise-returning handles with helpers for UI wiring:
 
-| Call                                        | What it does                                     |
-| ------------------------------------------- | ------------------------------------------------ |
-| `await ping()`                              | Run the action (always invokes RPC on client)    |
-| `ping.set(...args)`                         | Same as calling with args; also writes the atom  |
-| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action  |
-| `ping.result`                               | Read the last `AsyncResult` from the client atom |
+| Call | What it does |
+| --- | --- |
+| `await ping()` | Run the action (always invokes RPC on client) |
+| `ping.set(...args)` | Same as calling with args; also writes the atom |
+| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action |
+| `ping.result` | Read the last `AsyncResult` from the client atom |
 
 ```ts twoslash src/bind.ts
 // @filename: tasks.server.ts
@@ -102,7 +102,7 @@ class UnauthorizedError extends Error {
 }
 
 function withUser<Args extends unknown[], Result>(
-  handler: (user: User, ...args: Args) => Result,
+  handler: (user: User, ...args: Args) => Result
 ) {
   return async (...args: Args) => {
     const authorization = useRequest().headers.get("authorization");
@@ -120,7 +120,7 @@ function withUser<Args extends unknown[], Result>(
 }
 
 export const profile = action(
-  withUser((user) => db.profiles.find(user.id)),
+  withUser((user) => db.profiles.find(user.id))
 );
 ```
 
@@ -129,8 +129,8 @@ The client calls `profile()` without supplying `user`. The wrapper reads the req
 ```ts
 export const update = action(
   withUser((user, name: string) =>
-    db.profiles.update(user.id, { name }),
-  ),
+    db.profiles.update(user.id, { name })
+  )
 );
 ```
 
@@ -227,7 +227,7 @@ import { action, useEnv, useFetchCtx } from "oxidejs";
 type Env = { API_URL: string };
 
 export const hasApi = action(async () => {
-  useFetchCtx()?.waitUntil?.(Promise.resolve());
+  useFetchCtx()?.waitUntil?.(Promise.resolve(null));
   return Boolean(useEnv<Env>()?.API_URL);
 });
 ```

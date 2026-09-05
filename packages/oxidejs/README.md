@@ -71,23 +71,24 @@ import { ping } from "./test.server";
 console.log(await ping()); // "pong"
 
 // src/server.ts
-export default {
-  fetch(request: Request) {
-    if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
-  },
-};
+import type { FetchHandler } from "oxidejs";
+
+export const fetch = ((request) => {
+  if (new URL(request.url).pathname === "/api/ok") return new Response("ok");
+  return;
+}) satisfies FetchHandler;
 ```
 
 ### Call shape
 
 Unary actions return a Promise and expose helpers for UI wiring:
 
-| Call                                        | What it does                                     |
-| ------------------------------------------- | ------------------------------------------------ |
-| `await ping()`                              | Run the action (always invokes RPC on client)    |
-| `ping.set(...args)`                         | Same as calling with args; also writes the atom  |
-| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action  |
-| `ping.result`                               | Read the last `AsyncResult` from the client atom |
+| Call | What it does |
+| --- | --- |
+| `await ping()` | Run the action (always invokes RPC on client) |
+| `ping.set(...args)` | Same as calling with args; also writes the atom |
+| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action |
+| `ping.result` | Read the last `AsyncResult` from the client atom |
 
 `action()` marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (not SSE). On the client the stub returns an async generator — iterate it directly. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
@@ -130,27 +131,27 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 ## Options
 
-| Option                         | Default                  | Notes                                                                                       |
-| ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------- |
-| `preset`                       | `"fetch"`                | `"fetch"` or `"celld"`                                                                      |
-| `workerEntry`                  | `src/server.ts`          | Relative to project root                                                                    |
-| `outDir`                       | `dist`                   | Output root                                                                                 |
-| `clientDir`                    | `client`                 | Must stay inside `outDir`                                                                   |
-| `wrangler.name`                | required if `emitConfig` |                                                                                             |
-| `wrangler.compatibility_date`  | required if `emitConfig` |                                                                                             |
-| `wrangler.compatibility_flags` | —                        | optional; `nodejs_compat` is merged in automatically on `celld`                             |
-| `wrangler.durable_objects`     | —                        | optional                                                                                    |
-| `wrangler.migrations`          | —                        | optional                                                                                    |
-| `wrangler.services`            | —                        | optional                                                                                    |
-| `wrangler.vars`                | —                        | optional                                                                                    |
-| `emitConfig`                   | `true` on `celld`        | Set `false` to skip `wrangler.jsonc`                                                        |
-| `actions`                      | `"http"`                 | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
-| `actionHeaders`                | —                        | Static headers on the HTTP client                                                           |
-| `middleware`                   | `[]`                     | Fetch middleware, run in order before actions and the server entry                          |
-| `imports`                      | `[]`                     | Modules imported for side effects at server startup                                         |
-| `bodyLimit`                    | `1048576`                | Max Node request body size; larger requests get 413                                         |
-| `notFound`                     | —                        | Custom HTML 404 body when no route or asset matches                                         |
-| `env`                          | —                        | Node preset value passed to `fetch(request, env, ctx)`                                      |
+| Option | Default | Notes |
+| --- | --- | --- |
+| `preset` | `"fetch"` | `"fetch"` or `"celld"` |
+| `workerEntry` | `src/server.ts` | Relative to project root |
+| `outDir` | `dist` | Output root |
+| `clientDir` | `client` | Must stay inside `outDir` |
+| `wrangler.name` | required if `emitConfig` |  |
+| `wrangler.compatibility_date` | required if `emitConfig` |  |
+| `wrangler.compatibility_flags` | — | optional; `nodejs_compat` is merged in automatically on `celld` |
+| `wrangler.durable_objects` | — | optional |
+| `wrangler.migrations` | — | optional |
+| `wrangler.services` | — | optional |
+| `wrangler.vars` | — | optional |
+| `emitConfig` | `true` on `celld` | Set `false` to skip `wrangler.jsonc` |
+| `actions` | `"http"` | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `actionHeaders` | — | Static headers on the HTTP client |
+| `middleware` | `[]` | Fetch middleware, run in order before actions and the server entry |
+| `imports` | `[]` | Modules imported for side effects at server startup |
+| `bodyLimit` | `1048576` | Max Node request body size; larger requests get 413 |
+| `notFound` | — | Custom HTML 404 body when no route or asset matches |
+| `env` | — | Node preset value passed to `fetch(request, env, ctx)` |
 
 ### `middleware` and `imports`
 
@@ -177,15 +178,15 @@ Middleware modules receive `(request, { env, ctx })`. They run before actions, t
 
 The generated server serves static files from `dist/client/` (or the `public/` directory merged into it). These guards are active:
 
-| Attack vector                      | Guard                                                                                                                                  |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments.                                                                                      |
-| **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`.                                                                  |
-| **Null byte** (`%00`, `\0`)        | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`.                                                   |
-| **Absolute path** (`/etc/passwd`)  | `__rel()` returns `null` for paths not starting with `/`.                                                                              |
-| **SPA fallback**                   | Unknown paths → `index.html`, never a directory listing.                                                                               |
-| **`clientDir` escape**             | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`.                                                        |
-| **Hashed assets**                  | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |
+| Attack vector | Guard |
+| --- | --- |
+| **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments. |
+| **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`. |
+| **Null byte** (`%00`, `\0`) | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`. |
+| **Absolute path** (`/etc/passwd`) | `__rel()` returns `null` for paths not starting with `/`. |
+| **SPA fallback** | Unknown paths → `index.html`, never a directory listing. |
+| **`clientDir` escape** | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`. |
+| **Hashed assets** | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |
 
 The generated `__asset` function uses `path.join` — not `path.resolve` — so a leading `/` in the relative path stays inside the asset root.
 

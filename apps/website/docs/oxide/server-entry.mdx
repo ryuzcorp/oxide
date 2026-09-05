@@ -5,27 +5,72 @@ sidebar:
 description: Handle a request in your server entry, or skip it and let static files take over.
 ---
 
-Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx` — the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
+Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response — either as a named export or on the default export. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx` — the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
+
+Type `fetch` with [`FetchHandler`](#fetchhandler):
 
 ```ts twoslash src/server.ts
-export default {
-  fetch(
-    request: Request,
-    env?: { SECRET?: string },
-    ctx?: { waitUntil?(p: Promise<unknown>): void },
-  ) {
-    if (new URL(request.url).pathname === "/api/ok") {
-      ctx?.waitUntil?.(Promise.resolve());
-      return new Response(env?.SECRET ?? "ok");
-    }
-  },
-};
+import type { FetchHandler } from "oxidejs";
+
+type Env = { SECRET?: string };
+
+export const fetch = ((request, _env, ctx) => {
+  if (new URL(request.url).pathname === "/api/ok") {
+    ctx.waitUntil?.(Promise.resolve(null));
+    return new Response("ok");
+  }
+  return;
+}) satisfies FetchHandler<Env>;
 ```
+
+`export default { fetch }` works the same way when you prefer an object entry (or need to put `scheduled` / `queue` on the default for celld). If both a default `fetch` and a named `fetch` exist, the default wins.
 
 If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, that means a matching static file. Missing files fall back to `index.html` only for navigations (`Sec-Fetch-Dest: document` or `Accept: text/html`). A fetch for `/missing.js` is still `404`.
 
 `public/` is copied next to the client on [`preset: "fetch"`](/oxide/configuration#preset). Hashed assets get `Cache-Control: immutable` plus an `ETag`, and answer `304 Not Modified` on a matching `If-None-Match`. `index.html` is `no-cache`. Without a page, the build is only the server bundle - there is nothing to fall through to.
 
-Named exports such as `scheduled` and `queue` stay on the celld wrapper. Spread them yourself if you replace `fetch`.
+Named exports such as `scheduled` and `queue` are re-exported from the wrapper (`export *`). Put them on `export default { … }` as well when the host only reads the default export.
 
 On the Node preset the generated server also handles `SIGTERM`/`SIGINT`: it stops accepting connections and exits once in-flight requests drain (forced after 5 seconds).
+
+## `FetchHandler`
+
+```ts
+type FetchHandler<Env extends object = { [key: string]: OxidejsJson }> =
+  (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ) => FetchResult | Promise<FetchResult>;
+```
+
+`Env` defaults to a JSON-compatible binding bag. Pass your Worker / [`env`](/oxide/configuration#env) shape as the type argument. The wrapper always supplies `env` and `ctx`.
+
+Prefer `satisfies FetchHandler<Env>` on the function so `request`, `env`, and `ctx` pick up types without annotations. `const fetch: FetchHandler<Env> = …` works the same way. Under `noImplicitReturns`, use a bare `return` when you want to fall through.
+
+## `ServerEntry`
+
+```ts
+interface ServerEntry<
+  Env extends object = { [key: string]: OxidejsJson },
+> {
+  fetch: FetchHandler<Env>;
+}
+```
+
+When you use the object form:
+
+```ts twoslash
+import type { FetchHandler, ServerEntry } from "oxidejs";
+
+type Env = { SECRET?: string };
+
+const fetch = ((request, _env) => {
+  if (new URL(request.url).pathname === "/api/ok") {
+    return new Response("ok");
+  }
+  return;
+}) satisfies FetchHandler<Env>;
+
+export default { fetch } satisfies ServerEntry<Env>;
+```

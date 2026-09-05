@@ -6,6 +6,7 @@
     "paths": {
       "oxidejs": ["./packages/oxidejs/src/index.ts"],
       "tacho": ["./packages/tacho/src/index.ts"]
-    }
+    },
+    "strictNullChecks": true
   }
 }

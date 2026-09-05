@@ -6,6 +6,6 @@ setFrameAuth({ defaultAction: "open" });
 
 export default {
   fetch() {
-    return undefined;
+    // Fall through to static assets / index.html.
   },
 };

@@ -1,13 +1,22 @@
 export type OxidejsPreset = "fetch" | "celld";
 
+/** JSON-compatible value used for opaque wrangler / env bags. */
+export type OxidejsJson =
+  | string
+  | number
+  | boolean
+  | null
+  | OxidejsJson[]
+  | { [key: string]: OxidejsJson };
+
 export interface OxidejsWranglerOptions {
   name: string;
   compatibility_date: string;
   compatibility_flags?: string[];
-  durable_objects?: Record<string, unknown>;
-  migrations?: unknown[];
-  services?: unknown[];
-  vars?: Record<string, unknown>;
+  durable_objects?: { [key: string]: OxidejsJson };
+  migrations?: OxidejsJson[];
+  services?: OxidejsJson[];
+  vars?: { [key: string]: OxidejsJson };
 }
 
 export type OxidejsActionTransport = "http" | "ws";
@@ -24,7 +33,9 @@ export type OxidejsActions =
     };
 
 /** Static headers inlined into the shared action client. Functions cannot ship to the browser. */
-export type OxidejsActionHeaders = Record<string, string> | [string, string][];
+export type OxidejsActionHeaders =
+  | { [key: string]: string }
+  | [string, string][];
 
 export interface OxidejsOptions {
   /** "fetch" (default) skips wrangler.jsonc and serves client assets. "celld" emits wrangler.jsonc. */
@@ -70,7 +81,7 @@ export interface OxidejsOptions {
 
   /** Extra env passed as the second argument to fetch(request, env, ctx) on
    * the Node fetch preset — read it with useEnv(). */
-  env?: Record<string, unknown>;
+  env?: { [key: string]: OxidejsJson };
 }
 
 export interface ResolvedOptions {
@@ -98,5 +109,5 @@ export interface ResolvedOptions {
   imports: string[];
   bodyLimit: number;
   notFound: string | undefined;
-  env: Record<string, unknown> | undefined;
+  env: { [key: string]: OxidejsJson } | undefined;
 }

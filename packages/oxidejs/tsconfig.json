@@ -5,7 +5,8 @@
     "moduleResolution": "Bundler",
     "target": "ES2022",
     "noEmit": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "strictNullChecks": true
   },
   "include": ["src/**/*.ts"]
 }

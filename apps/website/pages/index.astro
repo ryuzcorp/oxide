@@ -7,7 +7,6 @@ const { config } = data;
 const repoUrl = "https://github.com/ryuzcorp/oxide";
 const files = [
   {
-    name: "client.ts",
     html: highlight(
       `// Looks local. Runs on the server.
 // Your server code never reaches the browser.
@@ -20,9 +19,9 @@ console.log(note); // { id: "…", title: "Ship Oxide" }
 for await (const n of await watch()) console.log(n);`,
       "ts",
     ),
+    name: "client.ts",
   },
   {
-    name: "notes.server.ts",
     html: highlight(
       `// Only action()-wrapped exports are callable over the wire.
 import { action, useRequest } from "oxidejs";
@@ -37,9 +36,9 @@ export const watch = action(async function* () {
 });`,
       "ts",
     ),
+    name: "notes.server.ts",
   },
   {
-    name: "server.ts",
     html: highlight(
       `// Every request hits this first. Return nothing to let
 // static files take over — no extra setup needed.
@@ -51,9 +50,9 @@ export default {
 };`,
       "ts",
     ),
+    name: "server.ts",
   },
   {
-    name: "index.html",
     html: highlight(
       `<!doctype html>
 <html lang="en">
@@ -64,9 +63,9 @@ export default {
 </html>`,
       "html",
     ),
+    name: "index.html",
   },
   {
-    name: "vite.config.ts",
     html: highlight(
       `import { defineConfig } from "vite";
 import oxide from "oxidejs/vite";
@@ -76,6 +75,7 @@ export default defineConfig({
 });`,
       "ts",
     ),
+    name: "vite.config.ts",
   },
 ];
 
@@ -95,7 +95,6 @@ const btn =
 
 const bundlers = [
   {
-    name: "Vite",
     html: highlight(
       `import { defineConfig } from "vite";
 import oxide from "oxidejs/vite";
@@ -105,9 +104,9 @@ export default defineConfig({
 });`,
       "ts",
     ),
+    name: "Vite",
   },
   {
-    name: "Rsbuild",
     html: highlight(
       `import { defineConfig } from "@rsbuild/core";
 import oxide from "oxidejs/rsbuild";
@@ -117,6 +116,7 @@ export default defineConfig({
 });`,
       "ts",
     ),
+    name: "Rsbuild",
   },
 ] as const;
 ---
@@ -434,8 +434,11 @@ dist/
     readyCta?.removeAttribute("tabindex");
   };
 
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) showPrimary();
-  else lastRow?.addEventListener("animationend", showPrimary, { once: true });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    showPrimary();
+  } else {
+    lastRow?.addEventListener("animationend", showPrimary, { once: true });
+  }
 </script>
 
 <style>

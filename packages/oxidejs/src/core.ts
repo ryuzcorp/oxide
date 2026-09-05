@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+
+import { ACTION_PATH } from "./actions";
 import type {
   OxidejsActions,
   OxidejsActionTransport,
@@ -8,7 +10,6 @@ import type {
   OxidejsWranglerOptions,
   ResolvedOptions,
 } from "./types";
-import { ACTION_PATH } from "./actions";
 
 export const CELLD_ALLOWED_KEYS = [
   "name",
@@ -28,217 +29,341 @@ export interface EmitState {
   emitted: boolean;
 }
 
-export function createEmitState(): EmitState {
+export const createEmitState = function createEmitState(): EmitState {
   return { emitted: false };
-}
+};
 
-export function validateWranglerOptions(wrangler: Record<string, unknown>): void {
+export const validateWranglerOptions = function validateWranglerOptions(
+  wrangler: OxidejsWranglerOptions
+): void {
   const allowed: readonly string[] = CELLD_ALLOWED_KEYS;
   const invalid = Object.keys(wrangler).filter((key) => !allowed.includes(key));
   if (invalid.length) {
     throw new Error(
-      `oxidejs: these wrangler keys are not supported by celld deploy: ${invalid.join(", ")}`,
+      `oxidejs: these wrangler keys are not supported by celld deploy: ${invalid.join(", ")}`
     );
   }
 
   const forbidden = USER_FORBIDDEN_KEYS.filter((key) => key in wrangler);
   if (forbidden.length) {
     throw new Error(
-      `oxidejs: wrangler keys ${forbidden.join(", ")} are computed by the plugin and cannot be user-supplied`,
+      `oxidejs: wrangler keys ${forbidden.join(", ")} are computed by the plugin and cannot be user-supplied`
     );
   }
-}
+};
 
-export function assertContained(outDirAbs: string, childAbs: string, label: string): void {
+export const assertContained = function assertContained(
+  outDirAbs: string,
+  childAbs: string,
+  label: string
+): void {
   const outDir = path.resolve(outDirAbs);
   const child = path.resolve(childAbs);
   const relative = path.relative(outDir, child);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`oxidejs: ${label} must resolve inside outDir (got ${relative || "."})`);
+  if (
+    relative === "" ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `oxidejs: ${label} must resolve inside outDir (got ${relative || "."})`
+    );
   }
-}
+};
 
-function requireWranglerFields(
-  wrangler: OxidejsWranglerOptions | undefined,
+const requireWranglerFields = function requireWranglerFields(
+  wrangler: OxidejsWranglerOptions | undefined
 ): OxidejsWranglerOptions {
   if (!wrangler?.name || !wrangler.compatibility_date) {
     throw new Error(
-      "oxidejs: wrangler.name and wrangler.compatibility_date are required when emitConfig is true",
+      "oxidejs: wrangler.name and wrangler.compatibility_date are required when emitConfig is true"
     );
   }
   return wrangler;
-}
+};
 
-type HtmlInput = string | string[] | Record<string, string>;
+type HtmlInput = string | string[] | { [key: string]: string };
+
+interface HtmlEnvironment {
+  input?: HtmlInput;
+  build?: {
+    input?: HtmlInput;
+    rolldownOptions?: { input?: HtmlInput };
+    rollupOptions?: { input?: HtmlInput };
+  };
+}
 
 interface HtmlEntryConfig {
   build?: {
     rolldownOptions?: { input?: HtmlInput };
     rollupOptions?: { input?: HtmlInput };
   };
-  environments?: Record<string, unknown>;
+  environments?: { [key: string]: HtmlEnvironment | undefined };
 }
 
-function flattenInput(input: HtmlInput | undefined): string[] {
-  if (!input) return [];
-  if (typeof input === "string") return [input];
-  if (Array.isArray(input)) return input;
-  return Object.values(input);
-}
+const flattenInput = function flattenInput(
+  input: HtmlInput | undefined
+): string[] {
+  if (input === undefined) {
+    return [];
+  }
+  if (Array.isArray(input)) {
+    return input;
+  }
+  if (Object.prototype.toString.call(input) === "[object Object]") {
+    // SAFETY: non-array object HtmlInput is a string record.
+    return Object.values(input as { [key: string]: string });
+  }
+  // SAFETY: remaining HtmlInput branch after array/object checks is string.
+  return [input as string];
+};
 
-function envInput(env: unknown): HtmlInput | undefined {
-  if (!env || typeof env !== "object") return;
-  const rec = env as {
-    input?: HtmlInput;
-    build?: {
-      input?: HtmlInput;
-      rolldownOptions?: { input?: HtmlInput };
-      rollupOptions?: { input?: HtmlInput };
-    };
-  };
+const envInput = function envInput(
+  env: HtmlEnvironment | undefined
+): HtmlInput | undefined {
+  if (env === undefined) {
+    return;
+  }
   return (
-    rec.build?.rolldownOptions?.input ||
-    rec.build?.rollupOptions?.input ||
-    rec.build?.input ||
-    rec.input
+    env.build?.rolldownOptions?.input ||
+    env.build?.rollupOptions?.input ||
+    env.build?.input ||
+    env.input
   );
-}
+};
 
 /** Vite client input: rolldown/rollup `input`, else `path.resolve(root, "index.html")`. */
-function hasHtmlEntry(root: string, config?: unknown): boolean {
-  const cfg = config as HtmlEntryConfig | undefined;
+const hasHtmlEntry = function hasHtmlEntry(
+  root: string,
+  config?: HtmlEntryConfig
+): boolean {
   const explicit =
-    envInput(cfg?.environments?.["client"]) ||
-    envInput(cfg?.environments?.["web"]) ||
-    cfg?.build?.rolldownOptions?.input ||
-    cfg?.build?.rollupOptions?.input;
+    envInput(config?.environments?.["client"]) ||
+    envInput(config?.environments?.["web"]) ||
+    config?.build?.rolldownOptions?.input ||
+    config?.build?.rollupOptions?.input;
   const entries = flattenInput(explicit || path.resolve(root, "index.html"));
   return entries.some((entry) => {
     const file = path.resolve(root, entry);
     return file.endsWith(".html") && fs.existsSync(file);
   });
-}
+};
 
-function resolveActions(raw: OxidejsActions | undefined): {
-  transport: OxidejsActionTransport;
+interface ResolvedActions {
   path: string;
   sameOrigin: boolean;
-} {
-  if (raw === undefined || typeof raw === "string") {
-    const transport = raw ?? "http";
-    if (transport !== "http" && transport !== "ws") {
-      throw new Error(`oxidejs: unknown actions transport "${String(transport)}"`);
-    }
-    return { transport, path: ACTION_PATH, sameOrigin: true };
+  transport: OxidejsActionTransport;
+}
+
+const resolveActions = function resolveActions(
+  raw: OxidejsActions | undefined
+): ResolvedActions {
+  if (raw === undefined) {
+    return { path: ACTION_PATH, sameOrigin: true, transport: "http" };
+  }
+  if (raw === "http" || raw === "ws") {
+    return { path: ACTION_PATH, sameOrigin: true, transport: raw };
+  }
+  if (Object.prototype.toString.call(raw) !== "[object Object]") {
+    throw new Error(`oxidejs: unknown actions transport "${String(raw)}"`);
   }
   const transport = raw.transport ?? "http";
   if (transport !== "http" && transport !== "ws") {
-    throw new Error(`oxidejs: unknown actions transport "${String(transport)}"`);
-  }
-  const path = raw.path ?? ACTION_PATH;
-  if (!path.startsWith("/") || path.includes("?")) {
     throw new Error(
-      `oxidejs: actions.path must start with "/" and contain no query string (got "${path}")`,
+      `oxidejs: unknown actions transport "${String(transport)}"`
     );
   }
-  return { transport, path, sameOrigin: raw.sameOrigin ?? true };
-}
+  const actionsPath = raw.path ?? ACTION_PATH;
+  if (!actionsPath.startsWith("/") || actionsPath.includes("?")) {
+    throw new Error(
+      `oxidejs: actions.path must start with "/" and contain no query string (got "${actionsPath}")`
+    );
+  }
+  return { path: actionsPath, sameOrigin: raw.sameOrigin ?? true, transport };
+};
 
-export function resolveOptions(
-  raw: OxidejsOptions | undefined,
-  root: string,
-  config?: unknown,
-): ResolvedOptions {
+const resolvePreset = function resolvePreset(
+  raw: OxidejsOptions | undefined
+): OxidejsPreset {
   const preset: OxidejsPreset = raw?.preset ?? "fetch";
   if (preset !== "fetch" && preset !== "celld") {
     throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
   }
+  return preset;
+};
+
+interface ResolvedPaths {
+  clientDir: string;
+  outDir: string;
+  rootAbs: string;
+  workerEntry: string;
+  workerEntryAbs: string;
+}
+
+const resolvePaths = function resolvePaths(
+  raw: OxidejsOptions | undefined,
+  root: string
+): ResolvedPaths {
+  const workerEntry = raw?.workerEntry ?? "src/server.ts";
+  const outDirInput = raw?.outDir ?? "dist";
+  const clientDir = raw?.clientDir ?? "client";
+  const rootAbs = path.resolve(root);
+  return {
+    clientDir,
+    outDir: path.resolve(rootAbs, outDirInput),
+    rootAbs,
+    workerEntry,
+    workerEntryAbs: path.resolve(rootAbs, workerEntry),
+  };
+};
+
+const resolveWrangler = function resolveWrangler(
+  raw: OxidejsOptions | undefined,
+  emitConfig: boolean
+): OxidejsWranglerOptions | undefined {
+  if (raw?.wrangler) {
+    validateWranglerOptions(raw.wrangler);
+  }
+  return emitConfig ? requireWranglerFields(raw?.wrangler) : raw?.wrangler;
+};
+
+const assertClientDir = function assertClientDir(
+  outDir: string,
+  clientDir: string,
+  hasClient: boolean,
+  hasPublic: boolean
+): void {
+  if (hasClient || hasPublic) {
+    assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
+  }
+};
+
+export const resolveOptions = function resolveOptions(
+  raw: OxidejsOptions | undefined,
+  root: string,
+  config?: HtmlEntryConfig
+): ResolvedOptions {
+  const preset = resolvePreset(raw);
   const {
     transport: actions,
     path: actionPath,
     sameOrigin: actionSameOrigin,
   } = resolveActions(raw?.actions);
   if (actions === "ws" && preset === "celld") {
-    throw new Error('oxidejs: actions: "ws" is not supported with preset: "celld"');
+    throw new Error(
+      'oxidejs: actions: "ws" is not supported with preset: "celld"'
+    );
   }
-  const workerEntry = raw?.workerEntry ?? "src/server.ts";
-  const outDirInput = raw?.outDir ?? "dist";
-  const clientDir = raw?.clientDir ?? "client";
   const emitConfig = raw?.emitConfig ?? preset === "celld";
-
-  const rootAbs = path.resolve(root);
-  const outDir = path.resolve(rootAbs, outDirInput);
-  const workerEntryAbs = path.resolve(rootAbs, workerEntry);
+  const { clientDir, outDir, rootAbs, workerEntry, workerEntryAbs } =
+    resolvePaths(raw, root);
   const hasClient = hasHtmlEntry(rootAbs, config);
   const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
-
-  if (hasClient || hasPublic) assertContained(outDir, path.resolve(outDir, clientDir), "clientDir");
-
-  if (raw?.wrangler) {
-    // SAFETY: validateWranglerOptions only reads Object.keys; OxidejsWranglerOptions is a plain object.
-    validateWranglerOptions(raw.wrangler as unknown as Record<string, unknown>);
-  }
-
-  const wrangler = emitConfig ? requireWranglerFields(raw?.wrangler) : raw?.wrangler;
+  assertClientDir(outDir, clientDir, hasClient, hasPublic);
+  const wrangler = resolveWrangler(raw, emitConfig);
 
   return {
-    root: rootAbs,
-    preset,
-    workerEntry,
-    workerEntryAbs,
-    outDir,
-    clientDir,
-    wrangler,
-    emitConfig,
-    hasClient,
-    hasPublic,
-    actions,
+    actionHeaders: raw?.actionHeaders,
     actionPath,
     actionSameOrigin,
-    actionHeaders: raw?.actionHeaders,
-    middleware: raw?.middleware ?? [],
-    imports: raw?.imports ?? [],
-    bodyLimit: raw?.bodyLimit ?? 1048576,
-    notFound: raw?.notFound,
+    actions,
+    bodyLimit: raw?.bodyLimit ?? 1_048_576,
+    clientDir,
+    emitConfig,
     env: raw?.env,
+    hasClient,
+    hasPublic,
+    imports: raw?.imports ?? [],
+    middleware: raw?.middleware ?? [],
+    notFound: raw?.notFound,
+    outDir,
+    preset,
+    root: rootAbs,
+    workerEntry,
+    workerEntryAbs,
+    wrangler,
   };
-}
+};
 
-export function copyPublicDir(opts: ResolvedOptions): void {
-  if (opts.preset !== "fetch") return;
+export const copyPublicDir = function copyPublicDir(
+  opts: ResolvedOptions
+): void {
+  if (opts.preset !== "fetch") {
+    return;
+  }
   const src = path.join(opts.root, "public");
-  if (!fs.existsSync(src)) return;
-  fs.cpSync(src, path.join(opts.outDir, opts.clientDir), { recursive: true, force: true });
+  if (!fs.existsSync(src)) {
+    return;
+  }
+  fs.cpSync(src, path.join(opts.outDir, opts.clientDir), {
+    force: true,
+    recursive: true,
+  });
+};
+
+interface EmittedWranglerConfig {
+  assets?: { binding: string; directory: string };
+  compatibility_date: string;
+  compatibility_flags: string[];
+  durable_objects?: OxidejsWranglerOptions["durable_objects"];
+  main: string;
+  migrations?: OxidejsWranglerOptions["migrations"];
+  name: string;
+  services?: OxidejsWranglerOptions["services"];
+  vars?: OxidejsWranglerOptions["vars"];
 }
 
-export function tryEmitWranglerConfig(opts: ResolvedOptions, state: EmitState): void {
-  if (state.emitted || opts.emitConfig === false) return;
+export const tryEmitWranglerConfig = function tryEmitWranglerConfig(
+  opts: ResolvedOptions,
+  state: EmitState
+): void {
+  if (state.emitted || opts.emitConfig === false) {
+    return;
+  }
 
   const wrangler = requireWranglerFields(opts.wrangler);
   const serverFile = path.join(opts.outDir, "server.js");
   const clientDirPath = path.join(opts.outDir, opts.clientDir);
 
-  if (!fs.existsSync(serverFile)) return;
-  if (opts.hasClient && !fs.existsSync(clientDirPath)) return;
+  if (!fs.existsSync(serverFile)) {
+    return;
+  }
+  if (opts.hasClient && !fs.existsSync(clientDirPath)) {
+    return;
+  }
 
   assertContained(opts.outDir, serverFile, "main");
-  if (opts.hasClient) assertContained(opts.outDir, clientDirPath, "assets.directory");
+  if (opts.hasClient) {
+    assertContained(opts.outDir, clientDirPath, "assets.directory");
+  }
 
-  const config = {
-    name: wrangler.name,
-    main: "./server.js",
+  const config: EmittedWranglerConfig = {
     compatibility_date: wrangler.compatibility_date,
-    compatibility_flags: [...new Set([...(wrangler.compatibility_flags ?? []), "nodejs_compat"])],
-    ...(wrangler.durable_objects ? { durable_objects: wrangler.durable_objects } : {}),
-    ...(wrangler.migrations ? { migrations: wrangler.migrations } : {}),
-    ...(wrangler.services ? { services: wrangler.services } : {}),
-    ...(wrangler.vars ? { vars: wrangler.vars } : {}),
-    ...(opts.hasClient ? { assets: { directory: `./${opts.clientDir}`, binding: "ASSETS" } } : {}),
+    compatibility_flags: [
+      ...new Set([...(wrangler.compatibility_flags ?? []), "nodejs_compat"]),
+    ],
+    main: "./server.js",
+    name: wrangler.name,
   };
+  if (wrangler.durable_objects) {
+    config.durable_objects = wrangler.durable_objects;
+  }
+  if (wrangler.migrations) {
+    config.migrations = wrangler.migrations;
+  }
+  if (wrangler.services) {
+    config.services = wrangler.services;
+  }
+  if (wrangler.vars) {
+    config.vars = wrangler.vars;
+  }
+  if (opts.hasClient) {
+    config.assets = { binding: "ASSETS", directory: `./${opts.clientDir}` };
+  }
 
   fs.writeFileSync(
     path.join(opts.outDir, "wrangler.jsonc"),
-    `${JSON.stringify(config, null, 2)}\n`,
+    `${JSON.stringify(config, null, 2)}\n`
   );
   state.emitted = true;
-}
+};
