@@ -2,32 +2,33 @@
 title: Overview
 sidebar:
   icon: layout-dashboard
-description: One plugin, one build - a server bundle, and a client only if you have a page to ship.
+description: One Vite or Rsbuild plugin. One build. A server bundle — and a client only if you ship a page.
 ---
 
-Use the bundler you already have. `oxidejs` turns it into a server, and a client if you have a page. Server actions ride on Effect RPC built into the plugin.
+Oxide is the backend unframework. You keep Vite or Rsbuild. The plugin emits a deployable tree: `dist/server.js`, plus `dist/client/` when you have `index.html`. Server actions are Effect RPC with the same TypeScript types on both sides. The function body never enters the client bundle.
 
-## Choosing a stack
+## When to use it
 
-Choose `oxidejs` when you want a deployable tree from [Vite](https://vite.dev/) or [Rsbuild](https://rsbuild.rs/). Stay on a full framework if you need routing, server-rendered pages, or a component model.
+Use Oxide when you want a small typed full-stack app: a server entry, optional static UI, and `*.server.ts` actions. Stay on a full framework if you need file-based routing, a component SSR model, or a large app shell.
 
-- Choose `oxidejs` if you want one plugin that builds the server and the client.
-- Stay on a framework if you need more than a server entry and actions.
+- Use Oxide for one plugin, one output tree, and typed RPC without a second API layer.
+- Use a framework when you need more than a server entry and actions.
 
 ## What you get
 
-- **One output tree** - a server bundle, plus a client when you have a page.
-- **Server actions** - wrap exports in [`action()`](/oxide/server-actions) and call them from the browser over Effect RPC. Types stay in sync. The function never ships to the client. Stream with `async function*` (newline-delimited JSON-RPC). Call [`useRequest()`](/oxide/server-actions#userequest) for the inbound `Request`, [`useCtx()`](/oxide/server-actions#usectx) for request context, [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx) on celld.
-- **Two [presets](/oxide/configuration#preset)** - fetch serves static files from Node. celld writes a config for celld, a self-hosted alternative to Cloudflare Workers.
-- **[Vite](https://vite.dev/) and [Rsbuild](https://rsbuild.rs/)** - same plugin, same output.
+- **One output tree** — `dist/server.js`, and a client only when you have a page.
+- **Server actions** — `export const x = action(...)` in `*.server.ts`. Import `x` from the browser; Oxide swaps in an Effect RPC stub. Types stay shared. Secrets and helpers that are not wrapped in `action()` never cross the wire. See [Server actions](/oxide/server-actions).
+- **Streams and live data** — `async function*` over newline-delimited JSON-RPC; `liveQuery` for topic snapshots on WebSocket.
+- **Two presets** — [`fetch`](/oxide/configuration#preset) serves assets from Node. [`celld`](/oxide/configuration#preset) writes worker config for celld (a self-hosted Workers alternative).
+- **Vite and Rsbuild** — same options, same layout.
 
-You can call actions from the browser, or skip the client and ship a server-only worker.
+You can ship a server-only worker (no `index.html`) or a UI that calls actions with no hand-written `/api` routes.
 
 ## What it does not do
 
-- No local Worker emulation
+- No local Worker / workerd emulation
 - No automatic celld deploy
-- No Node-builtin polyfills - a stray Node import fails the build
+- No Node-builtin polyfills — a stray Node import fails the build
 
 ## Next steps
 

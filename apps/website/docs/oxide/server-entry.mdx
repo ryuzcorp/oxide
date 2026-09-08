@@ -2,12 +2,12 @@
 title: Server Entry
 sidebar:
   icon: server
-description: Handle a request in your server entry, or skip it and let static files take over.
+description: Own the routes you care about. Return nothing and Oxide serves static files (and SPA navigations).
 ---
 
-Every request hits this file first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` that takes the request and returns a response — either as a named export or on the default export. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx` — the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
+Every request hits your server entry first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` — named or on the default export. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx`, the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
 
-Type `fetch` with [`FetchHandler`](#fetchhandler):
+Type it with [`FetchHandler`](#fetchhandler):
 
 ```ts twoslash src/server.ts
 import type { FetchHandler } from "oxidejs";
@@ -23,42 +23,41 @@ export const fetch = ((request, _env, ctx) => {
 }) satisfies FetchHandler<Env>;
 ```
 
-`export default { fetch }` works the same way when you prefer an object entry (or need to put `scheduled` / `queue` on the default for celld). If both a default `fetch` and a named `fetch` exist, the default wins.
+Bare `return` (or `undefined`) means fall through. With a page in the project, Oxide tries a matching static file, then `index.html` for navigations (`Sec-Fetch-Dest: document` or `Accept: text/html`). A fetch for `/missing.js` stays `404` — not a silent SPA rewrite.
 
-If `fetch` returns nothing, `oxidejs` keeps going. With a page in the project, that means a matching static file. Missing files fall back to `index.html` only for navigations (`Sec-Fetch-Dest: document` or `Accept: text/html`). A fetch for `/missing.js` is still `404`.
+`export default { fetch }` works when you prefer an object entry (or need `scheduled` / `queue` on the default for celld). If both a default `fetch` and a named `fetch` exist, the default wins.
 
-`public/` is copied next to the client on [`preset: "fetch"`](/oxide/configuration#preset). Hashed assets get `Cache-Control: immutable` plus an `ETag`, and answer `304 Not Modified` on a matching `If-None-Match`. `index.html` is `no-cache`. Without a page, the build is only the server bundle - there is nothing to fall through to.
+On [`preset: "fetch"`](/oxide/configuration#preset), `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable` and `ETag` / `304`. `index.html` is `no-cache`. Without a page, the build is only the server bundle — there is nothing to fall through to.
 
-Named exports such as `scheduled` and `queue` are re-exported from the wrapper (`export *`). Put them on `export default { … }` as well when the host only reads the default export.
+Named exports such as `scheduled` and `queue` are re-exported (`export *`). Put them on `export default { … }` as well when the host only reads the default.
 
-On the Node preset the generated server also handles `SIGTERM`/`SIGINT`: it stops accepting connections and exits once in-flight requests drain (forced after 5 seconds).
+On the Node preset the generated server handles `SIGTERM` / `SIGINT`: stop accepting connections, drain in-flight requests, force exit after 5 seconds.
 
 ## `FetchHandler`
 
-```ts
-type FetchHandler<Env extends object = { [key: string]: OxidejsJson }> =
-  (
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext
-  ) => FetchResult | Promise<FetchResult>;
+```ts twoslash
+import type { FetchHandler } from "oxidejs";
+
+// request, env, ctx — return Response, or fall through with bare `return`
+declare const fetch: FetchHandler<{ SECRET?: string }>;
 ```
 
 `Env` defaults to a JSON-compatible binding bag. Pass your Worker / [`env`](/oxide/configuration#env) shape as the type argument. The wrapper always supplies `env` and `ctx`.
 
-Prefer `satisfies FetchHandler<Env>` on the function so `request`, `env`, and `ctx` pick up types without annotations. `const fetch: FetchHandler<Env> = …` works the same way. Under `noImplicitReturns`, use a bare `return` when you want to fall through.
+Prefer `satisfies FetchHandler<Env>` so parameters pick up types without annotations. Under `noImplicitReturns`, use a bare `return` when you want fallthrough.
 
 ## `ServerEntry`
 
-```ts
-interface ServerEntry<
-  Env extends object = { [key: string]: OxidejsJson },
-> {
-  fetch: FetchHandler<Env>;
-}
+```ts twoslash
+import type { FetchHandler, ServerEntry } from "oxidejs";
+
+type Env = { SECRET?: string };
+
+declare const fetch: FetchHandler<Env>;
+declare const entry: ServerEntry<Env>;
 ```
 
-When you use the object form:
+Object form:
 
 ```ts twoslash
 import type { FetchHandler, ServerEntry } from "oxidejs";

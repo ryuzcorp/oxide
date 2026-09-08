@@ -6,6 +6,7 @@ out
 dist
 *.tgz
 .ilha
+.celld
 
 # code coverage
 coverage

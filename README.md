@@ -48,7 +48,7 @@ It guides you. It doesn't frame you.
 | --- | --- |
 | [oxidejs](packages/oxidejs) | Turns Vite or Rsbuild into a backend. One plugin, one folder to deploy. |
 
-Server actions ride [Effect](https://effect.website) RPC (`application/json-rpc`). The `templates/simple` and `templates/tasks` apps show fetch and celld deployments.
+Server actions ride [Effect](https://effect.website) RPC (`application/json-rpc`). The `templates/simple` and `templates/kit` apps show fetch and celld deployments.
 
 [Docs](https://oxide.build) · [oxidejs](packages/oxidejs)
 

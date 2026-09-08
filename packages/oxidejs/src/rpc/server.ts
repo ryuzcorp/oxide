@@ -15,6 +15,8 @@ import {
   scrubRpcJson,
 } from "./scrub";
 
+export const IDEMPOTENCY_HEADER = "x-oxide-idempotency-key";
+
 export interface ActionHandlerOptions {
   createContext?: (req: Request) => ActionContext | Promise<ActionContext>;
   path?: string;
@@ -27,6 +29,52 @@ const JSON_RPC_FORBIDDEN = {
   id: null,
   jsonrpc: "2.0",
 } as const;
+
+const extractIdempotencyKey = function extractIdempotencyKey(
+  rawBody: Uint8Array,
+  headers: Headers
+) {
+  const fromHeader = headers.get(IDEMPOTENCY_HEADER);
+  if (fromHeader) {
+    return fromHeader;
+  }
+  const text = new TextDecoder().decode(rawBody);
+  const [line] = text.split("\n");
+  if (!line) {
+    // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+    return undefined;
+  }
+  try {
+    // SAFETY: JSON-RPC frames are JSON objects; headers are Effect's tuple list or a map.
+    const msg = JSON.parse(line) as {
+      headers?: [string, string][] | { [key: string]: string };
+    };
+    if (!msg.headers) {
+      return;
+    }
+    if (Array.isArray(msg.headers)) {
+      for (const entry of msg.headers) {
+        if (
+          Array.isArray(entry) &&
+          String(entry[0]).toLowerCase() === IDEMPOTENCY_HEADER
+        ) {
+          return String(entry[1]);
+        }
+      }
+      // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(msg.headers)) {
+      if (key.toLowerCase() === IDEMPOTENCY_HEADER) {
+        return value;
+      }
+    }
+  } catch {
+    // Body is not JSON yet — Effect will surface the parse error.
+  }
+  // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+  return undefined;
+};
 
 interface HandlerBundle {
   dispose: () => Promise<void>;
@@ -184,7 +232,13 @@ export const createActionHandler = function createActionHandler(
         signal: request.signal,
       });
 
-      const extra = (await options.createContext?.(forwarded)) ?? {};
+      // Host stamps env on the inbound Request; `forwarded` is a clone without it.
+      const hostExtra = (await options.createContext?.(request)) ?? {};
+      const idempotencyKey = extractIdempotencyKey(rawBody, request.headers);
+      const extra: Partial<ActionContext> = { ...hostExtra };
+      if (idempotencyKey) {
+        extra.idempotencyKey = idempotencyKey;
+      }
       const { handler } = bundleFor(group, handlers, path, transport);
       const response = await runWithRequest(
         forwarded,

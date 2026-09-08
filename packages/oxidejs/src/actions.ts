@@ -30,7 +30,7 @@ const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 const EXPORT_RE =
   /^\s*export\s+const\s+(?<exportName>[A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?action\s*\(/gmu;
 const STREAM_EXPORT_RE =
-  /^\s*export\s+const\s+(?<exportName>[A-Za-z_$][\w$]*)\s*=\s*action\s*\(\s*async\s+function\s*\*/gmu;
+  /^\s*export\s+const\s+(?<exportName>[A-Za-z_$][\w$]*)\s*=\s*action\s*\(\s*(?:async\s+function\s*\*|[\w$.]+\.subscribe\s*\(|[\s\S]*?\bStream\.)/gmu;
 
 export interface ServerModule {
   abs: string;
@@ -210,8 +210,17 @@ export const generateClientStub = function generateClientStub(
     const call = `client[${JSON.stringify(mod.key)}][${JSON.stringify(name)}]`;
     const peel = `(...args) => {
   const opts = args.at(-1);
-  // ponytail: peel last { signal } only. A lone payload { signal: AbortSignal } is treated as CallOptions.
-  return opts && typeof opts === "object" && opts.signal instanceof AbortSignal && Object.keys(opts).length === 1
+  // ponytail: peel trailing CallOptions ({ signal } and/or { idempotencyKey }).
+  const isOpts = opts && typeof opts === "object" && !Array.isArray(opts) &&
+    (() => {
+      const keys = Object.keys(opts);
+      if (keys.length === 0 || keys.length > 2) return false;
+      for (const key of keys) if (key !== "signal" && key !== "idempotencyKey") return false;
+      if ("signal" in opts && !(opts.signal instanceof AbortSignal)) return false;
+      if ("idempotencyKey" in opts && opts.idempotencyKey !== undefined && typeof opts.idempotencyKey !== "string") return false;
+      return "signal" in opts || "idempotencyKey" in opts;
+    })();
+  return isOpts
     ? ${call}(...args.slice(0, -1), opts)
     : ${call}(...args);
 }`;
@@ -256,24 +265,13 @@ export const generateActionsModule = function generateActionsModule(
   opts?: { bust?: boolean }
 ): string {
   const lines = [
-    `import { Effect } from "effect";`,
     `import { Schema } from "effect";`,
     `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
-    `import { getRequestStore, withRequestStore } from "oxidejs";`,
-    `import { asyncGenToStreamInContext } from "oxidejs/rpc";`,
-    // Capture the store before Effect.promise: WebContainer ALS does not survive awaits.
-    `const __run = (fn) => {`,
-    `  const __s = getRequestStore();`,
-    `  return Effect.promise(() => withRequestStore(__s, fn)).pipe(`,
-    `    Effect.map((value) => {`,
-    `      if (value instanceof Response) {`,
-    `        console.error("oxidejs: action() returned a Response; actions must return serializable data. Return a Response from src/server.ts for raw HTTP responses.");`,
-    `        throw new Error("action() returned a Response; return it from src/server.ts instead");`,
-    `      }`,
-    `      return value === undefined ? null : value;`,
-    `    }),`,
-    `  );`,
-    `};`,
+    `import { ACTION_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream } from "oxidejs";`,
+    `const __meta = (fn) => (fn && fn[ACTION_META]) || {};`,
+    `const __payload = (meta) => meta.payload`,
+    `  ? Schema.Struct({ args: Schema.Tuple([meta.payload]) })`,
+    `  : Schema.Struct({ args: Schema.Array(Schema.Unknown) });`,
     `const __withStore = (store, fn) => withRequestStore(store, fn);`,
   ];
   const rpcNames: string[] = [];
@@ -288,25 +286,36 @@ export const generateActionsModule = function generateActionsModule(
       const rpc = `__rpc_${i}_${name}`;
       rpcNames.push(rpc);
       const tag = `${mod.key}.${name}`;
-      const stream = mod.streams?.includes(name) ?? false;
+      const scannedStream = mod.streams?.includes(name) ?? false;
       lines.push(
-        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown${stream ? ", stream: true" : ""} });`
+        `const __meta_${i}_${name} = __meta(${alias}[${JSON.stringify(name)}]);`,
+        `const __stream_${i}_${name} = Boolean(__meta_${i}_${name}.stream) || ${scannedStream};`,
+        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, {`,
+        `  payload: __payload(__meta_${i}_${name}),`,
+        `  success: __meta_${i}_${name}.success ?? Schema.Unknown,`,
+        `  error: __meta_${i}_${name}.error ?? Schema.Never,`,
+        `  ...(__stream_${i}_${name} ? { stream: true } : {}),`,
+        `});`
       );
     }
-    return { alias, mod };
+    return { alias, i, mod };
   });
   lines.push(
     `export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`,
     `export const actionsHandlers = actionsGroup.toLayer({`
   );
-  for (const { alias, mod } of aliases) {
+  for (const { alias, i, mod } of aliases) {
     for (const name of mod.exports) {
       const tag = `${mod.key}.${name}`;
-      const stream = mod.streams?.includes(name) ?? false;
       lines.push(
-        stream
-          ? `  ${JSON.stringify(tag)}: ({ args }) => { const __s = getRequestStore(); return asyncGenToStreamInContext(() => ${alias}[${JSON.stringify(name)}].apply(null, args), (fn) => __withStore(__s, fn)); },`
-          : `  ${JSON.stringify(tag)}: ({ args }) => __run(() => ${alias}[${JSON.stringify(name)}].apply(null, args)),`
+        `  ${JSON.stringify(tag)}: ({ args }) => {`,
+        `    const __s = getRequestStore();`,
+        `    const __fn = () => ${alias}[${JSON.stringify(name)}].apply(null, args);`,
+        `    if (__stream_${i}_${name}) {`,
+        `      return actionResultToStream(${JSON.stringify(tag)}, __s, __fn, (fn) => __withStore(__s, fn));`,
+        `    }`,
+        `    return runActionInContext(${JSON.stringify(tag)}, __s, () => __withStore(__s, __fn));`,
+        `  },`
       );
     }
   }
@@ -546,9 +555,22 @@ const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringi
   }
   return `import { createActionHandler } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __fetch = Symbol.for("oxidejs.fetch");
 const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}, createContext: (req) => req[__fetch] ?? {} });
 `;
+};
+
+const buildWsUpgradeGate = function buildWsUpgradeGate(
+  hasActions: boolean,
+  ws: boolean
+): string {
+  if (!(hasActions && ws)) {
+    return "";
+  }
+  return `if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      const hit = __ws.handleUpgrade(request, request[__fetch] ?? {});
+      if (hit) return hit;
+    }
+    `;
 };
 
 const normalizeMiddlewareEntries = function normalizeMiddlewareEntries(
@@ -653,6 +675,7 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
   );
   const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
   const actionGate = buildActionGate(hasActions, ws);
+  const wsUpgradeGate = buildWsUpgradeGate(hasActions, ws);
   const mwEntries = normalizeMiddlewareEntries(opts.middleware ?? []);
   const middlewareImports = buildMiddlewareImports(mwEntries);
   const middlewareGate = buildMiddlewareGate(opts.middleware);
@@ -669,11 +692,12 @@ const __userFetch =
     : typeof __userMod.fetch === "function"
       ? __userMod.fetch
       : undefined;
+const __fetch = Symbol.for("oxidejs.fetch");
 ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
   ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
-    ${middlewareGate}${actionGate}${afterAction}
+    ${middlewareGate}${wsUpgradeGate}${actionGate}${afterAction}
   },
 };
 export default app;

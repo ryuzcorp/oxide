@@ -2,71 +2,80 @@
 title: Server Actions
 sidebar:
   icon: zap
-description: Run a marked function on the server and call it from browser code with the same TypeScript types.
+description: Import a server function from the browser. Same TypeScript types. The implementation never ships to the client.
 ---
 
-A server action is a function that runs on your server but can be imported and called from browser code. Oxide turns that browser import into Effect RPC over HTTP (or WebSocket). The function body and its server-only imports never enter the client bundle.
+Write the function once in `*.server.ts`. Import it from the browser. Oxide turns that import into Effect RPC (HTTP or WebSocket). The module body, database clients, and unmarked helpers stay on the server — they never enter the client graph.
 
-## Create your first action
+## Create an action
 
-Put server-only code in a file named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx`. Wrap every remotely callable export in `action()`:
+Name the file `*.server.ts` (or `.tsx` / `.js` / `.jsx`). Wrap every remotely callable export in `action()`:
 
-```ts twoslash src/test.server.ts
+```ts twoslash src/greet.server.ts
 import { action } from "oxidejs";
 
-export const ping = action(async () => {
-  return "pong" as const;
+export const greet = action(async (name: string) => {
+  return { message: `hello, ${name}` };
 });
 ```
 
-Then import and call it from client code:
+Call it from the client with the **same import path**. Types flow from the server module; the runtime call is RPC:
 
 ```ts twoslash src/client.ts
-// @filename: test.server.ts
+// @filename: greet.server.ts
 import { action } from "oxidejs";
-export const ping = action(async () => "pong" as const);
+export const greet = action(async (name: string) => {
+  return { message: `hello, ${name}` };
+});
 // ---cut---
 // @filename: client.ts
-import { ping } from "./test.server";
+import { greet } from "./greet.server";
 
-const result = await ping(); // "pong"
+const { message } = await greet("Ryuz");
 ```
 
-Oxide replaces that client import with an RPC stub. By default, the stub sends a POST request to `/__oxide/action`. The remote method name is `<file>.<export>`; the example above calls `test.ping`.
+By default the stub POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The method name is `<file>.<export>` — here `greet.greet`.
 
-## What is exposed?
+## Only `action()` is public
 
-Only exports written as `export const name = action(...)` become RPC methods. Other values and helpers stay server-only:
+Exports that are not wrapped stay server-local. Secrets and helpers are not callable over the wire:
 
 ```ts twoslash src/users.server.ts
 import { action } from "oxidejs";
 
-const normalizeName = (name: string) => name.trim();
+declare const API_KEY: string;
+
+const normalize = (name: string) => name.trim();
 
 export const saveName = action(async (name: string) => {
-  return normalizeName(name);
+  // API_KEY and normalize never appear in the client stub
+  void API_KEY;
+  return normalize(name);
 });
 
-export const serverOnlyLabel = "not remotely callable";
+export const internalLabel = "not an RPC method";
 ```
 
-This explicit marker prevents an exported helper from accidentally becoming a public endpoint. `action()` does not validate input or authorize users. Treat action arguments as untrusted data, validate them, and check the current user before reading or changing private data.
+`action()` does not validate input or authorize users by itself. Treat arguments as untrusted — use [`withSchema`](#validate-input-with-effect-schema) and check the current user before reading or changing private data.
 
 ## Call shape on the client
 
-Unary actions are Promise-returning handles with helpers for UI wiring:
+Unary actions return a Promise and expose helpers for UI wiring:
 
 | Call | What it does |
 | --- | --- |
-| `await ping()` | Run the action (always invokes RPC on client) |
-| `ping.set(...args)` | Same as calling with args; also writes the atom |
-| `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action |
-| `ping.result` | Read the last `AsyncResult` from the client atom |
+| `await greet(name)` | Run the action (always invokes RPC on the client) |
+| `greet.set(...args)` | Same as calling with args; also writes the atom |
+| `greet.bind(...args)` / `greet.with(...args)` | Return an event handler that invokes the action |
+| `greet.result` | Read the last `AsyncResult` from the client atom |
 
 ```ts twoslash src/bind.ts
 // @filename: tasks.server.ts
 import { action } from "oxidejs";
-export const toggle = action(async (id: string) => id);
+export const toggle = action(async (id: string) => ({
+  id,
+  done: true,
+}));
 // ---cut---
 // @filename: bind.ts
 import { toggle } from "./tasks.server";
@@ -76,9 +85,72 @@ document.querySelector("button")!.onclick = toggle.bind("task-1");
 
 Stream actions do not support `bind` / `with`. On the client they resolve to an async generator — `await` first, then `for await`.
 
-## Reuse authorization and context
+## Validate input with Effect Schema
 
-Use a higher-order function for action middleware. Keep `action()` as the outer call so Oxide recognizes the export:
+Invalid payloads become JSON-RPC **Invalid params** (`-32602`) over `/__oxide/action`, with the Schema message when Effect surfaces it — not a silent bad row in your database:
+
+```ts twoslash src/add.server.ts
+import { Schema } from "effect";
+import { action, withSchema } from "oxidejs";
+
+const AddTask = Schema.Struct({
+  text: Schema.String,
+});
+
+export const add = action(
+  withSchema(AddTask, async (payload) => {
+    // payload.text is string — Encoded was checked on the wire
+    return { id: crypto.randomUUID(), text: payload.text };
+  })
+);
+```
+
+`withSchema` is sugar for `action(handler, { payload })` plus a local decode for direct server calls. Prefer one Struct payload over many positional args — it matches Effect Rpc and stays easy to evolve. Schemas that need decoding services are not supported yet.
+
+### Typed Fail on the wire
+
+Pass an `error` schema (`Schema.TaggedError`) so Fail values encode for the client instead of scrubbing to a generic Internal error:
+
+```ts twoslash src/get-task.server.ts
+import { Effect, Schema } from "effect";
+import { action } from "oxidejs";
+
+class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
+  id: Schema.String,
+}) {}
+
+export const getTask = action(
+  (id: string) =>
+    Effect.gen(function* () {
+      return yield* Effect.fail(new NotFound({ id }));
+    }),
+  { error: NotFound }
+);
+```
+
+Clients see application error `-32000` with the tag/message. Returning `new NotFound(...)` as a **value** stays local (`T | Error`); it does not auto-promote over RPC — `Effect.fail` or throw the tagged error.
+
+### Effect handlers and services
+
+`action()` accepts Promise, `async function*`, `Effect`, and (with `{ stream: true }`) Effect `Stream`. Promise handlers stay the default. Effect handlers can yield `OxideRequest` / `OxideCtx` — the same data as `useRequest()` / `useCtx()`:
+
+```ts twoslash src/who-effect.server.ts
+import { Effect } from "effect";
+import { action, OxideRequest } from "oxidejs";
+
+export const who = action(() =>
+  Effect.gen(function* () {
+    const req = yield* OxideRequest;
+    return req.headers.get("x-user");
+  })
+);
+```
+
+Handlers run under an `oxidejs.action` span annotated with `rpc.method`. Provide an Effect tracer/logger at the host if you want spans collected.
+
+## Authorization without leaking `user` to the client
+
+Keep auth on the server. The client calls `profile()` with no user argument — your wrapper loads the session and passes `user` only into the handler:
 
 ```ts twoslash src/profile.server.ts
 // @filename: db.ts
@@ -122,11 +194,7 @@ function withUser<Args extends unknown[], Result>(
 export const profile = action(
   withUser((user) => db.profiles.find(user.id))
 );
-```
 
-The client calls `profile()` without supplying `user`. The wrapper reads the request, loads the user, and passes it only to the server handler. Other handler arguments remain typed client input:
-
-```ts
 export const update = action(
   withUser((user, name: string) =>
     db.profiles.update(user.id, { name })
@@ -134,11 +202,11 @@ export const update = action(
 );
 ```
 
-Keep authorization wrappers server-only. Throw for intentional failures; do not return authentication tokens, database credentials, or other secrets.
+Client input stays typed (`name: string` on `update`). Session and DB access stay off the wire. Do not return tokens or credentials from an action.
 
 ## Stream values
 
-Wrap an `async function*` in `action()` to stream over Effect RPC as **newline-delimited JSON-RPC** (not Server-Sent Events). The response is `application/json-rpc` with one JSON object per line — chunk frames as the generator yields, then a final result. Scrubbing runs per frame so clients see early chunks without waiting for the generator to finish.
+Wrap an `async function*` in `action()` to stream over Effect RPC as **newline-delimited JSON-RPC** (not SSE). Frames scrub as they flush — clients see early chunks without waiting for the generator to finish:
 
 ```ts twoslash src/ticks.server.ts
 import { action } from "oxidejs";
@@ -158,16 +226,41 @@ export const ticks = action(async function* (count: number) {
 // @filename: client-stream.ts
 import { ticks } from "./ticks.server";
 
-for await (const value of await ticks(3)) console.log(value);
+for await (const value of await ticks(3)) {
+  console.log(value);
+}
 ```
 
-On the server, `ticks(3)` returns an async generator directly. On the client, await the call first — the stub resolves to the generator, then you iterate it.
+On the server, `ticks(3)` is an async generator. On the client, `await` the call first, then iterate. Breaking the loop (or `return()`) cleans up the server generator. Over HTTP, Oxide does not reconnect a dropped stream. With `transport: "ws"`, transient closes retry; abort via `{ signal }` does not.
 
-Breaking the `for await` loop or calling `return()` on the generator cleans up the server generator. Oxide does not reconnect a dropped stream automatically because repeating the POST could run action side effects twice.
+## Live queries
+
+Push successive snapshots for one topic: subscribe is the query, mutate/publish is the write. The hub is isolate-local Effect PubSub — your database remains the source of truth:
+
+```ts twoslash src/tasks.server.ts
+import { action, liveQuery } from "oxidejs";
+
+type Task = { id: string; text: string };
+
+const tasks = liveQuery<Task[]>({ topic: "tasks" });
+
+export const list = action(
+  tasks.subscribe(async () => {
+    // Capture request-scoped handles before the first await on Workers.
+    await tasks.mutate(async () => [] as Task[]);
+  })
+);
+
+export const add = action(async (text: string) => {
+  await tasks.mutate(async () => [{ id: crypto.randomUUID(), text }]);
+});
+```
+
+Under SSR, `*.server.ts` keeps the real generator (no WebSocket) so you can take the first snapshot for first paint. On the client, the same import resumes over `actions: "ws"`. Transient socket errors retry inside the stream client.
 
 ## Cancel a call
 
-Pass `{ signal }` as the final argument. `action()` adds that transport-only argument to the function type. Inside server code, always read the non-optional signal from `useRequest().signal`:
+Pass `{ signal }` and optional `{ idempotencyKey }` as the final `CallOptions` argument. Inside the action, read the non-optional signal from `useRequest().signal`:
 
 ```ts twoslash src/abort.ts
 // @filename: test.server.ts
@@ -189,13 +282,36 @@ controller.abort();
 void stream;
 ```
 
-Inside the action, `useRequest().signal` follows the same abort.
+`idempotencyKey` is sent as `x-oxide-idempotency-key` and available via `useIdempotencyKey()`. Pair with durable dedupe (for example paranorm `once()`) when the mutation queue replays.
 
-## Read request context
+## Mutation queue (client)
+
+Optional write queue for `transport: "ws"`. Transient socket failures enqueue; `flush` (and `online`) drain FIFO. The same `action()` types — no second client API:
+
+```ts twoslash src/queue.ts
+// @filename: tasks.server.ts
+import { action } from "oxidejs";
+export const add = action(async (text: string) => ({ id: "1", text }));
+// ---cut---
+// @filename: queue.ts
+import { createMutationQueue } from "oxidejs/mutation-queue";
+import { add } from "./tasks.server";
+
+const queue = createMutationQueue();
+const addQueued = queue.wrap(add, {
+  idempotencyKey: (text) => `add:${text}`,
+});
+
+await addQueued("Buy milk");
+```
+
+Optimistic UI is app-owned — listen with `queue.subscribe`. HTTP apps can ignore this module.
+
+## Request context
 
 ### `useRequest()`
 
-`useRequest()` returns the current server `Request` in actions, SSR, and frame renders. It throws outside request handling:
+The inbound `Request` in actions, SSR, and frame renders:
 
 ```ts twoslash src/who.server.ts
 import { action, useRequest } from "oxidejs";
@@ -207,7 +323,7 @@ export const who = action(async () => {
 
 ### `useCtx()`
 
-`useCtx()` returns request context: `{ req }` plus values your middleware or server entry added:
+`{ req }` plus fields your middleware stamped:
 
 ```ts twoslash src/me.server.ts
 import { action, useCtx } from "oxidejs";
@@ -217,9 +333,28 @@ export const me = action(async () => {
 });
 ```
 
+Stamp host bindings (D1, KV, …) before actions and WebSocket upgrade:
+
+```ts twoslash src/middleware/db.ts
+import { stampRequestContext } from "oxidejs";
+
+declare class D1Database {}
+
+export default function db(
+  request: Request,
+  { env }: { env?: { DB?: D1Database } }
+) {
+  if (env?.DB) {
+    stampRequestContext(request, { db: env.DB });
+  }
+}
+```
+
+Read them with `useCtx().db` (or a small `useDb()` helper).
+
 ### `useEnv()` and `useFetchCtx()`
 
-With [`preset: "celld"`](/oxide/configuration#preset), these return the Worker `env` and execution context from `fetch(request, env, ctx)`. They are `undefined` on the Node fetch preset unless you pass [`env`](/oxide/configuration#env).
+On [`preset: "celld"`](/oxide/configuration#preset), these are the Worker `env` and `ctx` from `fetch(request, env, ctx)`. On the Node fetch preset they are `undefined` unless you pass [`env`](/oxide/configuration#env):
 
 ```ts twoslash src/env.server.ts
 import { action, useEnv, useFetchCtx } from "oxidejs";
@@ -232,11 +367,11 @@ export const hasApi = action(async () => {
 });
 ```
 
-Do not return secrets from an action. Anything returned by an action is sent to the caller.
+Anything an action returns is sent to the caller — do not return secrets.
 
-## Change the transport or path
+## Transport and path
 
-HTTP is the default. The endpoint is `/__oxide/action`, and same-origin protection is on:
+HTTP is the default. Endpoint `/__oxide/action`, same-origin protection on:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -249,7 +384,7 @@ oxide({
 });
 ```
 
-Use `transport: "ws"` for WebSocket actions. Install `crossws`; WebSockets do not work with [`preset: "celld"`](/oxide/configuration#preset).
+Use `transport: "ws"` for live queries and the mutation queue. Node/`fetch` needs `crossws`; [`preset: "celld"`](/oxide/configuration#preset) uses `WebSocketPair`:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -259,6 +394,4 @@ oxide({
 });
 ```
 
-Set `sameOrigin: false` only when you intentionally accept calls from another origin and provide your own CORS, CSRF, and authentication rules.
-
-For static HTTP headers, use [`actionHeaders`](/oxide/configuration#actionheaders). Remember that values are shipped to the browser, so never place a private server secret there.
+Set `sameOrigin: false` only when you accept another origin and own CORS, CSRF, and authentication. For static client headers, see [`actionHeaders`](/oxide/configuration#actionheaders) — never put a private secret there.

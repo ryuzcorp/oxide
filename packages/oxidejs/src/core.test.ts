@@ -62,17 +62,33 @@ describe("resolveOptions", () => {
     expect(resolveOptions({}, root).hasPublic).toBe(true);
   });
 
-  test("rejects unknown actions transport and ws+celld", () => {
+  test("resolves relative middleware paths against project root", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    const resolved = resolveOptions(
+      { middleware: ["./src/middleware/db.ts", "@ilha/router/ssr"] },
+      root
+    );
+    expect(resolved.middleware).toEqual([
+      path.join(root, "src/middleware/db.ts"),
+      "@ilha/router/ssr",
+    ]);
+  });
+
+  test("rejects unknown actions transport", () => {
     // SAFETY: intentional invalid transport string to assert runtime rejection.
     expect(() =>
       resolveOptions({ actions: "ftp" as never }, process.cwd())
     ).toThrow("unknown actions transport");
-    expect(() =>
+  });
+
+  test("allows actions ws with preset celld", () => {
+    expect(
       resolveOptions(
         { actions: "ws", preset: "celld", wrangler },
         process.cwd()
-      )
-    ).toThrow('actions: "ws" is not supported with preset: "celld"');
+      ).actions
+    ).toBe("ws");
   });
 
   test("detects client when index.html exists", () => {
@@ -121,14 +137,14 @@ describe("resolveOptions", () => {
   test("rejects unknown wrangler keys", () => {
     expect(() =>
       resolveOptions(
-        // SAFETY: kv_namespaces is intentionally unsupported to assert key rejection.
+        // SAFETY: routes is intentionally unsupported to assert key rejection.
         {
           preset: "celld",
-          wrangler: { ...wrangler, kv_namespaces: [] } as never,
+          wrangler: { ...wrangler, routes: [] } as never,
         },
         process.cwd()
       )
-    ).toThrow("not supported by celld deploy: kv_namespaces");
+    ).toThrow("not supported by celld deploy: routes");
   });
 
   test("rejects user-supplied main and assets", () => {
@@ -174,6 +190,7 @@ interface EmittedWranglerJson {
   assets?: { binding: string; directory: string };
   compatibility_date: string;
   compatibility_flags: string[];
+  d1_databases?: OxidejsJson[];
   main: string;
   name: string;
   vars?: { [key: string]: OxidejsJson };
@@ -233,6 +250,13 @@ describe("tryEmitWranglerConfig", () => {
         wrangler: {
           ...wrangler,
           compatibility_flags: ["nodejs_compat"],
+          d1_databases: [
+            {
+              binding: "DB",
+              database_id: "00000000-0000-0000-0000-000000000000",
+              database_name: "kit",
+            },
+          ],
           vars: { FOO: "bar" },
         },
       },
@@ -255,6 +279,13 @@ describe("tryEmitWranglerConfig", () => {
       assets: { binding: "ASSETS", directory: "./client" },
       compatibility_date: "2026-01-01",
       compatibility_flags: ["nodejs_compat"],
+      d1_databases: [
+        {
+          binding: "DB",
+          database_id: "00000000-0000-0000-0000-000000000000",
+          database_name: "kit",
+        },
+      ],
       main: "./server.js",
       name: "vite-cf",
       vars: { FOO: "bar" },

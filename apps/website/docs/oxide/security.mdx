@@ -2,41 +2,40 @@
 title: Security
 sidebar:
   icon: shield
-description: What oxidejs guards by default in asset serving, server actions, and the dev server — and what stays your job.
+description: What Oxide guards by default in assets, actions, and the dev server — and what stays yours.
 ---
 
-oxidejs guards the build output, action transport, and dev server by default. Authentication, CORS, and rate limiting are still yours.
+Oxide hardens the build output, the action endpoint, and the dev server. Authentication, CORS beyond same-origin defaults, and rate limiting stay your job.
 
 ## Asset serving (`preset: "fetch"`)
 
-The generated server serves static files from `dist/client/` (or the `public/` directory merged into it). These guards are active:
+The generated server serves `dist/client/` (with `public/` merged in). These guards are on:
 
 | Attack vector | Guard |
 | --- | --- |
 | **Traversal** (`%2e%2e/`, `..%2f`) | `__rel()` rejects paths containing `..` segments. |
 | **Double-slash** (`///etc/passwd`) | `__rel()` rejects results that still start with `/` after `slice(1)`. |
-| **Null byte** (`%00`, `\0`) | `__rel()` rejects paths containing null bytes before and after `decodeURIComponent`. |
-| **Absolute path** (`/etc/passwd`) | `__rel()` strips the leading `/` (`etc/passwd`) and keeps serving relative to the asset root; containment is the `..` / double-slash checks, not rejecting `/`. |
-| **SPA fallback** | Unknown paths → `index.html`, never a directory listing. |
-| **`clientDir` escape** | `resolveOptions` throws at build time if `clientDir` resolves outside `outDir`. |
-| **Hashed assets** | Files matching `[-.][0-9a-f]{8,}.ext` get `Cache-Control: public, max-age=31536000, immutable`. Other files are not cached by default. |
+| **Null byte** (`%00`, `\0`) | Rejected before and after `decodeURIComponent`. |
+| **Absolute path** (`/etc/passwd`) | Leading `/` is stripped; containment is the `..` / double-slash checks. |
+| **SPA fallback** | Unknown navigations → `index.html`, never a directory listing. Asset fetches for missing files stay `404`. |
+| **`clientDir` escape** | Build fails if `clientDir` resolves outside `outDir`. |
+| **Hashed assets** | `[-.][0-9a-f]{8,}.ext` → long `immutable` cache. Other files are not cached by default. |
 
-The generated `__asset` function uses `path.join` — not `path.resolve` — so a leading `/` in the relative path stays inside the asset root.
+Generated `__asset` uses `path.join` — not `path.resolve` — so a leading `/` stays under the asset root.
 
-## Server actions (`*.server.{ts,tsx,js,jsx}`)
+## Server actions
 
-- Server action code is **never bundled into the client**. Client imports are replaced with Effect RPC stubs that POST the action endpoint (default `/__oxide/action`). The original source stays server-only.
-- Only `action()`-wrapped exports are exposed as RPC; other exports stay server-local.
-- Stream actions use newline-delimited JSON-RPC (`application/json-rpc`) over that same endpoint — not Server-Sent Events. Frames are scrubbed as they flush on both HTTP and WebSocket so long streams stay incremental.
-- The endpoint is POST-only. Non-POST requests return `405`.
-- Method dispatch uses `Object.hasOwn`, blocking `__proto__` / `constructor` walks.
-- Unknown or missing content-types → `415`.
-- Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
-- Batch requests capped at 20 items (both HTTP and WebSocket transports).
-- Effect `Defect` / `Cause` payloads are scrubbed before they leave the action endpoint. Clients see plain JSON-RPC errors (`code` + `message` only) — no `_tag`, no `data`, no stack. Thrown `Error` messages are replaced with `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
+- Action modules are **never** bundled into the client. Imports become Effect RPC stubs. Unmarked exports are not RPC methods.
+- Treat arguments as untrusted. Prefer [`withSchema`](/oxide/server-actions#validate-input-with-effect-schema) / `action(..., { payload })` before using them.
+- Do not return secrets, tokens, or raw rows you would not show in the UI.
+- Streams use newline-delimited JSON-RPC on the same endpoint — not SSE. Frames scrub as they flush.
+- Endpoint is POST-only (`405` otherwise). Content-Type must be recognized (`415` otherwise).
+- Dispatch uses `Object.hasOwn` (no `__proto__` / `constructor` walks).
+- Body size defaults to 1 MB (real body, not only `Content-Length`). Batches cap at 20 items.
+- Wire errors scrub to `code` + `message` only. Defects → `-32603` Internal error. Payload / Schema decode → `-32602`. Schema-tagged Fail → `-32000`. Unknown method → `-32601`.
 
-Set `sameOrigin: false` only when you intentionally accept cross-origin calls and provide your own CORS, CSRF, and authentication rules. See [`middleware`](/oxide/configuration#middleware).
+Set `sameOrigin: false` only when you accept cross-origin calls and provide CORS, CSRF, and authentication. See [`middleware`](/oxide/configuration#middleware).
 
 ## Host header
 
-The generated dev server constructs `request.url` from `req.headers.host`. This is standard HTTP/1.1 behavior (same as Express, Hono, Koa, Node http). If your `src/server.ts` reads `request.url` to construct redirects, validate the host yourself — the framework cannot distinguish a legitimate host header from a malicious one. In production, your reverse proxy handles this.
+The generated Node server builds `request.url` from `req.headers.host` (same pattern as Express, Hono, Koa). If your entry uses that URL for redirects, validate the host yourself. In production your reverse proxy usually owns this.

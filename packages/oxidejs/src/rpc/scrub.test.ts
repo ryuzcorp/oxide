@@ -40,6 +40,78 @@ test("scrubRpcJson strips Defect and restores request id", () => {
   });
 });
 
+test("scrubRpcJson maps SchemaDecodeError Defect to Invalid params", () => {
+  const raw = JSON.stringify({
+    error: {
+      _tag: "Defect",
+      code: 1,
+      data: {
+        message: 'Expected string\n  at ["text"]',
+        name: "SchemaDecodeError",
+      },
+      message: "A defect occurred",
+    },
+    id: -32_603,
+    jsonrpc: "2.0",
+  });
+  expect(JSON.parse(scrubRpcJson(raw, [7]))).toEqual({
+    error: {
+      code: -32_602,
+      message: 'Expected string\n  at ["text"]',
+    },
+    id: 7,
+    jsonrpc: "2.0",
+  });
+});
+
+test("scrubRpcJson maps tagged Fail Cause to application error", () => {
+  expect(
+    JSON.parse(
+      scrubRpcJson(
+        JSON.stringify({
+          error: {
+            _tag: "Cause",
+            data: [{ _tag: "Fail", error: { _tag: "NotFound", id: "1" } }],
+            message: "Fail",
+          },
+          id: 1,
+          jsonrpc: "2.0",
+        })
+      )
+    )
+  ).toEqual({
+    error: { code: -32_000, message: "NotFound" },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+});
+
+test("scrubRpcJson extracts Schema Die defect from Cause JSON message", () => {
+  expect(
+    JSON.parse(
+      scrubRpcJson(
+        JSON.stringify({
+          error: {
+            _tag: "Cause",
+            data: [],
+            message:
+              '[{"_tag":"Die","defect":"Expected string\\n  at [\\"args\\"][0][\\"text\\"]"}]',
+          },
+          id: 1,
+          jsonrpc: "2.0",
+        })
+      )
+    )
+  ).toEqual({
+    error: {
+      code: -32_602,
+      message: 'Expected string\n  at ["args"][0]["text"]',
+    },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+});
+
 test("scrubRpcJson maps Cause unknown-method and invalid-params", () => {
   expect(
     JSON.parse(
@@ -76,7 +148,7 @@ test("scrubRpcJson maps Cause unknown-method and invalid-params", () => {
       )
     )
   ).toEqual({
-    error: { code: -32_602, message: "Invalid params" },
+    error: { code: -32_602, message: 'Missing key\n  at ["args"]' },
     id: 1,
     jsonrpc: "2.0",
   });

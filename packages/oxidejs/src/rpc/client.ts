@@ -18,6 +18,7 @@ export interface RpcClientOptions {
 }
 
 interface CallOptions {
+  idempotencyKey?: string;
   signal?: AbortSignal;
 }
 
@@ -44,7 +45,7 @@ type ActionCallResult =
 
 type RpcCaller = (
   payload: { args: ActionCallArg[] },
-  options?: CallOptions
+  options?: { headers?: { [key: string]: string } }
 ) =>
   | Effect.Effect<ActionCallResult, Error, never>
   | Stream.Stream<ActionCallResult>;
@@ -152,9 +153,16 @@ const httpLayer = function httpLayer(options: RpcClientOptions) {
 };
 
 const wsLayer = function wsLayer(url: string) {
-  return RpcClient.layerProtocolSocket().pipe(
+  return RpcClient.layerProtocolSocket({
+    retryTransientErrors: true,
+  }).pipe(
     Layer.provide(RpcSerialization.layerNdJsonRpc()),
-    Layer.provide(Socket.layerWebSocket(url)),
+    Layer.provide(
+      Socket.layerWebSocket(url, {
+        // 1000 normal / 1001 going away are reconnectable; don't fail the run as a hard error.
+        closeCodeIsError: (code) => code !== 1000 && code !== 1001,
+      })
+    ),
     Layer.provide(Socket.layerWebSocketConstructorGlobal)
   );
 };
@@ -238,6 +246,39 @@ const streamToAsyncGenerator = function streamToAsyncGenerator<T>(
   })();
 };
 
+const TRANSIENT_CLOSE = /\b(?:1000|1001|1006)\b/u;
+
+/** Socket close / open races that the Effect WS protocol recovers from. */
+const isTransientWsClose = function isTransientWsClose(error: Error) {
+  const chunks: string[] = [];
+  let current: Error | undefined = error;
+  const seen = new Set<Error>();
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    chunks.push(current.name, current.message);
+    const nested: unknown = current.cause;
+    current = nested instanceof Error ? nested : undefined;
+  }
+  const text = chunks.join(" ");
+  if (/SocketOpenError/u.test(text)) {
+    return true;
+  }
+  return /SocketCloseError/u.test(text) && TRANSIENT_CLOSE.test(text);
+};
+
+const isAbortError = function isAbortError(error: Error, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return true;
+  }
+  return error instanceof DOMException && error.name === "AbortError";
+};
+
+const sleep = function sleep(ms: number) {
+  return Effect.runPromise(Effect.sleep(`${ms} millis`));
+};
+
+const IDEMPOTENCY_HEADER = "x-oxide-idempotency-key";
+
 const callFlat = function callFlat(
   client: FlatClient,
   tag: string,
@@ -248,7 +289,11 @@ const callFlat = function callFlat(
   if (!caller) {
     return Promise.reject(new Error(`Unknown action ${tag}`));
   }
-  const result = caller({ args }, callOpts);
+  const rpcOpts =
+    callOpts?.idempotencyKey === undefined
+      ? undefined
+      : { headers: { [IDEMPOTENCY_HEADER]: callOpts.idempotencyKey } };
+  const result = caller({ args }, rpcOpts);
   if (isStreamResult(result)) {
     return streamToAsyncGenerator(result, callOpts?.signal);
   }
@@ -258,16 +303,71 @@ const callFlat = function callFlat(
   });
 };
 
+const callFlatStreamResilient = function callFlatStreamResilient(
+  client: FlatClient,
+  tag: string,
+  args: ActionCallArg[],
+  callOpts?: CallOptions
+) {
+  return (async function* resilientStream(): AsyncGenerator<ActionCallResult> {
+    let attempt = 0;
+    for (;;) {
+      if (callOpts?.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      try {
+        // SAFETY: stream branch of callFlat always returns AsyncGenerator.
+        yield* callFlat(
+          client,
+          tag,
+          args,
+          callOpts
+        ) as AsyncGenerator<ActionCallResult>;
+        return;
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        if (isAbortError(err, callOpts?.signal) || !isTransientWsClose(err)) {
+          throw error;
+        }
+        attempt += 1;
+        // oxlint-disable-next-line eslint/no-await-in-loop -- backoff between reconnect attempts
+        await sleep(Math.min(50 * 2 ** (attempt - 1), 2000));
+      }
+    }
+  })();
+};
+
 const isCallOptions = function isCallOptions(
   value: ActionCallArg
 ): value is CallOptions {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "signal" in value &&
-    value.signal instanceof AbortSignal &&
-    Object.keys(value).length === 1
-  );
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    return false;
+  }
+  if (value instanceof AbortSignal) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  if (keys.length === 0 || keys.length > 2) {
+    return false;
+  }
+  for (const key of keys) {
+    if (key !== "signal" && key !== "idempotencyKey") {
+      return false;
+    }
+  }
+  // SAFETY: keys are only CallOptions fields; validate value shapes.
+  const bag = value as CallOptions;
+  if ("signal" in bag && !(bag.signal instanceof AbortSignal)) {
+    return false;
+  }
+  if (
+    "idempotencyKey" in bag &&
+    bag.idempotencyKey !== undefined &&
+    typeof bag.idempotencyKey !== "string"
+  ) {
+    return false;
+  }
+  return "signal" in bag || "idempotencyKey" in bag;
 };
 
 const nestClient = function nestClient(group: ActionGroup, flat: FlatClient) {
@@ -285,6 +385,9 @@ const nestClient = function nestClient(group: ActionGroup, flat: FlatClient) {
       const hasSignal = opts !== undefined && isCallOptions(opts);
       const params = hasSignal ? args.slice(0, -1) : args;
       const callOpts = hasSignal ? opts : undefined;
+      if (isStreamTag(group, tag)) {
+        return callFlatStreamResilient(flat, tag, params, callOpts);
+      }
       return callFlat(flat, tag, params, callOpts);
     };
   }

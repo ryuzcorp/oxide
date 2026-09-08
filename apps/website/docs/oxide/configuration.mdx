@@ -2,10 +2,10 @@
 title: Configuration
 sidebar:
   icon: settings
-description: Choose the build target, output folders, and server-action transport.
+description: Choose the build target, output folders, and how actions reach the server.
 ---
 
-Pass options to `oxide()` in your Vite or Rsbuild config. You can start with `oxide()` and add options only when your app needs them.
+Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` — add options when the defaults are wrong for your app.
 
 | Option | Default | What it controls |
 | --- | --- | --- |
@@ -96,9 +96,11 @@ oxide({
 });
 ```
 
-- `transport` is `"http"` by default. `"ws"` needs `crossws` and is unavailable with [`preset: "celld"`](#preset).
+- `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node/`fetch`, `WebSocketPair` on [`preset: "celld"`](#preset)).
 - `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
 - `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
+
+On celld, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
 
 Turn `sameOrigin` off only when cross-origin RPC is intentional. You must then provide the appropriate authentication, CORS, and CSRF policy.
 

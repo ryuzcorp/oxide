@@ -1,6 +1,6 @@
 {
   "name": "oxidejs",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
   "keywords": [
     "cloudflare",
@@ -52,6 +52,10 @@
     "./rpc/client": {
       "types": "./dist/rpc/client.d.mts",
       "import": "./dist/rpc/client.mjs"
+    },
+    "./mutation-queue": {
+      "types": "./dist/mutation-queue.d.mts",
+      "import": "./dist/mutation-queue.mjs"
     },
     "./worker-dom": {
       "types": "./dist/worker-dom.d.mts",

@@ -49,7 +49,7 @@ oxide({
 
 ## Server actions
 
-Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
+Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Middleware runs before the action gate and before WebSocket upgrade so stamped fields are visible to WS actions. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
 
 ```ts
 // src/test.server.ts
@@ -90,6 +90,25 @@ Unary actions return a Promise and expose helpers for UI wiring:
 | `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action |
 | `ping.result` | Read the last `AsyncResult` from the client atom |
 
+Validate a single payload with Effect Schema via `withSchema` or `action(fn, { payload })` (keep `action()` as the outer call):
+
+```ts
+import { Schema } from "effect";
+import { action, withSchema } from "oxidejs";
+
+const AddTask = Schema.Struct({ text: Schema.String });
+
+export const add = action(
+  withSchema(AddTask, async ({ text }) => {
+    /* text: string */
+  })
+);
+```
+
+The client arg is the schema's Encoded type; the handler receives Type. Decode failures over RPC map to JSON-RPC Invalid params (`-32602`). Optional `success` / `error` schemas stamp the generated Rpc tag; use `Schema.TaggedError` + `Effect.fail` for wire-typed Fail (`-32000` after scrub).
+
+`action()` also accepts `Effect` handlers. Yield `OxideRequest` / `OxideCtx` for the same values as `useRequest()` / `useCtx()`. Effect `Stream` returns need `{ stream: true }`. Handlers run under an `oxidejs.action` span (`rpc.method`).
+
 `action()` marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (not SSE). On the client the stub returns an async generator — iterate it directly. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
 ```ts
@@ -113,7 +132,91 @@ ac.abort();
 
 Stream actions do not support `bind` / `with`. Breaking the `for await` loop or calling `return()` on the generator cleans up the server generator.
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (needs `crossws`; not with `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
+### Live queries
+
+Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — D1 (or your DB) stays the source of truth.
+
+```ts
+import { action, liveQuery } from "oxidejs";
+
+const tasks = liveQuery<Task[]>({ topic: "tasks" });
+
+export const list = action(
+  tasks.subscribe(async () => {
+    const db = requireDb(); // capture before any await
+    await tasks.mutate(() => snapshot(db));
+  })
+);
+
+export const add = action(async (text: string) => {
+  const db = requireDb();
+  await tasks.mutate(async () => {
+    await insert(db, text);
+    return snapshot(db);
+  });
+});
+```
+
+**SSR → live socket handoff:** under SSR / the server graph, `*.server.ts` keeps the real generator (no WebSocket). Ilha `Stream.take(1)` paints the first snapshot. On the client, the stub resumes the same method over `actions: "ws"`. Oxide retries transient closes (`1000` / `1001` / `1006`) inside the stream client so hydrate does not paint `SocketCloseError`. Abort via `{ signal }` does not retry.
+
+Keep UI out of `*.server.*`. One `Stream.fromAsyncIterable(list(), …)` consumer is enough.
+
+### Mutation queue (client)
+
+Optional offline write queue for WebSocket actions:
+
+```ts
+import { createMutationQueue } from "oxidejs/mutation-queue";
+import { add } from "./tasks.server";
+
+const queue = createMutationQueue();
+const addQueued = queue.wrap(add, {
+  idempotencyKey: (text) => `add:${text}`,
+});
+
+await addQueued("Milk"); // runs now, or enqueues on transient WS failure
+window.addEventListener("online", () => void queue.flush());
+```
+
+`wrap` forwards the queue id as trailing `{ idempotencyKey }`. That key is sent as RPC header `x-oxide-idempotency-key` and available as `useIdempotencyKey()` on the server. Pair with paranorm `once()` for durable dedupe.
+
+### WebSocket hibernation
+
+Default Worker upgrades call `server.accept()`. That is fine for low fan-out (kit). For many idle clients, route the action upgrade into a Durable Object and hibernate with `acceptWebSocket`:
+
+```ts
+import { createWsHooks } from "oxidejs/rpc";
+
+export class ActionRoom {
+  constructor(
+    private state: DurableObjectState,
+    private env: Env
+  ) {}
+
+  async fetch(request: Request) {
+    const hooks = createWsHooks(group, handlers, {
+      accept: (ws) => this.state.acceptWebSocket(ws),
+      path: "/__oxide/action",
+    });
+    const upgraded = hooks.handleUpgrade(request, { env: this.env });
+    if (upgraded) {
+      return upgraded;
+    }
+    return new Response("expected websocket", { status: 426 });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    // Forward to the same hooks.message peer you use on the Worker, or keep
+    // protocol handling inside the DO so hibernated sockets wake here.
+    void ws;
+    void message;
+  }
+}
+```
+
+The generated celld wrapper does not create a DO — hibernation is opt-in when you own the object.
+
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
 ## Rsbuild
 
@@ -140,14 +243,15 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | `wrangler.name` | required if `emitConfig` |  |
 | `wrangler.compatibility_date` | required if `emitConfig` |  |
 | `wrangler.compatibility_flags` | — | optional; `nodejs_compat` is merged in automatically on `celld` |
+| `wrangler.d1_databases` | — | optional |
 | `wrangler.durable_objects` | — | optional |
 | `wrangler.migrations` | — | optional |
 | `wrangler.services` | — | optional |
 | `wrangler.vars` | — | optional |
 | `emitConfig` | `true` on `celld` | Set `false` to skip `wrangler.jsonc` |
-| `actions` | `"http"` | `"ws"` needs `crossws`; object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on celld); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
 | `actionHeaders` | — | Static headers on the HTTP client |
-| `middleware` | `[]` | Fetch middleware, run in order before actions and the server entry |
+| `middleware` | `[]` | Fetch middleware, run in order before WS upgrade, actions, and the server entry |
 | `imports` | `[]` | Modules imported for side effects at server startup |
 | `bodyLimit` | `1048576` | Max Node request body size; larger requests get 413 |
 | `notFound` | — | Custom HTML 404 body when no route or asset matches |

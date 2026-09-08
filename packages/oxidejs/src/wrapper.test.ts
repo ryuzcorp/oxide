@@ -25,6 +25,21 @@ describe("generateWorkerWrapper", () => {
     expect(gate).toBeLessThan(mw);
   });
 
+  test("middleware runs before WebSocket upgrade so context stamps apply", () => {
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      actions: "ws",
+      hasActions: true,
+      middleware: ["./db.ts"],
+      preset: "celld",
+    });
+    const mw = out.indexOf("for (const __mw of");
+    const ws = out.indexOf('get("Upgrade")');
+    expect(mw).toBeGreaterThan(-1);
+    expect(ws).toBeGreaterThan(-1);
+    expect(mw).toBeLessThan(ws);
+  });
+
   test("imports option emits side-effect imports at the top", () => {
     const out = generateWorkerWrapper("/x/server.ts", {
       ...BASE,

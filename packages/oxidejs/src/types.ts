@@ -13,6 +13,7 @@ export interface OxidejsWranglerOptions {
   name: string;
   compatibility_date: string;
   compatibility_flags?: string[];
+  d1_databases?: OxidejsJson[];
   durable_objects?: { [key: string]: OxidejsJson };
   migrations?: OxidejsJson[];
   services?: OxidejsJson[];

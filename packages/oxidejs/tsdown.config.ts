@@ -4,6 +4,7 @@ export default defineConfig({
   dts: true,
   entry: {
     index: "src/index.ts",
+    "mutation-queue": "src/mutation-queue.ts",
     plugin: "src/plugin.ts",
     rpc: "src/rpc/index.ts",
     "rpc/client": "src/rpc/client.ts",

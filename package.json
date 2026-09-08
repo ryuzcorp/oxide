@@ -16,6 +16,7 @@
     "fmt": "oxfmt --write .",
     "docs:dev": "bun run --filter website dev",
     "docs:build": "bun run --filter website build",
+    "docs:verify": "bun run --filter website verify",
     "check": "ultracite check",
     "fix": "ultracite fix",
     "prepare": "husky"

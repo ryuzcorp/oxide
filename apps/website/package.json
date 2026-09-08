@@ -4,9 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "blume dev",
-    "build": "blume build"
+    "build": "blume build",
+    "verify": "blume build --isolated"
   },
   "dependencies": {
+    "effect": "~4.0.0-rc.112",
     "oxidejs": "workspace:*",
     "rangi": "^2.2.0"
   },

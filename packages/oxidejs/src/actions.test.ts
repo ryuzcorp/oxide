@@ -13,6 +13,7 @@ import {
   loadClientStub,
   nodeToWebRequest,
   parseExportedNames,
+  parseStreamExports,
   pluginShouldStub,
   RequestBodyTooLargeError,
   scanServerFiles,
@@ -20,6 +21,7 @@ import {
 } from "./actions";
 import {
   __setInWebcontainerForTests,
+  __setNeedsSyncRequestStoreForTests,
   action,
   getRequestStore,
   runWithRequest,
@@ -202,6 +204,20 @@ describe("parseExportedNames", () => {
         export { hidden }
       `)
     ).toEqual([]);
+  });
+});
+
+describe("parseStreamExports", () => {
+  test("detects async generators and liveQuery.subscribe wrappers", () => {
+    expect(
+      parseStreamExports(`
+        export const ticks = action(async function* () { yield 0 })
+        export const list = action(
+          tasks.subscribe(async () => {})
+        )
+        export const add = action(async (text: string) => text)
+      `)
+    ).toEqual(["ticks", "list"]);
   });
 });
 
@@ -424,12 +440,12 @@ ${stubSource}`
     ]);
     expect(code).toContain('import * as __m0 from "/app/src/test.server.ts"');
     expect(code).toContain('Rpc.make("test.ping"');
-    expect(code).toContain(
-      'import { getRequestStore, withRequestStore } from "oxidejs"'
-    );
-    expect(code).toContain('"test.ping": ({ args }) => __run');
+    expect(code).toContain("ACTION_META");
+    expect(code).toContain("runActionInContext");
+    expect(code).toContain("actionResultToStream");
+    expect(code).toContain('"test.ping": ({ args }) =>');
     expect(code).toContain("const __s = getRequestStore()");
-    expect(code).toContain(".apply(null, args))");
+    expect(code).toContain(".apply(null, args)");
     expect(code).not.toContain("AsyncLocalStorage");
     expect(code).not.toContain('"_action": {');
     expect(code).not.toContain("__args");
@@ -513,6 +529,18 @@ ${stubSource}`
     const code = generateWorkerWrapper("/app/src/server.ts", { actions: "ws" });
     expect(code).toContain("createWsHooks");
     expect(code).toContain("crossws/adapters/node");
+    expect(code).toContain("__ws.handleUpgrade");
+    expect(code).not.toContain("createActionHandler");
+  });
+
+  test("celld ws wrapper uses handleUpgrade without crossws", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", {
+      actions: "ws",
+      preset: "celld",
+    });
+    expect(code).toContain("createWsHooks");
+    expect(code).toContain("__ws.handleUpgrade");
+    expect(code).not.toContain("crossws/adapters/node");
     expect(code).not.toContain("createActionHandler");
   });
 
@@ -996,6 +1024,50 @@ export const ticks = action(async function* () { yield 0; yield 1; return 2 })
     }
   });
 
+  test("open stream does not block unary actions under sync store", async () => {
+    __setNeedsSyncRequestStoreForTests(true);
+    const root = fs.mkdtempSync(
+      path.join(import.meta.dir, "oxide-stream-unblock-")
+    );
+    const ctx = JSON.stringify(path.join(import.meta.dir, "context.ts"));
+    fs.writeFileSync(
+      path.join(root, "live.server.ts"),
+      `import { action } from ${ctx};
+export const live = action(async function* () {
+  yield 0;
+  await new Promise(() => {});
+});
+export const ping = action(async () => "pong");
+`
+    );
+    try {
+      const fetch = await loadGeneratedRouter(root);
+      const liveRes = await rpcCall(fetch, "live.live");
+      const reader = expectDefined(liveRes.body).getReader();
+      const decoder = new TextDecoder();
+      const first = await readStreamUntilNewline(reader, decoder);
+      const firstLine = expectDefined(first.buf.split("\n")[0]);
+      expect(JSON.parse(firstLine)).toEqual({
+        chunk: true,
+        id: 1,
+        jsonrpc: "2.0",
+        result: [0],
+      });
+
+      const ping = await Promise.race([
+        rpcCall(fetch, "live.ping").then((res) => readRpcFrame(res)),
+        Bun.sleep(1000).then(() => {
+          throw new Error("unary action blocked by open stream");
+        }),
+      ]);
+      expect(ping).toEqual({ id: 1, jsonrpc: "2.0", result: "pong" });
+      await reader.cancel();
+    } finally {
+      __setNeedsSyncRequestStoreForTests(null);
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   test("stream frames flush before the generator finishes", async () => {
     const root = fs.mkdtempSync(
       path.join(import.meta.dir, "oxide-stream-live-")
@@ -1183,6 +1255,24 @@ export const who = action(async () => useRequest().headers.get("x-user"))
     }
   });
 
+  test("Worker sync store survives await when ALS would be empty", async () => {
+    __setNeedsSyncRequestStoreForTests(true);
+    try {
+      const request = new Request("http://localhost/worker");
+      const seen = await runWithRequest(
+        request,
+        async () => {
+          await Promise.resolve();
+          return useEnv<{ DB: string }>()?.DB;
+        },
+        { env: { DB: "bound" } }
+      );
+      expect(seen).toBe("bound");
+    } finally {
+      __setNeedsSyncRequestStoreForTests(null);
+    }
+  });
+
   test("WebContainer withRequestStore reinstalls a captured store after the entry settles", async () => {
     __setInWebcontainerForTests(true);
     try {
@@ -1230,6 +1320,29 @@ export const who = action(async () => useRequest().headers.get("x-user"))
       await Promise.all([a, b]);
       expect(order).toEqual(["a-start", "a-end", "b-start", "b-end"]);
     } finally {
+      __setInWebcontainerForTests(null);
+    }
+  });
+
+  test("Worker withRequestEntry does not hold the gate for the full entry", async () => {
+    __setNeedsSyncRequestStoreForTests(true);
+    __setInWebcontainerForTests(false);
+    try {
+      const order: string[] = [];
+      const a = withRequestEntry(async () => {
+        order.push("a-start");
+        await Bun.sleep(20);
+        order.push("a-end");
+      });
+      const b = withRequestEntry(async () => {
+        order.push("b-start");
+        await Bun.sleep(1);
+        order.push("b-end");
+      });
+      await Promise.all([a, b]);
+      expect(order).toEqual(["a-start", "b-start", "b-end", "a-end"]);
+    } finally {
+      __setNeedsSyncRequestStoreForTests(null);
       __setInWebcontainerForTests(null);
     }
   });
@@ -1300,6 +1413,59 @@ export const who = action(async () => {
         result: { secret: "from-env", user: "ada" },
       });
       expect(waited).toHaveLength(1);
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("useEnv() reads host stamp from the inbound request, not the forwarded clone", async () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-stamp-"));
+    fs.writeFileSync(
+      path.join(root, "who.server.ts"),
+      `import { action, useEnv } from ${JSON.stringify(path.join(import.meta.dir, "context.ts"))};
+export const who = action(async () => useEnv()?.SECRET ?? null)
+`
+    );
+    const out = writeActionsModule(
+      root,
+      generateActionsModule(scanServerFiles(root))
+    );
+    try {
+      const mod = await import(out);
+      const fetchKey = Symbol.for("oxidejs.fetch");
+      const fetch = createActionHandler(mod.default, mod.actionsHandlers, {
+        // Mirrors the generated worker wrapper: stamp lives on the inbound Request.
+        createContext: (req) => {
+          // SAFETY: host stamps Partial<ActionContext> under oxidejs.fetch before dispatch.
+          const stamped = req as Request & {
+            [fetchKey]?: { env?: { SECRET: string } };
+          };
+          return { req, ...stamped[fetchKey] };
+        },
+        path: "/__oxide/action",
+        sameOrigin: false,
+      });
+      const inbound = new Request("http://localhost/__oxide/action", {
+        body: `${JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "who.who",
+          params: { args: [] },
+        })}\n`,
+        headers: { "content-type": "application/json-rpc" },
+        method: "POST",
+      });
+      // SAFETY: test stamps the same host slot the worker wrapper writes.
+      const stampedInbound = inbound as Request & {
+        [fetchKey]?: { env: { SECRET: string } };
+      };
+      stampedInbound[fetchKey] = { env: { SECRET: "stamped" } };
+      const res = await fetch(stampedInbound);
+      expect(await readRpcFrame(res)).toEqual({
+        id: 1,
+        jsonrpc: "2.0",
+        result: "stamped",
+      });
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }
@@ -1471,7 +1637,7 @@ export const wait = action(async () => {
           })
         ).then((res) => readRpcFrame(res));
       expect(await call({ 0: "sneak" })).toEqual({
-        error: { code: -32_602, message: "Invalid params" },
+        error: { code: -32_602, message: 'Missing key\n  at ["args"]' },
         id: 1,
         jsonrpc: "2.0",
       });

@@ -16,6 +16,7 @@ export const CELLD_ALLOWED_KEYS = [
   "main",
   "compatibility_date",
   "compatibility_flags",
+  "d1_databases",
   "durable_objects",
   "migrations",
   "assets",
@@ -238,6 +239,32 @@ const assertClientDir = function assertClientDir(
   }
 };
 
+const resolveMiddlewareId = function resolveMiddlewareId(
+  id: string,
+  rootAbs: string
+) {
+  if (id.startsWith(".") || path.isAbsolute(id)) {
+    return path.resolve(rootAbs, id);
+  }
+  return id;
+};
+
+const resolveMiddleware = function resolveMiddleware(
+  middleware: NonNullable<OxidejsOptions["middleware"]>,
+  rootAbs: string
+) {
+  return middleware.map((entry) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- middleware entry is string | { module }
+    if (typeof entry === "string") {
+      return resolveMiddlewareId(entry, rootAbs);
+    }
+    return {
+      ...entry,
+      module: resolveMiddlewareId(entry.module, rootAbs),
+    };
+  });
+};
+
 export const resolveOptions = function resolveOptions(
   raw: OxidejsOptions | undefined,
   root: string,
@@ -249,11 +276,6 @@ export const resolveOptions = function resolveOptions(
     path: actionPath,
     sameOrigin: actionSameOrigin,
   } = resolveActions(raw?.actions);
-  if (actions === "ws" && preset === "celld") {
-    throw new Error(
-      'oxidejs: actions: "ws" is not supported with preset: "celld"'
-    );
-  }
   const emitConfig = raw?.emitConfig ?? preset === "celld";
   const { clientDir, outDir, rootAbs, workerEntry, workerEntryAbs } =
     resolvePaths(raw, root);
@@ -274,7 +296,7 @@ export const resolveOptions = function resolveOptions(
     hasClient,
     hasPublic,
     imports: raw?.imports ?? [],
-    middleware: raw?.middleware ?? [],
+    middleware: resolveMiddleware(raw?.middleware ?? [], rootAbs),
     notFound: raw?.notFound,
     outDir,
     preset,
@@ -305,6 +327,7 @@ interface EmittedWranglerConfig {
   assets?: { binding: string; directory: string };
   compatibility_date: string;
   compatibility_flags: string[];
+  d1_databases?: OxidejsWranglerOptions["d1_databases"];
   durable_objects?: OxidejsWranglerOptions["durable_objects"];
   main: string;
   migrations?: OxidejsWranglerOptions["migrations"];
@@ -345,6 +368,9 @@ export const tryEmitWranglerConfig = function tryEmitWranglerConfig(
     main: "./server.js",
     name: wrangler.name,
   };
+  if (wrangler.d1_databases) {
+    config.d1_databases = wrangler.d1_databases;
+  }
   if (wrangler.durable_objects) {
     config.durable_objects = wrangler.durable_objects;
   }

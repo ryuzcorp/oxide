@@ -1,27 +1,28 @@
 {
-  "name": "@oxidejs/template-tasks",
+  "name": "@oxidejs/template-kit",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vite build && celld dev dist",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "celld deploy dist",
     "celld": "celld"
   },
   "dependencies": {
-    "@ilha/router": "^0.11.5",
+    "@effect/sql-d1": "4.0.0-rc.112",
+    "@ilha/router": "^0.11.8",
     "effect": "^4.0.0-rc.112",
-    "ilha": "^0.14.4",
-    "unstorage": "^2.0.0-alpha.9"
+    "ilha": "^0.14.5",
+    "paranorm": "^0.3.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260818.1",
     "@tailwindcss/vite": "^4.3.3",
     "daisyui": "^5.7.22",
-    "oxidejs": "^0.3.3",
+    "oxidejs": "^0.4.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "^6",
-    "vite": "^8.2.1"
+    "typescript": "^7",
+    "vite": "^8.2.2"
   }
 }

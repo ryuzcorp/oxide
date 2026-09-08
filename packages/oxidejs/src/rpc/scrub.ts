@@ -16,11 +16,113 @@ interface JsonObject {
 
 const INTERNAL: JsonRpcErrorBody = { code: -32_603, message: "Internal error" };
 const NDJSON_CONTENT = "application/json-rpc";
+/** Application error code for Schema-tagged Fail values (not JSON-RPC parse/params). */
+const APPLICATION_ERROR = -32_000;
 
 const isJsonObject = function isJsonObject(
   value: OxidejsJson
 ): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+};
+
+const isStringField = function isStringField(
+  value: OxidejsJson | undefined
+): value is string {
+  return typeof value === "string";
+};
+
+const isTaggedFailError = function isTaggedFailError(
+  error: JsonObject
+): error is JsonObject & { _tag: string; message?: string } {
+  return isStringField(error["_tag"]);
+};
+
+const extractTaggedFail = function extractTaggedFail(
+  data: OxidejsJson | undefined
+): JsonRpcErrorBody | undefined {
+  if (data === undefined) {
+    return undefined;
+  }
+  const candidates = Array.isArray(data) ? data : [data];
+  for (const entry of candidates) {
+    if (!isJsonObject(entry)) {
+      continue;
+    }
+    if (entry["_tag"] === "Fail") {
+      const err = entry["error"];
+      if (err !== undefined && isJsonObject(err) && isTaggedFailError(err)) {
+        const message = isStringField(err["message"])
+          ? err["message"]
+          : err["_tag"];
+        return { code: APPLICATION_ERROR, message };
+      }
+    }
+    // Some Effect builds nest Die/Fail under sequential/parallel trees.
+    if (entry["_tag"] === "Sequential" || entry["_tag"] === "Parallel") {
+      const nested = extractTaggedFail(
+        entry["left"] ?? entry["right"] ?? entry["causes"]
+      );
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return undefined;
+};
+
+/** Prefer the Schema Die defect text over a raw Cause JSON blob. */
+const extractParamsDieMessage = function extractParamsDieMessage(
+  message: OxidejsJson | undefined,
+  data: OxidejsJson | undefined
+): string | undefined {
+  const tryDefect = function tryDefect(
+    defect: OxidejsJson | undefined
+  ): string | undefined {
+    if (
+      isStringField(defect) &&
+      (/Expected/iu.test(defect) || /Missing key/iu.test(defect))
+    ) {
+      return defect;
+    }
+    return undefined;
+  };
+  const scan = function scan(
+    value: OxidejsJson | undefined
+  ): string | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (isStringField(value)) {
+      try {
+        // SAFETY: Cause messages are often a JSON-encoded Die tree.
+        return scan(JSON.parse(value) as OxidejsJson);
+      } catch {
+        return tryDefect(value);
+      }
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const hit = scan(entry);
+        if (hit) {
+          return hit;
+        }
+      }
+      return undefined;
+    }
+    if (!isJsonObject(value)) {
+      return undefined;
+    }
+    if (value["_tag"] === "Die") {
+      return tryDefect(value["defect"]);
+    }
+    return (
+      scan(value["left"]) ??
+      scan(value["right"]) ??
+      scan(value["causes"]) ??
+      scan(value["data"])
+    );
+  };
+  return scan(message) ?? scan(data);
 };
 
 const classifyCause = function classifyCause(
@@ -35,7 +137,24 @@ const classifyCause = function classifyCause(
     /Missing key/iu.test(blob) ||
     (/Expected/iu.test(blob) && /\["args"\]|\[\\"args\\"\]/u.test(blob))
   ) {
+    const fromDie = extractParamsDieMessage(error["message"], error["data"]);
+    if (fromDie) {
+      return { code: -32_602, message: fromDie };
+    }
+    const detail = error["message"];
+    if (
+      isStringField(detail) &&
+      (/Expected/iu.test(detail) || /Missing key/iu.test(detail)) &&
+      !detail.trimStart().startsWith("[")
+    ) {
+      return { code: -32_602, message: detail };
+    }
     return { code: -32_602, message: "Invalid params" };
+  }
+  // Typed Rpc Fail (Schema.TaggedError / error schema) — expose tag + message, drop stacks.
+  const tagged = extractTaggedFail(error["data"]);
+  if (tagged) {
+    return tagged;
   }
   // Interrupt / Empty / sequential|parallel Die trees → opaque internal error.
   return { ...INTERNAL };
@@ -49,12 +168,28 @@ const isPlainJsonRpcError = function isPlainJsonRpcError(
   );
 };
 
+const isSchemaDecodeDefectData = function isSchemaDecodeDefectData(
+  data: JsonObject
+): data is JsonObject & { message: string; name: "SchemaDecodeError" } {
+  return (
+    data["name"] === "SchemaDecodeError" && typeof data["message"] === "string"
+  );
+};
+
 const scrubError = function scrubError(error: OxidejsJson): JsonRpcErrorBody {
   if (!isJsonObject(error)) {
     return { ...INTERNAL };
   }
 
   if (error["_tag"] === "Defect") {
+    const { data } = error;
+    if (
+      data !== undefined &&
+      isJsonObject(data) &&
+      isSchemaDecodeDefectData(data)
+    ) {
+      return { code: -32_602, message: data.message };
+    }
     return { ...INTERNAL };
   }
   if (error["_tag"] === "Cause") {
@@ -64,6 +199,13 @@ const scrubError = function scrubError(error: OxidejsJson): JsonRpcErrorBody {
   // Plain JSON-RPC (Forbidden, parse errors, etc.) — keep code/message, drop data.
   if (isPlainJsonRpcError(error)) {
     return { code: error["code"], message: error["message"] };
+  }
+  // Effect Rpc encoded application error (tagged Fail as error object).
+  if (isTaggedFailError(error) && error["_tag"] !== "Cause") {
+    const message = isStringField(error["message"])
+      ? error["message"]
+      : error["_tag"];
+    return { code: APPLICATION_ERROR, message };
   }
   return { ...INTERNAL };
 };

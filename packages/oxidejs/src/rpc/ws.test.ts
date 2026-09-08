@@ -6,6 +6,47 @@ import type { ActionContext } from "../context";
 import { waitUntil, writeGeneratedActions } from "./test-harness";
 import { createWsHooks } from "./ws";
 
+const mockSocket = function mockSocket() {
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    accept() {},
+    addEventListener(type: string, fn: () => void) {
+      const set = listeners.get(type) ?? new Set();
+      set.add(fn);
+      listeners.set(type, set);
+    },
+    listeners,
+    readyState: 1,
+    send(_data: string) {},
+  };
+};
+
+const withWebSocketPair = async function withWebSocketPair(
+  client: ReturnType<typeof mockSocket>,
+  server: ReturnType<typeof mockSocket>,
+  run: () => Promise<void>
+) {
+  class MockWebSocketPair {
+    0 = client;
+    1 = server;
+  }
+  // SAFETY: test installs a stand-in WebSocketPair on globalThis for Workers upgrade path.
+  const workerGlobal = globalThis as typeof globalThis & {
+    WebSocketPair?: typeof MockWebSocketPair;
+  };
+  const previous = workerGlobal.WebSocketPair;
+  workerGlobal.WebSocketPair = MockWebSocketPair;
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(globalThis, "WebSocketPair");
+    } else {
+      workerGlobal.WebSocketPair = previous;
+    }
+  }
+};
+
 test("WebSocket answers effect keepalive pings without touching the action handler", async () => {
   const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-ping-"));
   const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
@@ -38,7 +79,7 @@ export const boom = action(() => {
         JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
     });
     expect(sent).toEqual([
-      JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" }),
+      `${JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" })}\n`,
     ]);
   } finally {
     fs.rmSync(root, { force: true, recursive: true });
@@ -122,6 +163,88 @@ export const ticks = action(async function* () {
       id: 1,
       jsonrpc: "2.0",
       result: [1],
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("handleUpgrade returns 101 with WebSocketPair", async () => {
+  const server = mockSocket();
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-pair-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+
+  try {
+    await withWebSocketPair(client, server, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        path: "/__oxide/action",
+        sameOrigin: false,
+      });
+      const response = hooks.handleUpgrade(
+        new Request("http://localhost/__oxide/action", {
+          headers: {
+            Origin: "http://localhost",
+            Upgrade: "websocket",
+          },
+        }),
+        { env: { DB: "kit" } }
+      );
+      expect(response?.status).toBe(101);
+      expect(server.listeners.has("message")).toBe(true);
+      expect(hooks.handleUpgrade(new Request("http://localhost/other"))).toBe(
+        undefined
+      );
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("handleUpgrade calls custom accept for hibernation hooks", async () => {
+  const server = mockSocket();
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-accept-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+  let accepted: typeof server | undefined;
+
+  try {
+    await withWebSocketPair(client, server, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        accept: (ws) => {
+          // SAFETY: handleUpgrade passes pair[1]; mock identity check vs DOM WebSocket typing.
+          if ((ws as object) !== server) {
+            throw new Error("expected server socket from WebSocketPair");
+          }
+          server.accept();
+          accepted = server;
+        },
+        path: "/__oxide/action",
+        sameOrigin: false,
+      });
+      const response = hooks.handleUpgrade(
+        new Request("http://localhost/__oxide/action", {
+          headers: { Upgrade: "websocket" },
+        })
+      );
+      expect(response?.status).toBe(101);
+      expect(accepted).toBe(server);
     });
   } finally {
     fs.rmSync(root, { force: true, recursive: true });
