@@ -479,6 +479,23 @@ ${stubSource}`
     expect(code).toContain("...(user ?? {})");
   });
 
+  test("wrapper without worker entry skips user import", () => {
+    const code = generateWorkerWrapper(null, {
+      hasActions: true,
+      hasClient: true,
+      preset: "fetch",
+    });
+    expect(code).not.toContain("export * from");
+    expect(code).not.toContain("__userMod");
+    expect(code).toContain("const user = undefined");
+    expect(code).toContain("const __userFetch = undefined");
+    expect(code).toContain(
+      'import { actionsGroup, actionsHandlers } from "virtual:oxide/actions"'
+    );
+    expect(code).toContain("await __asset(request)");
+    expect(code).toContain("createServer");
+  });
+
   test("fetch wrapper without client skips assets", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", {
       preset: "fetch",

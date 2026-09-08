@@ -195,6 +195,7 @@ const resolvePreset = function resolvePreset(
 
 interface ResolvedPaths {
   clientDir: string;
+  hasWorkerEntry: boolean;
   outDir: string;
   rootAbs: string;
   workerEntry: string;
@@ -205,16 +206,25 @@ const resolvePaths = function resolvePaths(
   raw: OxidejsOptions | undefined,
   root: string
 ): ResolvedPaths {
+  const workerEntryExplicit = raw?.workerEntry !== undefined;
   const workerEntry = raw?.workerEntry ?? "src/server.ts";
   const outDirInput = raw?.outDir ?? "dist";
   const clientDir = raw?.clientDir ?? "client";
   const rootAbs = path.resolve(root);
+  const workerEntryAbs = path.resolve(rootAbs, workerEntry);
+  const hasWorkerEntry = fs.existsSync(workerEntryAbs);
+  if (workerEntryExplicit && !hasWorkerEntry) {
+    throw new Error(
+      `oxidejs: workerEntry "${workerEntry}" not found at ${workerEntryAbs}`
+    );
+  }
   return {
     clientDir,
+    hasWorkerEntry,
     outDir: path.resolve(rootAbs, outDirInput),
     rootAbs,
     workerEntry,
-    workerEntryAbs: path.resolve(rootAbs, workerEntry),
+    workerEntryAbs,
   };
 };
 
@@ -277,8 +287,14 @@ export const resolveOptions = function resolveOptions(
     sameOrigin: actionSameOrigin,
   } = resolveActions(raw?.actions);
   const emitConfig = raw?.emitConfig ?? preset === "celld";
-  const { clientDir, outDir, rootAbs, workerEntry, workerEntryAbs } =
-    resolvePaths(raw, root);
+  const {
+    clientDir,
+    hasWorkerEntry,
+    outDir,
+    rootAbs,
+    workerEntry,
+    workerEntryAbs,
+  } = resolvePaths(raw, root);
   const hasClient = hasHtmlEntry(rootAbs, config);
   const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
   assertClientDir(outDir, clientDir, hasClient, hasPublic);
@@ -295,6 +311,7 @@ export const resolveOptions = function resolveOptions(
     env: raw?.env,
     hasClient,
     hasPublic,
+    hasWorkerEntry,
     imports: raw?.imports ?? [],
     middleware: resolveMiddleware(raw?.middleware ?? [], rootAbs),
     notFound: raw?.notFound,

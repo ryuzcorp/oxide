@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+### Added
+
+- Optional default `workerEntry`: missing `src/server.ts` skips the user server module (actions / assets only)
+
+### Changed
+
+- Explicit `workerEntry` that does not exist fails at config resolve
+
 ## 0.4.0
 
 ### Added

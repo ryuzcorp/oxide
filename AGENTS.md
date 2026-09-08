@@ -32,7 +32,7 @@
 
 - Default preset is `"fetch"`. `"celld"` writes `dist/wrangler.jsonc` and skips asset serving (Wrangler `ASSETS` does that).
 - `*.server.ts` / `*.server.js` are server-only. Client imports become Effect RPC stubs on `/__oxide/action` (HTTP or WebSocket). Method names are `<file>.<fn>` (`test.ping`).
-- Return `undefined` from `src/server.ts` to fall through to static files / `index.html`.
+- Return `undefined` from `src/server.ts` to fall through to static files / `index.html`. Missing the default `src/server.ts` is fine (actions / assets only).
 - `async function*` exports stream as NDJSON JSON-RPC over the same action endpoint. Effect `Stream` handlers need `{ stream: true }` (or an async generator).
 - `action(fn, { payload?, success?, error? })` stamps Effect Rpc schemas for the generated actions module. `withSchema(schema, fn)` is sugar for `{ payload: schema }` plus a local decode.
 - Promise / `async function*` stay the default DX. Effect handlers and `OxideRequest` / `OxideCtx` services are opt-in beside `useRequest()` / `useCtx()`.

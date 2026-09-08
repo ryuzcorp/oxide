@@ -645,8 +645,28 @@ const buildCelldDomBlock = function buildCelldDomBlock(
   return `import "oxidejs/worker-dom/install";\n`;
 };
 
+const buildUserEntryBlock = function buildUserEntryBlock(
+  userWorkerAbs: string | null
+): string {
+  if (!userWorkerAbs) {
+    return `const user = undefined;
+const __userFetch = undefined;
+`;
+  }
+  return `export * from ${JSON.stringify(userWorkerAbs)};
+import * as __userMod from ${JSON.stringify(userWorkerAbs)};
+const user = __userMod.default;
+const __userFetch =
+  user != null && typeof user.fetch === "function"
+    ? user.fetch.bind(user)
+    : typeof __userMod.fetch === "function"
+      ? __userMod.fetch
+      : undefined;
+`;
+};
+
 export const generateWorkerWrapper = function generateWorkerWrapper(
-  userWorkerAbs: string,
+  userWorkerAbs: string | null,
   opts: WorkerWrapperOpts = {}
 ): string {
   const preset = opts.preset ?? "fetch";
@@ -683,16 +703,8 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
     .map((spec) => `import ${JSON.stringify(spec)};`)
     .join("\n");
   const celldDomBlock = buildCelldDomBlock(preset);
-  return `${sideEffectImports}${celldDomBlock}export * from ${JSON.stringify(userWorkerAbs)};
-import * as __userMod from ${JSON.stringify(userWorkerAbs)};
-const user = __userMod.default;
-const __userFetch =
-  user != null && typeof user.fetch === "function"
-    ? user.fetch.bind(user)
-    : typeof __userMod.fetch === "function"
-      ? __userMod.fetch
-      : undefined;
-const __fetch = Symbol.for("oxidejs.fetch");
+  const userBlock = buildUserEntryBlock(userWorkerAbs);
+  return `${sideEffectImports}${celldDomBlock}${userBlock}const __fetch = Symbol.for("oxidejs.fetch");
 ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
   ...(user ?? {}),
   async fetch(request, env, ctx) {

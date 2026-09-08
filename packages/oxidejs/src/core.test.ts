@@ -36,6 +36,7 @@ describe("resolveOptions", () => {
     expect(resolved.clientDir).toBe("client");
     expect(resolved.emitConfig).toBe(false);
     expect(resolved.workerEntryAbs).toBe(path.resolve(root, "src/server.ts"));
+    expect(resolved.hasWorkerEntry).toBe(false);
     expect(resolved.hasClient).toBe(false);
     expect(resolved.hasPublic).toBe(false);
     expect(resolved.actions).toBe("http");
@@ -60,6 +61,22 @@ describe("resolveOptions", () => {
     temps.push(root);
     fs.mkdirSync(path.join(root, "public"));
     expect(resolveOptions({}, root).hasPublic).toBe(true);
+  });
+
+  test("detects default worker entry when present", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "server.ts"), "export default {}");
+    expect(resolveOptions({}, root).hasWorkerEntry).toBe(true);
+  });
+
+  test("rejects an explicit workerEntry that does not exist", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    expect(() =>
+      resolveOptions({ workerEntry: "src/missing.ts" }, root)
+    ).toThrow('workerEntry "src/missing.ts" not found');
   });
 
   test("resolves relative middleware paths against project root", () => {

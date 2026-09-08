@@ -36,7 +36,7 @@ vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` (`undefined` continues) → static file → `index.html` for navigations. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
+Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` when present (`undefined` continues) → static file → `index.html` for navigations. Missing the default `src/server.ts` is fine — actions and static assets still run. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
 
 ```ts
 oxide({
@@ -237,7 +237,7 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | Option | Default | Notes |
 | --- | --- | --- |
 | `preset` | `"fetch"` | `"fetch"` or `"celld"` |
-| `workerEntry` | `src/server.ts` | Relative to project root |
+| `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
 | `outDir` | `dist` | Output root |
 | `clientDir` | `client` | Must stay inside `outDir` |
 | `wrangler.name` | required if `emitConfig` |  |

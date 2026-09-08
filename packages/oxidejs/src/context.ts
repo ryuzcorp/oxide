@@ -26,7 +26,7 @@ export {
 
 const FETCH_KEY = Symbol.for("oxidejs.fetch");
 
-/** Return from `src/server.ts` `fetch`. `undefined` falls through to assets. */
+/** Return from `src/server.ts` `fetch` when that entry exists. `undefined` falls through to assets. */
 export type FetchResult = Response | undefined;
 
 /**

@@ -5,7 +5,7 @@ sidebar:
 description: Own the routes you care about. Return nothing and Oxide serves static files (and SPA navigations).
 ---
 
-Every request hits your server entry first. The default path is [`src/server.ts`](/oxide/configuration#workerentry). Export a `fetch` — named or on the default export. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx`, the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
+When [`src/server.ts`](/oxide/configuration#workerentry) exists, requests reach that entry after middleware and actions. Export a `fetch` — named or on the default export. Missing the default path is fine: Oxide still serves actions and static assets. On [`preset: "celld"`](/oxide/configuration#preset) the runtime also passes Worker `env` and `ctx`, the same pair actions read with [`useEnv()` / `useFetchCtx()`](/oxide/server-actions#useenv-and-usefetchctx).
 
 Type it with [`FetchHandler`](#fetchhandler):
 

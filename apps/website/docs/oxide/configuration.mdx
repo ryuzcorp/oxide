@@ -10,7 +10,7 @@ Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` â
 | Option | Default | What it controls |
 | --- | --- | --- |
 | [`preset`](#preset) | `"fetch"` | Node-style fetch server or celld worker output |
-| [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file |
+| [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file (optional when default is missing) |
 | [`outDir`](#outdir) | `dist` | Build output folder |
 | [`clientDir`](#clientdir) | `client` | Client folder inside `outDir` |
 | [`wrangler.name`](#wrangler) | required if `emitConfig` | Worker name |
@@ -48,7 +48,7 @@ oxide({
 
 ## workerEntry
 
-The default is `src/server.ts`. This is the file Oxide imports as your server. See [Server entry](/oxide/server-entry).
+The default is `src/server.ts`. When that file is present, Oxide imports it as your server. Missing the default path is fine â€” actions and static assets still run. An explicit path that does not exist fails at config resolve. See [Server entry](/oxide/server-entry).
 
 ```ts twoslash
 import oxide from "oxidejs/vite";

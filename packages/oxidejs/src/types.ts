@@ -42,7 +42,11 @@ export interface OxidejsOptions {
   /** "fetch" (default) skips wrangler.jsonc and serves client assets. "celld" emits wrangler.jsonc. */
   preset?: OxidejsPreset;
 
-  /** Path to server entry, relative to project root. Default: "src/server.ts" */
+  /**
+   * Path to server entry, relative to project root. Default: `"src/server.ts"`.
+   * When the default path is missing, the entry is skipped (actions / assets only).
+   * An explicit path that does not exist fails at build time.
+   */
   workerEntry?: string;
 
   /** Output root. Default: "dist" */
@@ -90,6 +94,8 @@ export interface ResolvedOptions {
   preset: OxidejsPreset;
   workerEntry: string;
   workerEntryAbs: string;
+  /** False when the default worker entry file is absent (actions-only). */
+  hasWorkerEntry: boolean;
   /** Absolute output root. */
   outDir: string;
   /** Relative segment only. */

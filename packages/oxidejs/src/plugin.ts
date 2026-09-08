@@ -322,12 +322,18 @@ const loadVirtualWorker = function loadVirtualWorker(
   ctx: PluginHookContext,
   resolved: ResolvedOptions
 ): string {
-  ctx.addWatchFile(resolved.workerEntryAbs);
+  // Re-check at load so a default entry created after config resolve is picked up.
+  const hasEntry = fs.existsSync(resolved.workerEntryAbs);
+  if (hasEntry) {
+    ctx.addWatchFile(resolved.workerEntryAbs);
+  } else {
+    ctx.addWatchFile(path.dirname(resolved.workerEntryAbs));
+  }
   const modules = scanServerFiles(resolved.root);
   for (const mod of modules) {
     ctx.addWatchFile(mod.abs);
   }
-  return generateWorkerWrapper(resolved.workerEntryAbs, {
+  return generateWorkerWrapper(hasEntry ? resolved.workerEntryAbs : null, {
     actionPath: resolved.actionPath,
     actionSameOrigin: resolved.actionSameOrigin,
     actions: resolved.actions,
