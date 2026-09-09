@@ -1,7 +1,10 @@
+/* eslint-disable func-names -- Effect.gen uses anonymous generators (AGENTS.md) */
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import * as Effect from "effect/Effect";
 
 import {
   assetRelPath,
@@ -34,6 +37,7 @@ import {
 } from "./context";
 import { createActionHandler } from "./rpc/server";
 import { writeGeneratedActions } from "./rpc/test-harness";
+import { runActionInContext } from "./run-action";
 
 const RPC_MODULE = path.join(import.meta.dir, "rpc/index.ts");
 const OXIDE_RUNTIME = path.join(import.meta.dir, "context.ts");
@@ -218,6 +222,28 @@ describe("parseStreamExports", () => {
         export const add = action(async (text: string) => text)
       `)
     ).toEqual(["ticks", "list"]);
+  });
+
+  test("scopes Stream. / stream:true to each action call", () => {
+    expect(
+      parseStreamExports(`
+        export const add = action(
+          Effect.fn("tasks.add")(function* (text: string) {
+            yield* Effect.void
+          }),
+          { error: UnauthorizedError }
+        )
+        export const list = action(
+          () =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                return tasks.subscribeStream()
+              })
+            ),
+          { error: UnauthorizedError, stream: true }
+        )
+      `)
+    ).toEqual(["list"]);
   });
 });
 
@@ -506,9 +532,9 @@ ${stubSource}`
     expect(code).not.toContain("__asset");
   });
 
-  test("celld wrapper does not serve assets or listen", () => {
+  test("worker wrapper does not serve assets or listen", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", {
-      preset: "celld",
+      preset: "worker",
     });
     expect(code).not.toContain("node:fs/promises");
     expect(code).not.toContain("createServer");
@@ -517,11 +543,22 @@ ${stubSource}`
     );
     expect(code).toContain("env?.ASSETS");
     expect(code).toContain("assets.fetch(request)");
+    expect(code).not.toContain('spa.pathname = "/index.html"');
     expect(code).toContain('oxidejs/worker-dom/install"');
     expect(code).not.toContain("ensureWorkerDom()");
     expect(code).not.toContain(": __nf()");
     expect(code).toContain("export * from");
     expect(code).toContain("...(user ?? {})");
+  });
+
+  test("worker wrapper SPA-falls back to index.html when client exists", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", {
+      hasClient: true,
+      preset: "worker",
+    });
+    expect(code).toContain('spa.pathname = "/index.html"');
+    expect(code).toContain('dest === "document"');
+    expect(code).toContain("assets.fetch(new Request(spa, request))");
   });
 
   test("fetch wrapper with public/ still serves assets", () => {
@@ -550,10 +587,10 @@ ${stubSource}`
     expect(code).not.toContain("createActionHandler");
   });
 
-  test("celld ws wrapper uses handleUpgrade without crossws", () => {
+  test("worker ws wrapper uses handleUpgrade without crossws", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", {
       actions: "ws",
-      preset: "celld",
+      preset: "worker",
     });
     expect(code).toContain("createWsHooks");
     expect(code).toContain("__ws.handleUpgrade");
@@ -1285,6 +1322,25 @@ export const who = action(async () => useRequest().headers.get("x-user"))
         { env: { DB: "bound" } }
       );
       expect(seen).toBe("bound");
+    } finally {
+      __setNeedsSyncRequestStoreForTests(null);
+    }
+  });
+
+  test("runActionInContext keeps Worker sync store for Effect handlers across await", async () => {
+    __setNeedsSyncRequestStoreForTests(true);
+    try {
+      const ctx = {
+        env: { DB: "bound" },
+        req: new Request("http://localhost/effect-store"),
+      };
+      const effect = runActionInContext("tasks.add", ctx, () =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => Promise.resolve(null));
+          return useEnv<{ DB: string }>()?.DB ?? null;
+        })
+      );
+      expect(await Effect.runPromise(effect)).toBe("bound");
     } finally {
       __setNeedsSyncRequestStoreForTests(null);
     }

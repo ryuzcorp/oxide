@@ -48,4 +48,36 @@ describe("ensureWorkerDom", () => {
       }
     }
   });
+
+  test("does not replace host EventTarget when already defined", () => {
+    // SAFETY: temporary install/restore for EventTarget overwrite guard.
+    const g = globalThis as typeof globalThis &
+      WorkerDomHosts & {
+        EventTarget?: abstract new (...args: never[]) => object;
+      };
+    const hostEventTarget = g.EventTarget;
+    expect(hostEventTarget).toBeDefined();
+    const saved = {
+      document: g.document,
+      window: g.window,
+    };
+    delete g.document;
+    delete g.window;
+
+    try {
+      ensureWorkerDom();
+      expect(g.EventTarget).toBe(hostEventTarget);
+    } finally {
+      if (saved.document === undefined) {
+        delete g.document;
+      } else {
+        g.document = saved.document;
+      }
+      if (saved.window === undefined) {
+        delete g.window;
+      } else {
+        g.window = saved.window;
+      }
+    }
+  });
 });

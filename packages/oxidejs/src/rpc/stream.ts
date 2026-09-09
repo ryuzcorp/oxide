@@ -36,6 +36,36 @@ export const bindAsyncGenContext = function bindAsyncGenContext<T>(
   };
 };
 
+/** Same as `bindAsyncGenContext` for any async iterable (Effect Stream drains). */
+export const bindAsyncIterableContext = function bindAsyncIterableContext<T>(
+  iterable: AsyncIterable<T>,
+  run: <R>(fn: () => R) => R
+): AsyncGenerator<T, unknown, unknown> {
+  const iter = iterable[Symbol.asyncIterator]();
+  return {
+    next: (...args) => run(() => iter.next(...args)),
+    return: (value) =>
+      run(() =>
+        iter.return
+          ? iter.return(value)
+          : Promise.resolve({ done: true as const, value: undefined })
+      ),
+    throw: (error) =>
+      // oxlint-disable-next-line promise/no-promise-in-callback -- AsyncIterator.throw returns a Promise
+      run(() => (iter.throw ? iter.throw(error) : Promise.reject(error))),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+    async [Symbol.asyncDispose]() {
+      if (!iter.return) {
+        return;
+      }
+      // oxlint-disable-next-line unicorn/no-useless-undefined -- AsyncIterator.return requires a value
+      await run(() => iter.return?.(undefined));
+    },
+  };
+};
+
 /** Create a generator inside `run`, then keep every subsequent pull inside `run`. */
 export const asyncGenToStreamInContext = function asyncGenToStreamInContext<T>(
   create: () => AsyncGenerator<T, unknown, unknown>,

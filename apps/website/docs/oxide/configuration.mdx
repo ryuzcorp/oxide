@@ -9,18 +9,22 @@ Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` â
 
 | Option | Default | What it controls |
 | --- | --- | --- |
-| [`preset`](#preset) | `"fetch"` | Node-style fetch server or celld worker output |
+| [`preset`](#preset) | `"fetch"` | Node-style fetch server or Workers output |
 | [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file (optional when default is missing) |
 | [`outDir`](#outdir) | `dist` | Build output folder |
 | [`clientDir`](#clientdir) | `client` | Client folder inside `outDir` |
 | [`wrangler.name`](#wrangler) | required if `emitConfig` | Worker name |
 | [`wrangler.compatibility_date`](#wrangler) | required if `emitConfig` | Worker compatibility date |
 | [`wrangler.compatibility_flags`](#wrangler) | - | Optional worker flags |
+| [`wrangler.account_id`](#wrangler) | - | Optional Cloudflare account id |
+| [`wrangler.workers_dev`](#wrangler) | - | Optional Cloudflare `*.workers.dev` |
+| [`wrangler.routes`](#wrangler) | - | Optional Cloudflare routes |
+| [`wrangler.kv_namespaces`](#wrangler) | - | Optional KV namespaces |
 | [`wrangler.durable_objects`](#wrangler) | - | Optional Durable Object config |
 | [`wrangler.migrations`](#wrangler) | - | Optional migrations |
 | [`wrangler.services`](#wrangler) | - | Optional service bindings |
 | [`wrangler.vars`](#wrangler) | - | Optional variables |
-| [`emitConfig`](#emitconfig) | `true` on `celld` | Whether to write `wrangler.jsonc` |
+| [`emitConfig`](#emitconfig) | `true` on `worker` | Whether to write `wrangler.jsonc` |
 | [`actions`](#actions) | `"http"` | Action transport, endpoint path, and same-origin protection |
 | [`actionHeaders`](#actionheaders) | - | Public static headers added by the browser action client |
 | [`middleware`](#middleware) | `[]` | Production request middleware, in order |
@@ -35,13 +39,13 @@ Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` â
 
 Use `"fetch"` for the default Node-compatible server. It serves built client files, copies `public/`, and gives hashed assets a long immutable cache lifetime.
 
-Use `"celld"` for celld, a self-hosted alternative to Cloudflare Workers. This preset writes worker configuration and leaves asset serving to the `ASSETS` binding.
+Use `"worker"` for Cloudflare Workers. This preset writes worker configuration and leaves asset serving to the `ASSETS` binding.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
 
 oxide({
-  preset: "celld",
+  preset: "worker",
   wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
 });
 ```
@@ -66,11 +70,11 @@ The default is `client`, producing `dist/client/`. It must stay inside [`outDir`
 
 ## wrangler
 
-These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself. Oxide always adds `nodejs_compat` to `compatibility_flags` (merged with any flags you pass).
+These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself. Pass `compatibility_flags` when you need them (`nodejs_compat` is optional â€” celld ignores it). Cloudflare-only keys (`account_id`, `workers_dev`, `routes`, `kv_namespaces`) are emitted when you set them for wrangler deploy; **omit them for celld** â€” unknown top-level keys fail `celld deploy`.
 
 ## emitConfig
 
-This defaults to `true` for `"celld"` and `false` for `"fetch"`. Set it to `false` when another tool owns the worker config.
+This defaults to `true` for `"worker"` and `false` for `"fetch"`. Set it to `false` when another tool owns the worker config.
 
 ## actions
 
@@ -96,11 +100,11 @@ oxide({
 });
 ```
 
-- `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node/`fetch`, `WebSocketPair` on [`preset: "celld"`](#preset)).
+- `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node/`fetch`, `WebSocketPair` on [`preset: "worker"`](#preset)).
 - `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
 - `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
 
-On celld, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
+On the worker preset, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
 
 Turn `sameOrigin` off only when cross-origin RPC is intentional. You must then provide the appropriate authentication, CORS, and CSRF policy.
 

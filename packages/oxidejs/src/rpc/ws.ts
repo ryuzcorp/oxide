@@ -102,7 +102,7 @@ interface WorkerWebSocketPair {
 }
 
 const workerWebSocketPair = function workerWebSocketPair() {
-  // SAFETY: Cloudflare Workers / celld expose WebSocketPair; Node and Bun do not.
+  // SAFETY: Cloudflare Workers expose WebSocketPair; Node and Bun do not.
   const api = globalThis as typeof globalThis & {
     WebSocketPair?: new () => WorkerWebSocketPair;
   };
@@ -171,6 +171,21 @@ const sendNdjsonFrames = async function sendNdjsonFrames(
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
+};
+
+const WS_CONNECTING = 0;
+const WS_OPEN = 1;
+
+/** True when the socket can still accept `send` (Workers may omit `WebSocket.OPEN`). */
+const canSendOnSocket = function canSendOnSocket(socket: {
+  readyState?: number;
+}): boolean {
+  const state = socket.readyState;
+  // After accept(), CF sockets are open; some runtimes leave readyState unset.
+  if (state === undefined) {
+    return true;
+  }
+  return state === WS_OPEN || state === WS_CONNECTING;
 };
 
 export const createWsHooks = function createWsHooks(
@@ -276,11 +291,9 @@ export const createWsHooks = function createWsHooks(
     if (!pair) {
       return new Response("WebSocket not supported", { status: 500 });
     }
-    // SAFETY: WebSocketPair always exposes client at 0 and server at 1.
-    const [client, server] = Object.values(pair) as [
-      WorkerSocket,
-      WorkerSocket,
-    ];
+    // Prefer indexed access — celld's pair is array-like (`length` makes
+    // Object.values return [client, server, length]).
+    const { 0: client, 1: server } = pair;
     if (options.accept) {
       options.accept(server, req);
     } else {
@@ -295,8 +308,13 @@ export const createWsHooks = function createWsHooks(
       },
       request: req,
       send: (data) => {
-        if (server.readyState === WebSocket.OPEN) {
+        if (!canSendOnSocket(server)) {
+          return;
+        }
+        try {
           server.send(data);
+        } catch {
+          // Socket closed between the readyState check and send.
         }
       },
     };
@@ -304,12 +322,19 @@ export const createWsHooks = function createWsHooks(
     server.addEventListener("message", (event) => {
       // SAFETY: Workers deliver string or binary frames; both decode to NDJSON text.
       const data = event.data as string | ArrayBuffer | ArrayBufferView;
-      void message(peer, {
-        text: () => messageText(data),
-      });
+      // Fire-and-forget: per-message failures must not tear down the peer.
+      void (async () => {
+        try {
+          await message(peer, {
+            text: () => messageText(data),
+          });
+        } catch {
+          // Effect will retry / Ping; keep the socket alive.
+        }
+      })();
     });
 
-    // SAFETY: Cloudflare / celld ResponseInit includes `webSocket`.
+    // SAFETY: Cloudflare Workers ResponseInit includes `webSocket`.
     return new Response(null, {
       status: 101,
       webSocket: client,

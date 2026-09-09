@@ -37,6 +37,19 @@ const isTaggedFailError = function isTaggedFailError(
   return isStringField(error["_tag"]);
 };
 
+/** SchemaDecodeError (withSchema / payload decode) → Invalid params, not -32000. */
+const schemaDecodeFail = function schemaDecodeFail(
+  err: JsonObject & { _tag: string; message?: string }
+): JsonRpcErrorBody | undefined {
+  if (err["_tag"] !== "SchemaDecodeError") {
+    return undefined;
+  }
+  return {
+    code: -32_602,
+    message: isStringField(err["message"]) ? err["message"] : "Invalid params",
+  };
+};
+
 const extractTaggedFail = function extractTaggedFail(
   data: OxidejsJson | undefined
 ): JsonRpcErrorBody | undefined {
@@ -51,6 +64,10 @@ const extractTaggedFail = function extractTaggedFail(
     if (entry["_tag"] === "Fail") {
       const err = entry["error"];
       if (err !== undefined && isJsonObject(err) && isTaggedFailError(err)) {
+        const asParams = schemaDecodeFail(err);
+        if (asParams) {
+          return asParams;
+        }
         const message = isStringField(err["message"])
           ? err["message"]
           : err["_tag"];
@@ -170,10 +187,9 @@ const isPlainJsonRpcError = function isPlainJsonRpcError(
 
 const isSchemaDecodeDefectData = function isSchemaDecodeDefectData(
   data: JsonObject
-): data is JsonObject & { message: string; name: "SchemaDecodeError" } {
-  return (
-    data["name"] === "SchemaDecodeError" && typeof data["message"] === "string"
-  );
+): data is JsonObject & { message: string } {
+  const tag = data["_tag"] ?? data["name"];
+  return tag === "SchemaDecodeError" && typeof data["message"] === "string";
 };
 
 const scrubError = function scrubError(error: OxidejsJson): JsonRpcErrorBody {
@@ -202,6 +218,10 @@ const scrubError = function scrubError(error: OxidejsJson): JsonRpcErrorBody {
   }
   // Effect Rpc encoded application error (tagged Fail as error object).
   if (isTaggedFailError(error) && error["_tag"] !== "Cause") {
+    const asParams = schemaDecodeFail(error);
+    if (asParams) {
+      return asParams;
+    }
     const message = isStringField(error["message"])
       ? error["message"]
       : error["_tag"];

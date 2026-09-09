@@ -19,7 +19,7 @@ Use Oxide when you want a small typed full-stack app: a server entry, optional s
 - **One output tree** — `dist/server.js`, and a client only when you have a page.
 - **Server actions** — `export const x = action(...)` in `*.server.ts`. Import `x` from the browser; Oxide swaps in an Effect RPC stub. Types stay shared. Secrets and helpers that are not wrapped in `action()` never cross the wire. See [Server actions](/oxide/server-actions).
 - **Streams and live data** — `async function*` over newline-delimited JSON-RPC; `liveQuery` for topic snapshots on WebSocket.
-- **Two presets** — [`fetch`](/oxide/configuration#preset) serves assets from Node. [`celld`](/oxide/configuration#preset) writes worker config for celld (a self-hosted Workers alternative).
+- **Two presets** — [`fetch`](/oxide/configuration#preset) serves assets from Node. [`worker`](/oxide/configuration#preset) writes worker config for Cloudflare Workers.
 - **Vite and Rsbuild** — same options, same layout.
 
 You can ship a server-only worker (no `index.html`) or a UI that calls actions with no hand-written `/api` routes.
@@ -27,12 +27,13 @@ You can ship a server-only worker (no `index.html`) or a UI that calls actions w
 ## What it does not do
 
 - No local Worker / workerd emulation
-- No automatic celld deploy
+- No automatic celld / wrangler deploy
 - No Node-builtin polyfills — a stray Node import fails the build
 
 ## Next steps
 
 - [Quickstart](/oxide/quickstart)
+- [Worker](/oxide/worker)
 - [Server entry](/oxide/server-entry)
 - [Server actions](/oxide/server-actions)
 - [Configuration](/oxide/configuration)

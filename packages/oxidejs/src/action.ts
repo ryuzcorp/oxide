@@ -459,8 +459,8 @@ export function action<Args extends unknown[], A, E = never, R = never>(
   fn: (...args: Args) => Effect.Effect<A, E, R>,
   opts?: ActionOptions
 ): ServerActionHandle<Args, A>;
-export function action<Args extends unknown[], Y>(
-  fn: (...args: Args) => Stream.Stream<Y>,
+export function action<Args extends unknown[], Y, E = never, R = never>(
+  fn: (...args: Args) => Stream.Stream<Y, E, R>,
   opts?: ActionOptions
 ): StreamActionHandle<Args, Y>;
 export function action<Args extends unknown[], Result>(
@@ -494,8 +494,12 @@ export function action<Args extends unknown[], Result>(
     ): AsyncGenerator<unknown, void, unknown> {
       const raw = fn(...args);
       if (Stream.isStream(raw)) {
-        // SAFETY: Stream.toAsyncIterable yields the stream's success type.
-        yield* Stream.toAsyncIterable(raw as Stream.Stream<unknown>);
+        const ctx = peekRequestStore();
+        // SAFETY: Stream.isStream narrows; provide request Layer when a store exists.
+        const stream = (
+          ctx ? Stream.provide(raw, actionContextLayer(ctx)) : raw
+        ) as Stream.Stream<unknown>;
+        yield* Stream.toAsyncIterable(stream);
         return;
       }
       throw new Error(

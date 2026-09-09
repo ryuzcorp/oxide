@@ -64,6 +64,39 @@ test("scrubRpcJson maps SchemaDecodeError Defect to Invalid params", () => {
   });
 });
 
+test("scrubRpcJson maps SchemaDecodeError tagged Fail to Invalid params", () => {
+  expect(
+    JSON.parse(
+      scrubRpcJson(
+        JSON.stringify({
+          error: {
+            _tag: "Cause",
+            data: [
+              {
+                _tag: "Fail",
+                error: {
+                  _tag: "SchemaDecodeError",
+                  message: 'Expected string\n  at ["text"]',
+                },
+              },
+            ],
+            message: "Fail",
+          },
+          id: 1,
+          jsonrpc: "2.0",
+        })
+      )
+    )
+  ).toEqual({
+    error: {
+      code: -32_602,
+      message: 'Expected string\n  at ["text"]',
+    },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+});
+
 test("scrubRpcJson maps tagged Fail Cause to application error", () => {
   expect(
     JSON.parse(

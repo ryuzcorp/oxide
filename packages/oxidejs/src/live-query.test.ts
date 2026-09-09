@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+
 import { liveQuery, publish } from "./live-query";
 
 describe("liveQuery", () => {
@@ -61,5 +64,26 @@ describe("liveQuery", () => {
     const iter = q.values()[Symbol.asyncIterator]();
     expect(await iter.next()).toEqual({ done: false, value: { n: 7 } });
     await iter.return?.();
+  });
+
+  test("mutateEffect serializes and subscribeStream yields", async () => {
+    const q = liveQuery<number>({ topic: `effect-${crypto.randomUUID()}` });
+
+    await Effect.runPromise(
+      q
+        .mutateEffect(() => Effect.succeed(3))
+        .pipe(Effect.andThen(() => q.mutateEffect(() => Effect.succeed(4))))
+    );
+
+    const values: number[] = [];
+    for await (const n of Stream.toAsyncIterable(
+      q.subscribeStream(Effect.void)
+    )) {
+      values.push(n);
+      if (values.length >= 1) {
+        break;
+      }
+    }
+    expect(values).toEqual([4]);
   });
 });

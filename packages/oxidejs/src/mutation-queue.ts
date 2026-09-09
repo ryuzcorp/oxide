@@ -1,3 +1,9 @@
+import type * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
+
+import { deferred } from "./deferred";
+
 const TRANSIENT_CLOSE = /\b(?:1000|1001|1006)\b/u;
 
 const isTransientFailure = function isTransientFailure(error: Error) {
@@ -21,6 +27,10 @@ const isTransientFailure = function isTransientFailure(error: Error) {
     return true;
   }
   return /Failed to fetch|NetworkError|ECONNRESET|ECONNREFUSED/u.test(text);
+};
+
+const asError = function asError(cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(String(cause));
 };
 
 /** Erased wrap() return held until flush; typed back to R at the call site. */
@@ -73,6 +83,14 @@ export interface MutationQueue {
 }
 
 export interface CreateMutationQueueOptions {
+  /**
+   * Retries per queued item during `flush` (and optional pre-enqueue attempts).
+   * Uses Effect `Schedule.exponential` + jitter. Default 4 retries after the
+   * first attempt (5 tries total).
+   */
+  retries?: number;
+  /** Base delay for exponential backoff. Default `50 millis`. */
+  retryBase?: Duration.Input;
   /** Reserved for IndexedDB persistence; only memory is implemented. */
   storage?: "memory";
 }
@@ -87,14 +105,30 @@ const toPublicItem = function toPublicItem(
   };
 };
 
+const transientRetry = function transientRetry(
+  retries: number,
+  base: Duration.Input
+) {
+  return {
+    schedule: Schedule.exponential(base).pipe(Schedule.jittered),
+    times: retries,
+    while: (error: Error) => isTransientFailure(error),
+  };
+};
+
 /**
  * Client-only write queue for `actions: "ws"`.
- * Enqueues on transient socket / network failures; drains FIFO on `flush`.
- * Optimistic UI is app-owned — listen via `subscribe`.
+ * Enqueues on transient socket / network failures; drains FIFO on `flush`
+ * with Effect Schedule backoff. Optimistic UI is app-owned — listen via
+ * `subscribe`.
  */
 export const createMutationQueue = function createMutationQueue(
-  _options?: CreateMutationQueueOptions
+  options?: CreateMutationQueueOptions
 ): MutationQueue {
+  const retries = options?.retries ?? 4;
+  const retryBase = options?.retryBase ?? "50 millis";
+  const retryPolicy = transientRetry(retries, retryBase);
+
   const queue: QueuedMutation[] = [];
   const listeners = new Set<MutationQueueListener>();
   const inflightKeys = new Map<string, Promise<MutationOutcome>>();
@@ -118,6 +152,17 @@ export const createMutationQueue = function createMutationQueue(
     }
   };
 
+  const runWithRetry = function runWithRetry(
+    run: () => Promise<MutationOutcome>
+  ) {
+    return Effect.runPromise(
+      Effect.tryPromise({
+        catch: asError,
+        try: run,
+      }).pipe(Effect.retry(retryPolicy))
+    );
+  };
+
   const flush = function flush() {
     if (flushing) {
       return flushing;
@@ -131,13 +176,13 @@ export const createMutationQueue = function createMutationQueue(
         }
         try {
           // oxlint-disable-next-line eslint/no-await-in-loop -- FIFO drain
-          const value = await item.run();
+          const value = await runWithRetry(item.run);
           queue.shift();
           inflightKeys.delete(item.id);
           item.resolve(value);
           emit("success", toPublicItem(item));
         } catch (error) {
-          const err = error instanceof Error ? error : new Error(String(error));
+          const err = asError(error);
           if (isTransientFailure(err)) {
             emit("error", toPublicItem(item), err);
             return;
@@ -179,10 +224,11 @@ export const createMutationQueue = function createMutationQueue(
     },
     wrap<Args extends unknown[], R>(
       fn: (...args: Args) => Promise<R>,
-      options?: WrapMutationOptions<Args>
+      wrapOptions?: WrapMutationOptions<Args>
     ) {
       return async (...args: Args) => {
-        const id = options?.idempotencyKey?.(...args) ?? crypto.randomUUID();
+        const id =
+          wrapOptions?.idempotencyKey?.(...args) ?? crypto.randomUUID();
         const existing = inflightKeys.get(id);
         if (existing) {
           // SAFETY: same idempotency key reuses the in-flight Promise<R>.
@@ -204,13 +250,11 @@ export const createMutationQueue = function createMutationQueue(
           try {
             return await run();
           } catch (error) {
-            const err =
-              error instanceof Error ? error : new Error(String(error));
+            const err = asError(error);
             if (!isTransientFailure(err)) {
               throw error;
             }
-            const { promise, reject, resolve } =
-              Promise.withResolvers<MutationOutcome>();
+            const { promise, reject, resolve } = deferred<MutationOutcome>();
             // SAFETY: Args erased for public queue items; wrap() still types the call.
             const item: QueuedMutation = {
               args: args as MutationOutcome[],

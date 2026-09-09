@@ -209,6 +209,125 @@ export const ping = action(() => "pong")
   }
 });
 
+test("handleUpgrade sends when readyState is unset (Workers quirk)", async () => {
+  const sent: string[] = [];
+  const listeners = new Map<string, Set<(event: { data: string }) => void>>();
+  const server = {
+    accept() {},
+    addEventListener(
+      type: string,
+      fn: ((event: { data: string }) => void) | (() => void)
+    ) {
+      const set = listeners.get(type) ?? new Set();
+      // SAFETY: test registers message/close/error listeners with compatible shapes.
+      set.add(fn as (event: { data: string }) => void);
+      listeners.set(type, set);
+    },
+    // Some Worker runtimes leave readyState unset after accept().
+    // SAFETY: optional readyState models the Workers quirk under test.
+    readyState: undefined as number | undefined,
+    send(data: string) {
+      sent.push(data);
+    },
+  };
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-open-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+
+  try {
+    // SAFETY: test fixture stubs Worker WebSocket methods (accept/send/listeners).
+    await withWebSocketPair(client, server as never, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        path: "/__oxide/action",
+        sameOrigin: false,
+      });
+      const response = hooks.handleUpgrade(
+        new Request("http://localhost/__oxide/action", {
+          headers: { Upgrade: "websocket" },
+        })
+      );
+      expect(response?.status).toBe(101);
+      const onMessage = listeners.get("message");
+      expect(onMessage?.size).toBe(1);
+      for (const fn of onMessage ?? []) {
+        fn({
+          data: JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
+        });
+      }
+      await waitUntil(() => sent.length > 0, 2000);
+      expect(sent).toEqual([
+        `${JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Pong" })}\n`,
+      ]);
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("handleUpgrade does not send on a closed socket", async () => {
+  const sent: string[] = [];
+  const listeners = new Map<string, Set<(event: { data: string }) => void>>();
+  const server = {
+    accept() {},
+    addEventListener(
+      type: string,
+      fn: ((event: { data: string }) => void) | (() => void)
+    ) {
+      const set = listeners.get(type) ?? new Set();
+      // SAFETY: test registers message/close/error listeners with compatible shapes.
+      set.add(fn as (event: { data: string }) => void);
+      listeners.set(type, set);
+    },
+    readyState: 3,
+    send(data: string) {
+      sent.push(data);
+    },
+  };
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-closed-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+
+  try {
+    // SAFETY: test fixture stubs Worker WebSocket methods (accept/send/listeners).
+    await withWebSocketPair(client, server as never, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        path: "/__oxide/action",
+        sameOrigin: false,
+      });
+      hooks.handleUpgrade(
+        new Request("http://localhost/__oxide/action", {
+          headers: { Upgrade: "websocket" },
+        })
+      );
+      for (const fn of listeners.get("message") ?? []) {
+        fn({
+          data: JSON.stringify({ jsonrpc: "2.0", method: "@effect/rpc/Ping" }),
+        });
+      }
+      await Bun.sleep(20);
+      expect(sent).toEqual([]);
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("handleUpgrade calls custom accept for hibernation hooks", async () => {
   const server = mockSocket();
   const client = mockSocket();

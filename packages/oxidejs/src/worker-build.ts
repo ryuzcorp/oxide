@@ -150,7 +150,7 @@ export const applyViteEnvironments = function applyViteEnvironments(
   ]);
   config.optimizeDeps.include = [...optimizeInclude];
 
-  const celld = opts.preset === "celld";
+  const isWorker = opts.preset === "worker";
   mergeAliases(config, oxideRpcAliases());
 
   config.environments ??= {};
@@ -159,7 +159,7 @@ export const applyViteEnvironments = function applyViteEnvironments(
     emptyOutDir: true,
     outDir: opts.outDir,
     rolldownOptions: {
-      external: celld ? [/^cloudflare:/u] : [],
+      external: isWorker ? [/^cloudflare:/u] : [],
       input: VIRTUAL_WORKER_ID,
       output: {
         entryFileNames: "server.js",
@@ -167,7 +167,7 @@ export const applyViteEnvironments = function applyViteEnvironments(
       },
     },
     rollupOptions: {
-      external: celld ? [/^cloudflare:/u] : [],
+      external: isWorker ? [/^cloudflare:/u] : [],
       input: VIRTUAL_WORKER_ID,
       output: {
         entryFileNames: "server.js",
@@ -179,10 +179,10 @@ export const applyViteEnvironments = function applyViteEnvironments(
   const ssrEnvironment: ViteEnvironmentConfig = {
     build: ssrBuild,
     consumer: "server",
-    resolve: celld
+    resolve: isWorker
       ? { conditions: ["worker"], noExternal: true }
       : { noExternal: ["effect", "oxidejs"] },
-    ssr: celld
+    ssr: isWorker
       ? { external: [/^cloudflare:/u], noExternal: true, target: "webworker" }
       : { noExternal: ["effect", "oxidejs"] },
   };
@@ -266,11 +266,11 @@ export const applyRsbuildEnvironments = function applyRsbuildEnvironments(
     output: {
       distPath: { root: opts.outDir },
       filename: { js: "server.js" },
-      target: opts.preset === "celld" ? "web-worker" : "node",
+      target: opts.preset === "worker" ? "web-worker" : "node",
     },
     source: { entry: { server: { html: false, import: VIRTUAL_WORKER_ID } } },
   };
-  if (opts.preset === "celld") {
+  if (opts.preset === "worker") {
     server.resolve = { conditionNames: ["worker", "..."] };
   }
   config.environments["server"] = server;

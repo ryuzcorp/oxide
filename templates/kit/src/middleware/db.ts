@@ -1,10 +1,6 @@
 import { stampRequestContext } from "oxidejs";
 import type { ActionContextValue } from "oxidejs";
 
-interface KitEnv {
-  DB?: D1Database;
-}
-
 /**
  * Stamp `env.DB` onto the request context as `db` for `useCtx()` / `useDb()`.
  * Runs before actions and WebSocket upgrade.

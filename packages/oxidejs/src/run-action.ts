@@ -2,11 +2,48 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
 import type { ActionContext } from "./request-store";
-import { asyncGenToStream, bindAsyncGenContext } from "./rpc/stream";
+import {
+  enterRequestStore,
+  exitRequestStore,
+  runWithAls,
+} from "./request-store";
+import {
+  asyncGenToStream,
+  bindAsyncGenContext,
+  bindAsyncIterableContext,
+} from "./rpc/stream";
 import { actionContextLayer } from "./services";
 import type { OxidejsJson } from "./types";
 
 type ActionValue = OxidejsJson | Response | null | undefined;
+
+interface Thenable {
+  then: (
+    onfulfilled?:
+      | ((value: ActionValue) => ActionValue | PromiseLike<ActionValue>)
+      | null,
+    onrejected?:
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Promise.then rejection channel
+      ((error: unknown) => ActionValue | PromiseLike<ActionValue>) | null
+  ) => PromiseLike<ActionValue>;
+}
+
+const isPromiseLike = function isPromiseLike(
+  value:
+    | ActionValue
+    | Promise<ActionValue>
+    | Effect.Effect<ActionValue>
+    | Thenable
+): value is Thenable {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value !== "object" && typeof value !== "function") {
+    return false;
+  }
+  // SAFETY: object/function branch above; thenable is detected by a callable `then`.
+  return typeof (value as Thenable).then === "function";
+};
 
 const rejectResponse = function rejectResponse(
   value: ActionValue
@@ -24,6 +61,18 @@ const rejectResponse = function rejectResponse(
 
 const asDefect = function asDefect(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
+};
+
+const withActionSpan = function withActionSpan<A, E, R>(
+  method: string,
+  effect: Effect.Effect<A, E, R>
+) {
+  return effect.pipe(
+    Effect.withSpan("oxidejs.action", {
+      attributes: { "rpc.method": method },
+    }),
+    Effect.annotateLogs({ "rpc.method": method })
+  );
 };
 
 /**
@@ -44,22 +93,60 @@ export const runActionEffect = function runActionEffect(
       catch: asDefect,
       try: () => Promise.resolve(raw),
     });
-  }).pipe(
-    Effect.map(rejectResponse),
-    Effect.withSpan("oxidejs.action", {
-      attributes: { "rpc.method": method },
-    }),
-    Effect.annotateLogs({ "rpc.method": method })
+  }).pipe(Effect.map(rejectResponse), (effect) =>
+    withActionSpan(method, effect)
   );
 };
 
-/** Provide request services around `runActionEffect` for generated handlers. */
+/**
+ * Provide request services + keep the Worker sync store for the whole handler.
+ *
+ * `withRequestStore` only defers restore for Promise returns. Effect handlers
+ * return an Effect synchronously, so wrapping them in `withRequestStore` clears
+ * `useDb()` / `useEnv()` before the fiber runs — breaks kit mutations on celld.
+ */
 export const runActionInContext = function runActionInContext(
   method: string,
   ctx: ActionContext,
   fn: () => ActionValue | Promise<ActionValue> | Effect.Effect<ActionValue>
 ): Effect.Effect<OxidejsJson | null, Error> {
-  return runActionEffect(method, fn).pipe(
+  return Effect.suspend(() => {
+    const previous = enterRequestStore(ctx);
+    let raw: ActionValue | Promise<ActionValue> | Effect.Effect<ActionValue>;
+    try {
+      raw = runWithAls(ctx, fn);
+    } catch (error) {
+      exitRequestStore(ctx, previous);
+      throw error;
+    }
+
+    if (Effect.isEffect(raw)) {
+      return Effect.ensuring(
+        // SAFETY: Effect.isEffect narrowed; success channel is ActionValue.
+        (raw as Effect.Effect<ActionValue, Error>).pipe(
+          Effect.map(rejectResponse)
+        ),
+        Effect.sync(() => exitRequestStore(ctx, previous))
+      );
+    }
+
+    if (isPromiseLike(raw)) {
+      return Effect.tryPromise({
+        catch: asDefect,
+        try: async () => {
+          try {
+            return rejectResponse(await raw);
+          } finally {
+            exitRequestStore(ctx, previous);
+          }
+        },
+      });
+    }
+
+    exitRequestStore(ctx, previous);
+    return Effect.succeed(rejectResponse(raw));
+  }).pipe(
+    (effect) => withActionSpan(method, effect),
     Effect.provide(actionContextLayer(ctx))
   );
 };
@@ -67,6 +154,10 @@ export const runActionInContext = function runActionInContext(
 /**
  * Normalize an action return into an Effect Stream for Rpc `stream: true`.
  * Accepts async generators or Effect Streams.
+ *
+ * Effect Streams (including `Stream.unwrap`) are drained through the same ALS
+ * re-entry as async generators so `useDb()` / `useEnv()` work on Workers when
+ * the unwrap Effect runs on first pull.
  */
 export const actionResultToStream = function actionResultToStream(
   method: string,
@@ -77,20 +168,29 @@ export const actionResultToStream = function actionResultToStream(
   run: <R>(fn: () => R) => R
 ): Stream.Stream<OxidejsJson | null, Error> {
   const raw = run(create);
-  // SAFETY: Stream.isStream narrows; otherwise the action is an async generator.
-  const stream = Stream.isStream(raw)
-    ? (raw as Stream.Stream<ActionValue, Error>)
+  const sourced = Stream.isStream(raw)
+    ? asyncGenToStream(
+        bindAsyncIterableContext(
+          Stream.toAsyncIterable(
+            // SAFETY: Stream.isStream narrowed `raw`; provide request services for unwrap Effects.
+            (raw as Stream.Stream<ActionValue, Error>).pipe(
+              Stream.provide(actionContextLayer(ctx))
+            )
+          ),
+          run
+        )
+      )
     : asyncGenToStream(
+        // SAFETY: non-Stream branch is the async generator create() returned.
         bindAsyncGenContext(
           raw as AsyncGenerator<ActionValue, unknown, unknown>,
           run
         )
       );
-  return stream.pipe(
+  return sourced.pipe(
     Stream.map(rejectResponse),
     Stream.withSpan("oxidejs.action", {
       attributes: { "rpc.method": method },
-    }),
-    Stream.provide(actionContextLayer(ctx))
+    })
   );
 };

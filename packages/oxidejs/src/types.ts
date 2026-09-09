@@ -1,4 +1,4 @@
-export type OxidejsPreset = "fetch" | "celld";
+export type OxidejsPreset = "fetch" | "worker";
 
 /** JSON-compatible value used for opaque wrangler / env bags. */
 export type OxidejsJson =
@@ -13,11 +13,52 @@ export interface OxidejsWranglerOptions {
   name: string;
   compatibility_date: string;
   compatibility_flags?: string[];
+  /** Cloudflare account id (wrangler deploy). Breaks `celld deploy` if present. */
+  account_id?: string;
+  /** Publish on `*.workers.dev` (Cloudflare). Breaks `celld deploy` if present. */
+  workers_dev?: boolean;
+  /** Cloudflare route patterns. Breaks `celld deploy` if present. */
+  routes?: OxidejsJson[];
   d1_databases?: OxidejsJson[];
   durable_objects?: { [key: string]: OxidejsJson };
   migrations?: OxidejsJson[];
+  kv_namespaces?: OxidejsJson[];
+  r2_buckets?: OxidejsJson[];
   services?: OxidejsJson[];
   vars?: { [key: string]: OxidejsJson };
+  /** Extra Cloudflare Workflow bindings. Scanned `workflow()` exports in `*.server.ts` are merged in. */
+  workflows?: {
+    binding: string;
+    class_name: string;
+    name: string;
+    script_name?: string;
+  }[];
+  /**
+   * Extra Cloudflare Queues producers/consumers. Scanned `queue()` exports in
+   * `*.server.ts` are merged in. Same-worker consumers also export `fetch`
+   * (actions): Cloudflare runs them; celld does not. Workflow-backed `send`
+   * also starts the workflow from the producer so celld still progresses.
+   */
+  queues?: {
+    consumers?: {
+      dead_letter_queue?: string;
+      max_batch_size?: number;
+      max_batch_timeout?: number;
+      max_retries?: number;
+      queue: string;
+    }[];
+    producers?: {
+      binding: string;
+      queue: string;
+    }[];
+  };
+  /**
+   * Extra Cron triggers. Scanned `schedule()` exports in `*.server.ts` are
+   * merged into `crons`.
+   */
+  triggers?: {
+    crons?: string[];
+  };
 }
 
 export type OxidejsActionTransport = "http" | "ws";
@@ -39,7 +80,10 @@ export type OxidejsActionHeaders =
   | [string, string][];
 
 export interface OxidejsOptions {
-  /** "fetch" (default) skips wrangler.jsonc and serves client assets. "celld" emits wrangler.jsonc. */
+  /**
+   * `"fetch"` (default) skips wrangler.jsonc and serves client assets.
+   * `"worker"` emits wrangler.jsonc for Cloudflare Workers.
+   */
   preset?: OxidejsPreset;
 
   /**
@@ -58,7 +102,7 @@ export interface OxidejsOptions {
   /** Wrangler config fields to merge into the generated wrangler.jsonc. */
   wrangler?: OxidejsWranglerOptions;
 
-  /** Skip config emission. Defaults to false for celld, true for fetch. */
+  /** Skip config emission. Defaults to false for worker, true for fetch. */
   emitConfig?: boolean;
 
   /** Transport and path for `*.server.ts` stubs. Default: `"http"` at `/__oxide/action`. */

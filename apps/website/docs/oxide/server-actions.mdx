@@ -128,11 +128,11 @@ export const getTask = action(
 );
 ```
 
-Clients see application error `-32000` with the tag/message. Returning `new NotFound(...)` as a **value** stays local (`T | Error`); it does not auto-promote over RPC — `Effect.fail` or throw the tagged error.
+Clients see application error `-32000` with the tag/message. Returning an `Error` as a value does not promote it over RPC — use `Effect.fail` or throw the tagged error.
 
 ### Effect handlers and services
 
-`action()` accepts Promise, `async function*`, `Effect`, and (with `{ stream: true }`) Effect `Stream`. Promise handlers stay the default. Effect handlers can yield `OxideRequest` / `OxideCtx` — the same data as `useRequest()` / `useCtx()`:
+Prefer Effect handlers (`Effect.gen`, Schema-stamped `payload` / `error`, services). `action()` also accepts Promise, `async function*`, and (with `{ stream: true }` or a returned `Stream`) Effect `Stream`. Yield `OxideRequest` / `OxideCtx` for the same data as `useRequest()` / `useCtx()`:
 
 ```ts twoslash src/who-effect.server.ts
 import { Effect } from "effect";
@@ -146,7 +146,7 @@ export const who = action(() =>
 );
 ```
 
-Handlers run under an `oxidejs.action` span annotated with `rpc.method`. Provide an Effect tracer/logger at the host if you want spans collected.
+Handlers run under an `oxidejs.action` span annotated with `rpc.method`. Provide `oxideRuntimeLayer()` (or your own Logger / Tracer Layer) at the host if you want spans collected.
 
 ## Authorization without leaking `user` to the client
 
@@ -164,41 +164,56 @@ export declare const db: {
 };
 // ---cut---
 // @filename: profile.server.ts
-import { action, useRequest } from "oxidejs";
+import { Effect, Schema } from "effect";
+import { action, OxideRequest } from "oxidejs";
 import { db, type User } from "./db";
 
-class UnauthorizedError extends Error {
-  constructor() {
-    super("Unauthorized");
+class UnauthorizedError extends Schema.TaggedError<UnauthorizedError>()(
+  "UnauthorizedError",
+  {
+    message: Schema.String,
   }
-}
+) {}
 
-function withUser<Args extends unknown[], Result>(
-  handler: (user: User, ...args: Args) => Result
+const requireUser = Effect.gen(function* () {
+  const request = yield* OxideRequest;
+  const authorization = request.headers.get("authorization");
+  if (!authorization) {
+    return yield* Effect.fail(
+      new UnauthorizedError({ message: "Unauthorized" })
+    );
+  }
+  const user = yield* Effect.promise(() =>
+    db.users.findByToken(authorization)
+  );
+  if (!user) {
+    return yield* Effect.fail(
+      new UnauthorizedError({ message: "Unauthorized" })
+    );
+  }
+  return user;
+});
+
+function withUser<Args extends unknown[], A, E>(
+  handler: (user: User, ...args: Args) => Effect.Effect<A, E>
 ) {
-  return async (...args: Args) => {
-    const authorization = useRequest().headers.get("authorization");
-    if (!authorization) {
-      throw new UnauthorizedError();
-    }
-
-    const user = await db.users.findByToken(authorization);
-    if (!user) {
-      throw new UnauthorizedError();
-    }
-
-    return handler(user, ...args);
-  };
+  return (...args: Args) =>
+    Effect.gen(function* () {
+      const user = yield* requireUser;
+      return yield* handler(user, ...args);
+    });
 }
 
 export const profile = action(
-  withUser((user) => db.profiles.find(user.id))
+  withUser((user) => Effect.promise(() => db.profiles.find(user.id))),
+  { error: UnauthorizedError }
 );
 
 export const update = action(
   withUser((user, name: string) =>
-    db.profiles.update(user.id, { name })
-  )
+    Effect.promise(() => db.profiles.update(user.id, { name }))
+  ),
+  { error: UnauthorizedError }
 );
 ```
 
@@ -354,7 +369,7 @@ Read them with `useCtx().db` (or a small `useDb()` helper).
 
 ### `useEnv()` and `useFetchCtx()`
 
-On [`preset: "celld"`](/oxide/configuration#preset), these are the Worker `env` and `ctx` from `fetch(request, env, ctx)`. On the Node fetch preset they are `undefined` unless you pass [`env`](/oxide/configuration#env):
+On [`preset: "worker"`](/oxide/configuration#preset), these are the Worker `env` and `ctx` from `fetch(request, env, ctx)`. On the Node fetch preset they are `undefined` unless you pass [`env`](/oxide/configuration#env):
 
 ```ts twoslash src/env.server.ts
 import { action, useEnv, useFetchCtx } from "oxidejs";
@@ -384,7 +399,7 @@ oxide({
 });
 ```
 
-Use `transport: "ws"` for live queries and the mutation queue. Node/`fetch` needs `crossws`; [`preset: "celld"`](/oxide/configuration#preset) uses `WebSocketPair`:
+Use `transport: "ws"` for live queries and the mutation queue. Node/`fetch` needs `crossws`; [`preset: "worker"`](/oxide/configuration#preset) uses `WebSocketPair`:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";

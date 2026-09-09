@@ -8,11 +8,11 @@ dist/
 └── server.js         # ESM server bundle
 ```
 
-`preset: "celld"` also writes `dist/wrangler.jsonc` with `main: "./server.js"`.
+`preset: "worker"` also writes `dist/wrangler.jsonc` with `main: "./server.js"`.
 
 v1 targets **Vite** and **Rsbuild** via unplugin. Other bundlers are out of scope for now.
 
-The `oxidejs` entry exports runtime helpers (`action`, `useRequest`, …). The bundler plugin lives at `oxidejs/vite` or `oxidejs/rsbuild` — keep those separate so `*.server.ts` can import `oxidejs` under `preset: "celld"` without pulling Node build tooling into the worker graph.
+The `oxidejs` entry exports runtime helpers (`action`, `useRequest`, …). The bundler plugin lives at `oxidejs/vite` or `oxidejs/rsbuild` — keep those separate so `*.server.ts` can import `oxidejs` under `preset: "worker"` without pulling Node build tooling into the worker graph.
 
 ## Vite
 
@@ -40,16 +40,16 @@ Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `in
 
 ```ts
 oxide({
-  preset: "celld",
+  preset: "worker",
   wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
 });
 ```
 
-`"celld"` writes `dist/wrangler.jsonc` for celld, a self-hosted alternative to Cloudflare Workers, and skips asset serving (`ASSETS` does that). The generated worker imports `oxidejs/worker-dom/install` so Ilha SSR has a DOM before your entry evaluates. Oxide merges `nodejs_compat` into `compatibility_flags` when you do not set it.
+`"worker"` writes `dist/wrangler.jsonc` for Cloudflare Workers / celld and skips asset serving (`ASSETS` does that). With a client build, oxide sets `assets.not_found_handling: "single-page-application"` and, when `ASSETS.fetch` returns 404 for a document navigation, retries `/index.html` so SPA routes like `/login` work. The generated worker imports `oxidejs/worker-dom/install` so Ilha SSR has a DOM before your entry evaluates. Pass `compatibility_flags` when you need them (`nodejs_compat` is optional — celld ignores it). Cloudflare-only keys (`account_id`, `workers_dev`, `routes`) are emitted when you set them for wrangler deploy; **omit them for celld** — unknown top-level keys fail `celld deploy`.
 
 ## Server actions
 
-Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "celld"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Middleware runs before the action gate and before WebSocket upgrade so stamped fields are visible to WS actions. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
+Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "worker"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Middleware runs before the action gate and before WebSocket upgrade so stamped fields are visible to WS actions. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
 
 ```ts
 // src/test.server.ts
@@ -107,7 +107,16 @@ export const add = action(
 
 The client arg is the schema's Encoded type; the handler receives Type. Decode failures over RPC map to JSON-RPC Invalid params (`-32602`). Optional `success` / `error` schemas stamp the generated Rpc tag; use `Schema.TaggedError` + `Effect.fail` for wire-typed Fail (`-32000` after scrub).
 
-`action()` also accepts `Effect` handlers. Yield `OxideRequest` / `OxideCtx` for the same values as `useRequest()` / `useCtx()`. Effect `Stream` returns need `{ stream: true }`. Handlers run under an `oxidejs.action` span (`rpc.method`).
+`action()` also accepts `Effect` handlers — prefer them for domain Fail (`Schema.TaggedError` + `Effect.fail`). Yield `OxideRequest` / `OxideCtx` for the same values as `useRequest()` / `useCtx()`. Effect `Stream` returns need `{ stream: true }` (or return a `Stream` — Fail channels are typed). Handlers run under an `oxidejs.action` span (`rpc.method`).
+
+Provide `oxideRuntimeLayer()` at the host if you want those spans / logs collected:
+
+```ts
+import { Effect } from "effect";
+import { oxideRuntimeLayer } from "oxidejs";
+
+await Effect.runPromise(myEffect.pipe(Effect.provide(oxideRuntimeLayer())));
+```
 
 `action()` marks the export and adds a typed transport-only `{ signal }` argument. Wrap `async function*` in it to stream over Effect RPC as newline-delimited JSON-RPC (not SSE). On the client the stub returns an async generator — iterate it directly. Inside server code, always read the non-optional signal from `useRequest().signal`:
 
@@ -134,42 +143,152 @@ Stream actions do not support `bind` / `with`. Breaking the `for await` loop or 
 
 ### Live queries
 
-Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — D1 (or your DB) stays the source of truth.
+Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — D1 (or your DB) stays the source of truth. Prefer Effect `Stream` + `mutateEffect`:
 
 ```ts
+import { Effect, Stream } from "effect";
 import { action, liveQuery } from "oxidejs";
 
 const tasks = liveQuery<Task[]>({ topic: "tasks" });
 
 export const list = action(
-  tasks.subscribe(async () => {
-    const db = requireDb(); // capture before any await
-    await tasks.mutate(() => snapshot(db));
-  })
+  () =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const db = requireDb();
+        return tasks.subscribeStream(
+          tasks.mutateEffect(() => snapshot(db)).pipe(Effect.asVoid)
+        );
+      })
+    ),
+  { stream: true }
 );
 
-export const add = action(async (text: string) => {
-  const db = requireDb();
-  await tasks.mutate(async () => {
-    await insert(db, text);
-    return snapshot(db);
-  });
-});
+export const add = action((text: string) =>
+  Effect.gen(function* () {
+    const db = requireDb();
+    yield* tasks.mutateEffect(() =>
+      Effect.gen(function* () {
+        yield* insert(db, text);
+        return yield* snapshot(db);
+      })
+    );
+  })
+);
 ```
+
+`subscribe` / `mutate` (Promise + async generator) remain for compatibility.
 
 **SSR → live socket handoff:** under SSR / the server graph, `*.server.ts` keeps the real generator (no WebSocket). Ilha `Stream.take(1)` paints the first snapshot. On the client, the stub resumes the same method over `actions: "ws"`. Oxide retries transient closes (`1000` / `1001` / `1006`) inside the stream client so hydrate does not paint `SocketCloseError`. Abort via `{ signal }` does not retry.
 
 Keep UI out of `*.server.*`. One `Stream.fromAsyncIterable(list(), …)` consumer is enough.
 
+### Workflows (worker)
+
+Durable multi-step jobs on Cloudflare Workflows / celld. Export `workflow()` from a `*.server.ts` file — oxide emits the `WorkflowEntrypoint` class, merges `[[workflows]]` into `wrangler.jsonc`, and exposes `start` / `status` / `send` over the same action RPC.
+
+```ts
+// src/invoice.server.ts
+import { Schema } from "effect";
+import { workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    const charged = await step.do("charge", () => charge(payload.orderId));
+    await step.sleep("settle", "1 day");
+    return charged;
+  },
+});
+
+// client or server
+import { invoice } from "./invoice.server";
+
+const { id } = await invoice.start({ orderId: "…" });
+const status = await invoice.status(id);
+```
+
+Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className` (string literals — the build scanner does not evaluate variables). Pass `{ idempotencyKey }` on `start` for a stable instance id. Retries with the same id reuse the existing instance (`create` is not idempotent on Cloudflare; oxide falls back to `get`). Keep side effects inside `step.do` — the runtime replays `run()` from the start. Requires `preset: "worker"`. Do not use the same workflow `name` as a `*.server.ts` module key that also exports `action()`s. `status` returns `{ status: "not_found" }` when the instance does not exist yet (e.g. right after a queue `send`, before the consumer creates it) instead of an Internal error. A Vercel / fetch driver is not wired yet.
+
+### Queues (worker)
+
+Buffer work, then start a workflow per message (durable / resumable). Export `queue()` from a `*.server.ts` file next to the workflow it drives:
+
+```ts
+// src/invoice.server.ts
+import { Schema } from "effect";
+import { queue, workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("charge", () => charge(payload.orderId));
+  },
+});
+
+export const invoices = queue({
+  name: "invoices",
+  workflow: invoice,
+});
+
+await invoices.send({ orderId: "…" });
+await invoices.sendBatch([{ body: { orderId: "…" } }]);
+```
+
+Oxide merges `queues.producers` / `queues.consumers` into `wrangler.jsonc` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`.
+
+```ts
+const { id } = await invoices.send({ orderId: "…" });
+const status = await invoice.status(id);
+```
+
+Optional `handle` replaces auto-start (unwrap with `readQueueEnvelope`). Optional `maxBatchSize` / `maxBatchTimeout` / `maxRetries` stamp the consumer entry. Optional `producerStart: true` also starts the workflow from `send` / `sendBatch` (same envelope id) for hosts like celld that do not run a same-worker queue consumer alongside `fetch()` — default is off so Cloudflare queue semantics (backpressure, batching, retries) control execution. Delayed messages (`delaySeconds`) still need a host that runs `queue`.
+
+Queue `name` must not match a workflow `name` (Rpc tags would collide on `.send`) or an action module key. Defaults: binding `INVOICES` from `name`.
+
+**celld queues:** set `producerStart: true` on the queue (kit does this for the demo). Oxide still emits the same-worker consumer for Cloudflare. Create-after-enqueue failures are soft-failed so the client does not see a false send failure.
+
+### Schedules (worker)
+
+Cron ticks that start a workflow (or enqueue / run a custom `handle`). Export `schedule()` from a `*.server.ts` file:
+
+```ts
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("charge", () => charge(payload.orderId));
+  },
+});
+
+export const nightly = schedule({
+  name: "nightly",
+  cron: "0 3 * * *",
+  workflow: invoice,
+  params: { orderId: "batch" },
+});
+```
+
+Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into wrangler `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}:${scheduledTime}` `` (idempotent retries). `params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.
+
 ### Mutation queue (client)
 
-Optional offline write queue for WebSocket actions:
+Optional offline write queue for WebSocket actions. `flush` retries transient failures with Effect `Schedule.exponential` + jitter:
 
 ```ts
 import { createMutationQueue } from "oxidejs/mutation-queue";
 import { add } from "./tasks.server";
 
-const queue = createMutationQueue();
+const queue = createMutationQueue({
+  retries: 4,
+  retryBase: "50 millis",
+});
 const addQueued = queue.wrap(add, {
   idempotencyKey: (text) => `add:${text}`,
 });
@@ -214,9 +333,9 @@ export class ActionRoom {
 }
 ```
 
-The generated celld wrapper does not create a DO — hibernation is opt-in when you own the object.
+The generated worker wrapper does not create a DO — hibernation is opt-in when you own the object.
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "celld"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
 ## Rsbuild
 
@@ -236,20 +355,28 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `preset` | `"fetch"` | `"fetch"` or `"celld"` |
+| `preset` | `"fetch"` | `"fetch"` or `"worker"` |
 | `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
 | `outDir` | `dist` | Output root |
 | `clientDir` | `client` | Must stay inside `outDir` |
 | `wrangler.name` | required if `emitConfig` |  |
 | `wrangler.compatibility_date` | required if `emitConfig` |  |
-| `wrangler.compatibility_flags` | — | optional; `nodejs_compat` is merged in automatically on `celld` |
+| `wrangler.compatibility_flags` | — | optional (not auto-merged; celld ignores `nodejs_compat`) |
+| `wrangler.account_id` | — | optional; Cloudflare wrangler deploy only (breaks `celld deploy`) |
+| `wrangler.workers_dev` | — | optional; Cloudflare `*.workers.dev` |
+| `wrangler.routes` | — | optional; Cloudflare route patterns |
 | `wrangler.d1_databases` | — | optional |
 | `wrangler.durable_objects` | — | optional |
 | `wrangler.migrations` | — | optional |
+| `wrangler.kv_namespaces` | — | optional |
+| `wrangler.r2_buckets` | — | optional |
 | `wrangler.services` | — | optional |
 | `wrangler.vars` | — | optional |
-| `emitConfig` | `true` on `celld` | Set `false` to skip `wrangler.jsonc` |
-| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on celld); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `wrangler.workflows` | — | optional; merged with scanned `workflow()` exports in `*.server.ts` |
+| `wrangler.queues` | — | optional; merged with scanned `queue()` exports in `*.server.ts` |
+| `wrangler.triggers` | — | optional; `crons` merged with scanned `schedule()` exports |
+| `emitConfig` | `true` on `worker` | Set `false` to skip `wrangler.jsonc` |
+| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on worker); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
 | `actionHeaders` | — | Static headers on the HTTP client |
 | `middleware` | `[]` | Fetch middleware, run in order before WS upgrade, actions, and the server entry |
 | `imports` | `[]` | Modules imported for side effects at server startup |

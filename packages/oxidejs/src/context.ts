@@ -106,6 +106,8 @@ export type {
 } from "./action";
 export { liveQuery, publish } from "./live-query";
 export type { LiveQuery, LiveQueryOptions } from "./live-query";
+export { oxideRuntimeLayer } from "./runtime";
+export type { OxideRuntimeOptions } from "./runtime";
 export {
   actionResultToStream,
   runActionEffect,
@@ -113,3 +115,59 @@ export {
 } from "./run-action";
 export { actionContextLayer, OxideCtx, OxideRequest } from "./services";
 export { SchemaDecodeError, withSchema } from "./with-schema";
+export {
+  dispatchQueueBatch,
+  isQueueEnvelope,
+  makeQueueEnvelope,
+  queue,
+  QUEUE_META,
+  OXIDE_QUEUE_ENVELOPE,
+  readQueueEnvelope,
+  readQueueMeta,
+  toQueueBinding,
+} from "./queue";
+export type {
+  QueueDefinition,
+  QueueEnvelope,
+  QueueHandle,
+  QueueMessage,
+  QueueMessageBatch,
+  QueueMessageSendRequest,
+  QueueMeta,
+  QueueSendBatchResult,
+  QueueSendOptions,
+  QueueSendResult,
+} from "./queue";
+export {
+  dispatchSchedule,
+  readScheduleMeta,
+  schedule,
+  SCHEDULE_META,
+  scheduleTickId,
+} from "./schedule";
+export type {
+  ScheduleDefinition,
+  ScheduleEvent,
+  ScheduleHandle,
+  ScheduleMeta,
+  ScheduleParams,
+  ScheduledController,
+} from "./schedule";
+export {
+  readWorkflowMeta,
+  toWorkflowBinding,
+  toWorkflowClassName,
+  WORKFLOW_META,
+  workflow,
+} from "./workflow";
+export type {
+  WorkflowDefinition,
+  WorkflowHandle,
+  WorkflowInstanceStatus,
+  WorkflowMeta,
+  WorkflowRunEvent,
+  WorkflowSendEvent,
+  WorkflowStartResult,
+  WorkflowStep,
+  WorkflowStepConfig,
+} from "./workflow";

@@ -23,12 +23,18 @@ import {
   RequestBodyTooLargeError,
   RESOLVED_VIRTUAL_ACTIONS_ID,
   RESOLVED_VIRTUAL_CLIENT_ID,
+  RESOLVED_VIRTUAL_QUEUES_ID,
+  RESOLVED_VIRTUAL_SCHEDULES_ID,
   RESOLVED_VIRTUAL_WORKER_ID,
+  RESOLVED_VIRTUAL_WORKFLOWS_ID,
   scanServerFiles,
   sendWebResponseFrom,
   VIRTUAL_ACTIONS_ID,
   VIRTUAL_CLIENT_ID,
+  VIRTUAL_QUEUES_ID,
+  VIRTUAL_SCHEDULES_ID,
   VIRTUAL_WORKER_ID,
+  VIRTUAL_WORKFLOWS_ID,
 } from "./actions";
 import {
   copyPublicDir,
@@ -36,7 +42,21 @@ import {
   resolveOptions,
   tryEmitWranglerConfig,
 } from "./core";
+import {
+  assertQueueCollisions,
+  generateQueueHandlerModule,
+  parseQueueExports,
+  resolveQueueWorkflowRefs,
+  scanQueueFiles,
+} from "./queue-build";
 import { createActionHandler, createWsHooks } from "./rpc";
+import {
+  assertScheduleCollisions,
+  generateScheduleHandlerModule,
+  parseScheduleExports,
+  resolveScheduleRefs,
+  scanScheduleFiles,
+} from "./schedule-build";
 import type { OxidejsOptions, ResolvedOptions } from "./types";
 import {
   applyRsbuildEnvironments,
@@ -44,6 +64,25 @@ import {
 } from "./worker-build";
 import type { RsbuildUserConfig } from "./worker-build";
 import { ensureWorkerDom } from "./worker-dom";
+import {
+  assertWorkflowActionCollisions,
+  generateWorkflowClassesModule,
+  parseWorkflowExports,
+  scanWorkflowFiles,
+} from "./workflow-build";
+
+const scanDurableModules = function scanDurableModules(root: string) {
+  const modules = scanServerFiles(root);
+  const workflows = scanWorkflowFiles(root);
+  const queues = scanQueueFiles(root);
+  resolveQueueWorkflowRefs(queues, workflows);
+  const schedules = scanScheduleFiles(root);
+  resolveScheduleRefs(schedules, workflows, queues);
+  assertWorkflowActionCollisions(modules, workflows);
+  assertQueueCollisions(modules, workflows, queues);
+  assertScheduleCollisions(modules, workflows, queues, schedules);
+  return { modules, queues, schedules, workflows };
+};
 
 type ConnectReq = IncomingMessage;
 type ConnectRes = ServerResponse;
@@ -274,7 +313,12 @@ interface RsbuildPluginApi {
 }
 
 const loadActions = function loadActions(root: string) {
-  const code = generateActionsModule(scanServerFiles(root), { bust: true });
+  const { modules, queues, workflows } = scanDurableModules(root);
+  const code = generateActionsModule(modules, {
+    bust: true,
+    queues,
+    workflows,
+  });
   const dir = fs.mkdtempSync(path.join(root, ".oxide-actions-"));
   const file = path.join(dir, "actions.mjs");
   fs.writeFileSync(file, code);
@@ -308,14 +352,59 @@ const loadVirtualActions = function loadVirtualActions(
   resolved: ResolvedOptions | undefined,
   extra?: { ssr?: boolean }
 ): string {
-  const modules = scanServerFiles(resolved?.root ?? process.cwd());
+  const root = resolved?.root ?? process.cwd();
+  const { modules, queues, schedules, workflows } = scanDurableModules(root);
   if (pluginShouldStub(ctx, extra)) {
-    return generateActionsClientModule(modules);
+    return generateActionsClientModule(modules, workflows, queues);
   }
   for (const mod of modules) {
     ctx.addWatchFile(mod.abs);
   }
-  return generateActionsModule(modules);
+  for (const mod of workflows) {
+    ctx.addWatchFile(mod.abs);
+  }
+  for (const mod of queues) {
+    ctx.addWatchFile(mod.abs);
+  }
+  for (const mod of schedules) {
+    ctx.addWatchFile(mod.abs);
+  }
+  return generateActionsModule(modules, { queues, workflows });
+};
+
+const loadVirtualWorkflows = function loadVirtualWorkflows(
+  ctx: PluginHookContext,
+  resolved: ResolvedOptions | undefined
+): string {
+  const workflows = scanWorkflowFiles(resolved?.root ?? process.cwd());
+  for (const mod of workflows) {
+    ctx.addWatchFile(mod.abs);
+  }
+  return generateWorkflowClassesModule(workflows);
+};
+
+const loadVirtualQueues = function loadVirtualQueues(
+  ctx: PluginHookContext,
+  resolved: ResolvedOptions | undefined
+): string {
+  const root = resolved?.root ?? process.cwd();
+  const { queues } = scanDurableModules(root);
+  for (const mod of queues) {
+    ctx.addWatchFile(mod.abs);
+  }
+  return generateQueueHandlerModule(queues);
+};
+
+const loadVirtualSchedules = function loadVirtualSchedules(
+  ctx: PluginHookContext,
+  resolved: ResolvedOptions | undefined
+): string {
+  const root = resolved?.root ?? process.cwd();
+  const { schedules } = scanDurableModules(root);
+  for (const mod of schedules) {
+    ctx.addWatchFile(mod.abs);
+  }
+  return generateScheduleHandlerModule(schedules);
 };
 
 const loadVirtualWorker = function loadVirtualWorker(
@@ -329,8 +418,19 @@ const loadVirtualWorker = function loadVirtualWorker(
   } else {
     ctx.addWatchFile(path.dirname(resolved.workerEntryAbs));
   }
-  const modules = scanServerFiles(resolved.root);
+  const { modules, queues, schedules, workflows } = scanDurableModules(
+    resolved.root
+  );
   for (const mod of modules) {
+    ctx.addWatchFile(mod.abs);
+  }
+  for (const mod of workflows) {
+    ctx.addWatchFile(mod.abs);
+  }
+  for (const mod of queues) {
+    ctx.addWatchFile(mod.abs);
+  }
+  for (const mod of schedules) {
     ctx.addWatchFile(mod.abs);
   }
   return generateWorkerWrapper(hasEntry ? resolved.workerEntryAbs : null, {
@@ -340,14 +440,19 @@ const loadVirtualWorker = function loadVirtualWorker(
     bodyLimit: resolved.bodyLimit,
     clientDir: resolved.clientDir,
     env: resolved.env,
-    hasActions: modules.length > 0,
+    hasActions: modules.length > 0 || workflows.length > 0 || queues.length > 0,
     hasClient: resolved.hasClient,
     hasPublic: resolved.hasPublic,
+    hasQueues: queues.length > 0,
+    hasSchedules: schedules.length > 0,
     imports: resolved.imports,
     // SAFETY: ResolvedOptions.middleware matches WorkerWrapperOpts.middleware (string | { module, imports? }).
     middleware: resolved.middleware as never,
     notFound: resolved.notFound,
     preset: resolved.preset,
+    workflowClassNames: workflows.flatMap((mod) =>
+      mod.exports.map((exp) => exp.className)
+    ),
   });
 };
 
@@ -364,8 +469,26 @@ const loadPluginModule = function loadPluginModule(
   if (id === RESOLVED_VIRTUAL_WORKER_ID && pluginShouldStub(ctx, extra)) {
     throw new Error(`oxidejs: ${VIRTUAL_WORKER_ID} is server-only`);
   }
+  if (id === RESOLVED_VIRTUAL_WORKFLOWS_ID && pluginShouldStub(ctx, extra)) {
+    throw new Error(`oxidejs: ${VIRTUAL_WORKFLOWS_ID} is server-only`);
+  }
+  if (id === RESOLVED_VIRTUAL_QUEUES_ID && pluginShouldStub(ctx, extra)) {
+    throw new Error(`oxidejs: ${VIRTUAL_QUEUES_ID} is server-only`);
+  }
+  if (id === RESOLVED_VIRTUAL_SCHEDULES_ID && pluginShouldStub(ctx, extra)) {
+    throw new Error(`oxidejs: ${VIRTUAL_SCHEDULES_ID} is server-only`);
+  }
   if (id === RESOLVED_VIRTUAL_ACTIONS_ID) {
     return loadVirtualActions(ctx, resolved, extra);
+  }
+  if (id === RESOLVED_VIRTUAL_WORKFLOWS_ID) {
+    return loadVirtualWorkflows(ctx, resolved);
+  }
+  if (id === RESOLVED_VIRTUAL_QUEUES_ID) {
+    return loadVirtualQueues(ctx, resolved);
+  }
+  if (id === RESOLVED_VIRTUAL_SCHEDULES_ID) {
+    return loadVirtualSchedules(ctx, resolved);
   }
   if (id === RESOLVED_VIRTUAL_WORKER_ID) {
     if (!resolved) {
@@ -526,6 +649,15 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       if (id === VIRTUAL_CLIENT_ID) {
         return RESOLVED_VIRTUAL_CLIENT_ID;
       }
+      if (id === VIRTUAL_WORKFLOWS_ID) {
+        return RESOLVED_VIRTUAL_WORKFLOWS_ID;
+      }
+      if (id === VIRTUAL_QUEUES_ID) {
+        return RESOLVED_VIRTUAL_QUEUES_ID;
+      }
+      if (id === VIRTUAL_SCHEDULES_ID) {
+        return RESOLVED_VIRTUAL_SCHEDULES_ID;
+      }
       return null;
     },
     rsbuild: {
@@ -588,7 +720,10 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       return generateClientStub({
         exports: parseExportedNames(code),
         key: moduleKey(id.split("?")[0] ?? id),
+        queues: parseQueueExports(code),
+        schedules: parseScheduleExports(code),
         streams: parseStreamExports(code),
+        workflows: parseWorkflowExports(code),
       });
     },
     vite: {
@@ -607,9 +742,9 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
         );
       },
       configureServer(server) {
-        if (resolved?.preset === "celld") {
+        if (resolved?.preset === "worker") {
           ensureWorkerDom();
-          // Celld builds target Workers, but dev SSR runs on Node. Worker export
+          // Worker builds target workerd, but dev SSR runs on Node. Worker export
           // conditions and noExternal:true pull in CJS deps (e.g. buffer-image-size)
           // that call `require` and break ilha frame renders.
           const { ssr } = server.environments;

@@ -1,15 +1,18 @@
+import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import { WITH_SCHEMA_PAYLOAD } from "./action";
 
-export class SchemaDecodeError extends Error {
-  override name = "SchemaDecodeError";
-  readonly schemaError: Schema.SchemaError;
-
-  constructor(schemaError: Schema.SchemaError) {
-    super(schemaError.message);
-    this.schemaError = schemaError;
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError factory
+export class SchemaDecodeError extends Schema.TaggedError<SchemaDecodeError>()(
+  "SchemaDecodeError",
+  {
+    message: Schema.String,
+  }
+) {
+  static from(schemaError: Schema.SchemaError) {
+    return new SchemaDecodeError({ message: schemaError.message });
   }
 }
 
@@ -26,20 +29,20 @@ export class SchemaDecodeError extends Error {
  * ```
  *
  * Equivalent to `action(handler, { payload: schema })` plus a local decode for
- * direct server calls. Decode failures reject with `SchemaDecodeError`. Over RPC
- * that becomes JSON-RPC invalid params (`-32602`). Schemas that need decoding
+ * direct server calls. Decode failures are `Effect.fail(SchemaDecodeError)`. Over
+ * RPC that becomes JSON-RPC invalid params (`-32602`). Schemas that need decoding
  * services are not supported — use `never` RD.
  */
 export const withSchema = function withSchema<T, E, R>(
   schema: Schema.Codec<T, E, never, never>,
-  handler: (payload: T) => R | Promise<R>
-): (payload: E) => Promise<Awaited<R>> {
+  handler: (payload: T) => R
+): (payload: E) => R | Effect.Effect<never, SchemaDecodeError> {
   const wrapped = (payload: E) => {
     const decoded = Schema.decodeUnknownResult(schema)(payload);
     if (Result.isFailure(decoded)) {
-      return Promise.reject(new SchemaDecodeError(decoded.failure));
+      return Effect.fail(SchemaDecodeError.from(decoded.failure));
     }
-    return Promise.resolve(handler(decoded.success));
+    return handler(decoded.success);
   };
   // SAFETY: WITH_SCHEMA_PAYLOAD is oxide-owned; action() reads it for Rpc meta.
   (

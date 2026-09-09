@@ -394,9 +394,9 @@ describe("factory shape", () => {
     });
   });
 
-  test("celld preset targets webworker", () => {
+  test("worker preset targets webworker", () => {
     const resolved = resolveOptions(
-      { preset: "celld", wrangler },
+      { preset: "worker", wrangler },
       "/tmp/project"
     );
     const config = applyViteEnvironments({}, resolved);
@@ -432,9 +432,9 @@ describe("factory shape", () => {
     }
   });
 
-  test("rsbuild celld environment targets web-worker", () => {
+  test("rsbuild worker environment targets web-worker", () => {
     const resolved = resolveOptions(
-      { preset: "celld", wrangler },
+      { preset: "worker", wrangler },
       "/tmp/project"
     );
     const config = applyRsbuildEnvironments({}, resolved);

@@ -40,7 +40,7 @@ It guides you. It doesn't frame you.
 
 - **Single bundle** — One folder to deploy. A server, and a client if you have a page.
 - **Server actions** — Wrap a `*.server.ts` export in `action()`, then import and call it from the client over Effect RPC.
-- **Fetch or celld** — Run the generated server on Node-compatible hosts, or emit a celld worker.
+- **Fetch or worker** — Run the generated server on Node-compatible hosts, or emit a Cloudflare Workers worker.
 
 ## Packages
 
@@ -48,7 +48,7 @@ It guides you. It doesn't frame you.
 | --- | --- |
 | [oxidejs](packages/oxidejs) | Turns Vite or Rsbuild into a backend. One plugin, one folder to deploy. |
 
-Server actions ride [Effect](https://effect.website) RPC (`application/json-rpc`). The `templates/simple` and `templates/kit` apps show fetch and celld deployments.
+Server actions ride [Effect](https://effect.website) RPC (`application/json-rpc`). The `templates/simple` and `templates/kit` apps show fetch and worker deployments.
 
 [Docs](https://oxide.build) · [oxidejs](packages/oxidejs)
 

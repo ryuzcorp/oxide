@@ -8,6 +8,7 @@ export default defineMeta({
     "quickstart",
     "server-entry",
     "server-actions",
+    "worker",
     "configuration",
     "security",
   ],

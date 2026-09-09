@@ -8,7 +8,7 @@ export default defineConfig({
     oxide({
       actions: "ws",
       middleware: ["./src/middleware/db.ts", "@ilha/router/ssr"],
-      preset: "celld",
+      preset: "worker",
       wrangler: {
         compatibility_date: "2026-01-01",
         d1_databases: [
@@ -19,6 +19,16 @@ export default defineConfig({
           },
         ],
         name: "kit",
+        r2_buckets: [
+          {
+            binding: "FILES",
+            bucket_name: "kit-files",
+          },
+        ],
+        // Replace before deploy. Local celld / wrangler read these from wrangler.jsonc.
+        vars: {
+          BETTER_AUTH_SECRET: "CV90vWOJ+rEvIVayJqbr0vXdmFptnEC8Xg7DUPn0ysY=",
+        },
       },
     }),
     pages(),

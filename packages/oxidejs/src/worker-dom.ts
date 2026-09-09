@@ -24,6 +24,11 @@ export const ensureWorkerDom = function ensureWorkerDom() {
     if (!/^[A-Z]/u.test(key)) {
       continue;
     }
+    // Never replace host globals. Overwriting EventTarget/Event with linkedom's
+    // DOMEventTarget breaks WebSocketPair message delivery on celld/workerd.
+    if (Object.getOwnPropertyDescriptor(globalThis, key) !== undefined) {
+      continue;
+    }
     // Constructors own a `.prototype`; linkedom also exports plain objects (Facades, HTMLClasses).
     // SAFETY: PascalCase linkedom exports are objects or functions — never null/primitives here.
     const candidate = value as object;

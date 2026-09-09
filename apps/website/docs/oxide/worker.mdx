@@ -1,0 +1,135 @@
+---
+title: Worker
+sidebar:
+  icon: layers
+description: Workflows, queues, and cron schedules for the worker preset.
+---
+
+When you set `preset: "worker"`, Oxide targets Cloudflare Workers semantics (and the same-worker runtime shape on celld).
+
+This page documents the `*.server.ts` exports that wire into Cloudflare Workflows, Queues, and Cron triggers.
+
+## Workflows
+
+Durable multi-step jobs on Cloudflare Workflows. Export `workflow()` from a `*.server.ts` file:
+
+```ts twoslash src/invoice.server.ts
+import { Schema } from "effect";
+import { workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+declare const charge: (
+  orderId: string
+) => Promise<{ ok: true; orderId: string }>;
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("charge", () => charge(payload.orderId));
+    await step.sleep("settle", "1 day");
+    return await step.do("done", () => ({ orderId: payload.orderId }));
+  },
+});
+```
+
+Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className`.
+
+From the client or server:
+
+```ts twoslash src/client.ts
+// @filename: invoice.server.ts
+import { Schema } from "effect";
+import { workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("echo", () => payload.orderId);
+  },
+});
+// ---cut---
+// @filename: client.ts
+import { invoice } from "./invoice.server";
+
+const { id } = await invoice.start({ orderId: "ord_1" });
+const status = await invoice.status(id);
+```
+
+Keep side effects inside `step.do`. The runtime replays `run()` from the start for deterministic recovery. Pass `{ idempotencyKey }` on `start` for a stable instance id.
+
+## Queues
+
+Buffer work, then start a workflow per message (durable / resumable). Export `queue()` from a `*.server.ts` file next to the workflow it drives:
+
+```ts twoslash src/invoice.server.ts
+import { Schema } from "effect";
+import { queue, workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+declare const charge: (orderId: string) => Promise<void>;
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("charge", () => charge(payload.orderId));
+  },
+});
+
+export const invoices = queue({
+  name: "invoices",
+  workflow: invoice,
+});
+
+const { id } = await invoices.send({ orderId: "ord_1" });
+await invoices.sendBatch([{ body: { orderId: "ord_2" } }]);
+const status = await invoice.status(id);
+```
+
+Oxide merges `queues.producers` / `queues.consumers` into `wrangler.jsonc` and attaches a same-worker `queue` handler that starts the workflow from each message.
+
+Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling.
+
+Optional `handle` replaces auto-start (unwrap with `readQueueEnvelope`). Optional `maxBatchSize` / `maxBatchTimeout` / `maxRetries` stamp the consumer entry. Optional `producerStart: true` also starts the workflow from `send` / `sendBatch` for celld (same-worker consumers do not run with `fetch()`). Default is off so Cloudflare queue semantics control execution.
+
+Queue `name` must not match a workflow `name` (RPC tags collide on `.send`) or an action module key.
+
+**celld caveat:** a queue consumer cannot share a Worker with `fetch()`. Keep the same-worker consumer for Cloudflare; set `producerStart: true` when you need enqueue to progress on celld.
+
+## Schedules
+
+Cron ticks that start a workflow (or enqueue / run a custom `handle`). Export `schedule()` from a `*.server.ts` file:
+
+```ts twoslash src/nightly.server.ts
+import { Schema } from "effect";
+import { schedule, workflow } from "oxidejs";
+
+const Params = Schema.Struct({ orderId: Schema.String });
+
+declare const charge: (orderId: string) => Promise<void>;
+
+export const invoice = workflow({
+  name: "invoice",
+  payload: Params,
+  run: async ({ payload }, step) => {
+    await step.do("charge", () => charge(payload.orderId));
+  },
+});
+
+export const nightly = schedule({
+  cron: "0 3 * * *",
+  name: "nightly",
+  params: { orderId: "batch" },
+  workflow: invoice,
+});
+```
+
+Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}:${scheduledTime}` `` (idempotent retries).
+
+`params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.

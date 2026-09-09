@@ -8,19 +8,29 @@ declare module "virtual:oxide/actions" {
   export { actionsGroup as actions };
 }
 
-declare module "virtual:oxide/client" {
-  type ActionValue =
-    | string
-    | number
-    | boolean
-    | null
-    | ActionValue[]
-    | { [key: string]: ActionValue };
-  type ActionFn = (
-    ...args: ActionValue[]
-  ) =>
-    | Promise<ActionValue>
-    | AsyncGenerator<ActionValue, ActionValue | undefined, undefined>;
-  type ActionModule = Record<string, ActionFn>;
-  export const client: Record<string, ActionModule>;
+declare module "virtual:oxide/workflows" {
+  // Named WorkflowEntrypoint exports are generated per `workflow()` in `*.server.ts`.
+}
+
+declare module "virtual:oxide/queues" {
+  // Cloudflare MessageBatch / Env / ExecutionContext — opaque at the virtual boundary.
+  export function handleQueue(
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF queue handler args
+    batch: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF queue handler args
+    env: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF queue handler args
+    ctx: unknown
+  ): Promise<void>;
+}
+
+declare module "virtual:oxide/schedules" {
+  export function handleSchedule(
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF scheduled handler args
+    controller: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF scheduled handler args
+    env: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF scheduled handler args
+    ctx: unknown
+  ): Promise<void>;
 }

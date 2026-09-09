@@ -10,17 +10,20 @@
     "celld": "celld"
   },
   "dependencies": {
+    "@better-auth/passkey": "^1.7.3",
     "@effect/sql-d1": "4.0.0-rc.112",
     "@ilha/router": "^0.11.8",
+    "better-auth": "^1.7.3",
     "effect": "^4.0.0-rc.112",
     "ilha": "^0.14.5",
-    "paranorm": "^0.3.0"
+    "paranorm": "^0.3.2",
+    "unstorage": "^2.0.0-alpha.10"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260818.1",
     "@tailwindcss/vite": "^4.3.3",
     "daisyui": "^5.7.22",
-    "oxidejs": "^0.4.1",
+    "oxidejs": "^0.5.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
     "vite": "^8.2.2"

@@ -30,52 +30,61 @@
 
 ## oxidejs conventions
 
-- Default preset is `"fetch"`. `"celld"` writes `dist/wrangler.jsonc` and skips asset serving (Wrangler `ASSETS` does that).
+- Default preset is `"fetch"`. `"worker"` writes `dist/wrangler.jsonc` and skips asset serving (Wrangler `ASSETS` does that).
 - `*.server.ts` / `*.server.js` are server-only. Client imports become Effect RPC stubs on `/__oxide/action` (HTTP or WebSocket). Method names are `<file>.<fn>` (`test.ping`).
+- `workflow()` in `*.server.ts` (worker): Cloudflare Workflows driver — emits class + wrangler `workflows`, RPC `name.start` / `name.status` / `name.send`.
+- `queue({ name, workflow })` in `*.server.ts` (worker): Cloudflare Queues — wrangler `queues` producers/consumers, same-worker `queue` handler starts the workflow per message (envelope id from `send` → `{ id }`), RPC `name.send` / `name.sendBatch`. Optional `producerStart: true` also starts the workflow from the producer for celld (same-worker consumers do not run with `fetch()`); default off so Cloudflare queue semantics control execution.
+- `schedule({ name, cron, workflow })` in `*.server.ts` (worker): Cron triggers — wrangler `triggers.crons`, same-worker `scheduled` handler starts the workflow with id `` `${name}:${scheduledTime}` `` (or `queue` / `handle` escape). Queue targets inherit `producerStart` from the queue handle.
 - Return `undefined` from `src/server.ts` to fall through to static files / `index.html`. Missing the default `src/server.ts` is fine (actions / assets only).
 - `async function*` exports stream as NDJSON JSON-RPC over the same action endpoint. Effect `Stream` handlers need `{ stream: true }` (or an async generator).
 - `action(fn, { payload?, success?, error? })` stamps Effect Rpc schemas for the generated actions module. `withSchema(schema, fn)` is sugar for `{ payload: schema }` plus a local decode.
-- Promise / `async function*` stay the default DX. Effect handlers and `OxideRequest` / `OxideCtx` services are opt-in beside `useRequest()` / `useCtx()`.
-- Wire-typed Fail uses Schema-tagged errors via Rpc `error` (throw / `Effect.fail`). Local recoverable failures stay errore-style `T | SpecificError` — returning an `Error` does not auto-promote it over RPC.
+- Prefer Effect handlers (`Effect.gen`, `Stream`, Schema-stamped `payload` / `success` / `error`). Yield `OxideRequest` / `OxideCtx` for request context. Promise / `async function*` and `useRequest()` / `useCtx()` still work when Effect would be noise.
+- Wire Fail is Schema-tagged via Rpc `error` (`Effect.fail` or throw the tagged error). Returning an `Error` as a value does not promote it over RPC.
+- Live queries: prefer `liveQuery.stream` / `subscribeStream` / `mutateEffect` from Effect handlers; async generators remain for compatibility.
+- Mutation queue flush retries transient WS failures with Effect `Schedule.exponential` (optional `retries` / `retryBase`).
+- Host observability: `oxideRuntimeLayer()` provides a Logger Layer so `oxidejs.action` spans / logs can be collected.
 - Action handlers run under an `oxidejs.action` span / log annotations (`rpc.method`). Provide an Effect tracer/logger at the host if you want them collected.
-- `actions: "ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on celld). Answer Effect `@effect/rpc/Ping` with NDJSON `@effect/rpc/Pong`.
+- `actions: "ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on worker). Answer Effect `@effect/rpc/Ping` with NDJSON `@effect/rpc/Pong`.
 - `clientDir` must stay inside `outDir`. Unknown wrangler keys fail at build time.
-- Non-goals: no `wrangler dev` / workerd emulation, no automatic `celld deploy`, no Node-builtin polyfills.
+- Non-goals: no `wrangler dev` / workerd emulation, no automatic `celld deploy` / `wrangler deploy`, no Node-builtin polyfills.
 
 ### Effect roadmap (nice-to-have later)
 
-- Live query: expose `Stream` / PubSub subscribers directly, not only async generators.
-- Mutation queue / idempotency as Effect Schedule or workflow-style retries.
+- Client Rpc codegen: stamp real Schema codecs on the client group (today server meta is authoritative; client still uses `Unknown` payloads).
+- Mutation queue: optional durable storage (IndexedDB) on top of Schedule retries.
 - Optional Effect LSP / agent-friendly doc patterns (do not bake tsgo into the package).
+- Workflow drivers beyond Cloudflare Workers (e.g. Vercel Workflow SDK on fetch).
 
-## Errors
+## Effect & errors
 
-This repo follows the [errore.org](https://errore.org/) convention **without** the `errore` package. Errors as values. No Result wrapper. No new error-handling dependency.
+Oxide is Effect-first at the action and RPC boundary. Prefer Effect Schema, `Effect.gen`, services, and `Stream` over Promise error-unions or third-party Result libraries.
 
 ```ts
-class NotFoundError extends Error {
-  constructor(public id: string) {
-    super(`User ${id} not found`);
-  }
-}
+import { Effect, Schema } from "effect";
+import { action } from "oxidejs";
 
-async function getUser(id: string): Promise<User | NotFoundError> {
-  const user = await db.find(id);
-  if (!user) return new NotFoundError(id);
-  return user;
-}
+class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
+  id: Schema.String,
+}) {}
 
-const user = await getUser(id);
-if (user instanceof Error) return user;
-console.log(user.name);
+export const getUser = action(
+  (id: string) =>
+    Effect.gen(function* () {
+      const user = yield* findUser(id);
+      if (!user) {
+        return yield* Effect.fail(new NotFound({ id }));
+      }
+      return user;
+    }),
+  { error: NotFound }
+);
 ```
 
-- Recoverable failures: return `T | SpecificError`. Callers use `instanceof`. Forget to check and TypeScript will not compile.
+- Recoverable / domain failures: `Schema.TaggedError` + `Effect.fail` (or throw the tagged error). Stamp Rpc `error` so clients get application error `-32000` with tag/message.
 - Programmer / config / invariant failures: throw. Plugin options, bad wrangler keys, paths outside `outDir` stay throws.
-- JSON-RPC boundary: Effect RPC / scrubbed Defects at the wire. Do not invent a second protocol error type. `SchemaDecodeError` and Rpc payload decode → `-32602`. Schema-tagged Fail (Rpc `error`) → application error `-32000` with the tag/message. Other Defects → `-32603` Internal error.
-- Never add `neverthrow`, Effect Result wrappers, or a custom `Result<T, E>`. `T | Error` is the local union; wire Fail uses Schema-tagged errors.
-- Never install `errore` just for `createTaggedError` / `matchError`. A small `class X extends Error` is enough locally; for Rpc use `Schema.TaggedError`.
-- Do not swallow errors in empty `catch`. Wrap throwing stdlib (`JSON.parse`) only at a trust boundary, and return a typed `Error`.
+- JSON-RPC boundary: Effect RPC / scrubbed Defects at the wire. Do not invent a second protocol error type. `SchemaDecodeError` and Rpc payload decode → `-32602`. Schema-tagged Fail (Rpc `error`) → `-32000`. Other Defects → `-32603` Internal error.
+- Never add `neverthrow`, `errore`, or a custom `Result<T, E>`. Effect's typed Fail channel is the error model; do not invent a parallel one.
+- Do not swallow errors in empty `catch`. At trust boundaries, prefer `Effect.try` / `Effect.tryPromise` (or decode with Schema) over bare `try/catch` that returns an untyped `Error`.
 
 ## Testing
 
@@ -96,10 +105,11 @@ Package README (`packages/oxidejs/README.md`) ships with the package. Update it 
 ## Agent behavior
 
 - Smallest change that works. Do not add files, deps, or abstractions "for later."
-- Prefer stdlib and what is already in the repo. `unplugin` is the only oxidejs runtime dep. `crossws` is optional for Node WebSocket actions.
+- Prefer Effect (Schema, `Effect.gen`, services, `Stream`) and what is already in the repo over new error/Result libraries. `unplugin` is the only oxidejs runtime dep. `crossws` is optional for Node WebSocket actions.
 - Prefer TypeScript inference over explicit annotations. Do not annotate function, async function, or generator return types when TypeScript can infer them correctly.
+- Prefer `const name = () => …` or `const name = function () { … }` (anonymous). Never `const name = function name()` — the binding already names it. Same for `Effect.gen(function* () { … })` — no `function* nameGen()`. Disable `func-names` on those files if Ultracite complains.
 - Keep public exports stable. New entrypoints need a reason and a README update.
-- If a request contradicts this file (add a Result library, emulate `wrangler dev`, drop Bun), stop and ask.
+- If a request contradicts this file (add `neverthrow` / `errore` / a Result wrapper, emulate `wrangler dev`, drop Bun, avoid Effect for domain Fail), stop and ask.
 
 # Ultracite Code Standards
 
@@ -129,6 +139,7 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 
 ### Modern JavaScript/TypeScript
 
+- Prefer `const name = () => …` or `const name = function () { … }`. Do not repeat the name: never `const Foo = function Foo()`.
 - Use arrow functions for callbacks and short functions
 - Prefer `for...of` loops over `.forEach()` and indexed `for` loops
 - Use optional chaining (`?.`) and nullish coalescing (`??`) for safer property access
@@ -145,7 +156,7 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 
 ### React & JSX
 
-- Use function components over class components
+- Use function components over class components (`const Foo = () => …` or `const Foo = function () { … }` — anonymous)
 - Call hooks at the top level only, never conditionally
 - Specify all dependencies in hook dependency arrays correctly
 - Use the `key` prop for elements in iterables (prefer unique IDs over array indices)
@@ -161,8 +172,8 @@ Write code that is **accessible, performant, type-safe, and maintainable**. Focu
 ### Error Handling & Debugging
 
 - Remove `console.log`, `debugger`, and `alert` statements from production code
-- Throw `Error` objects with descriptive messages, not strings or other values
-- Use `try-catch` blocks meaningfully - don't catch errors just to rethrow them
+- Prefer Effect Fail (`Schema.TaggedError` + `Effect.fail`) for domain errors; throw only for programmer / config / invariant failures
+- Use `try-catch` / `Effect.try` meaningfully — don't catch just to rethrow unchanged
 - Prefer early returns over nested conditionals for error cases
 
 ### Code Organization

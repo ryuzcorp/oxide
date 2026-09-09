@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
+import { deferred } from "./deferred";
+
 const HUBS_KEY = Symbol.for("oxidejs.liveQuery.hubs");
 const GATES_KEY = Symbol.for("oxidejs.liveQuery.gates");
 
@@ -42,6 +44,25 @@ const hubFor = function hubFor<T>(
   return created;
 };
 
+/** FIFO gate so concurrent mutators on one topic do not interleave. */
+const withTopicGate = function withTopicGate<A, E, R>(
+  topic: string,
+  body: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> {
+  return Effect.acquireUseRelease(
+    Effect.promise(async () => {
+      const map = gates();
+      const prev = map[topic] ?? Promise.resolve(null);
+      const { promise, resolve } = deferred<null>();
+      map[topic] = promise;
+      await prev;
+      return resolve;
+    }),
+    () => body,
+    (resolve) => Effect.sync(() => resolve(null))
+  );
+};
+
 export interface LiveQueryOptions {
   /** Sliding buffer size. Default 16. */
   capacity?: number;
@@ -52,9 +73,25 @@ export interface LiveQueryOptions {
 }
 
 export interface LiveQuery<T> {
-  /** Serialize work that produces a snapshot, then publish it. */
+  /**
+   * Serialize Effect work that produces a snapshot, then publish it.
+   * Prefer this from Effect action handlers.
+   */
+  mutateEffect: <E, R>(
+    fn: () => Effect.Effect<T, E, R>
+  ) => Effect.Effect<T, E, R>;
+  /** Serialize Promise work that produces a snapshot, then publish it. */
   mutate: (fn: () => Promise<T>) => Promise<T>;
   publish: (value: T) => void;
+  /** Effect `Stream` of published values (replays when configured). */
+  stream: () => Stream.Stream<T>;
+  /**
+   * `stream()` after an optional Effect seed (capture bindings before subscribe).
+   * Use with `action(() => Stream.unwrap(...), { stream: true })`.
+   */
+  subscribeStream: <E = never, R = never>(
+    seed?: Effect.Effect<void, E, R>
+  ) => Stream.Stream<T, E, R>;
   /**
    * Returns an async generator factory for `action()`.
    * Optional `seed` runs once before subscribing (capture `useEnv()` first).
@@ -80,23 +117,47 @@ export const liveQuery = function liveQuery<T>(
     Effect.runSync(PubSub.publish(hub, value));
   };
 
+  const mutateEffect = function mutateEffect<E, R>(
+    fn: () => Effect.Effect<T, E, R>
+  ): Effect.Effect<T, E, R> {
+    return withTopicGate(
+      topic,
+      Effect.gen(function* mutateEffectGen() {
+        const value = yield* fn();
+        publishValue(value);
+        return value;
+      })
+    );
+  };
+
   const mutate = async function mutate(fn: () => Promise<T>) {
-    const map = gates();
-    const prev = map[topic] ?? Promise.resolve(null);
-    const { promise, resolve } = Promise.withResolvers<null>();
-    map[topic] = promise;
-    await prev;
-    try {
-      const value = await fn();
-      publishValue(value);
-      return value;
-    } finally {
-      resolve(null);
+    return await Effect.runPromise(
+      mutateEffect(() =>
+        Effect.tryPromise({
+          catch: (cause) =>
+            cause instanceof Error ? cause : new Error(String(cause)),
+          try: fn,
+        })
+      )
+    );
+  };
+
+  const stream = function stream(): Stream.Stream<T> {
+    return Stream.fromPubSub(hub);
+  };
+
+  const subscribeStream = function subscribeStream<E = never, R = never>(
+    seed?: Effect.Effect<void, E, R>
+  ): Stream.Stream<T, E, R> {
+    if (!seed) {
+      // SAFETY: PubSub streams have never Fail / never Services.
+      return stream() as Stream.Stream<T, E, R>;
     }
+    return Stream.unwrap(seed.pipe(Effect.map(() => stream())));
   };
 
   const values = function values(): AsyncIterable<T> {
-    return Stream.toAsyncIterable(Stream.fromPubSub(hub));
+    return Stream.toAsyncIterable(stream());
   };
 
   const subscribe = function subscribe(seed?: () => Promise<void>) {
@@ -110,8 +171,11 @@ export const liveQuery = function liveQuery<T>(
 
   return {
     mutate,
+    mutateEffect,
     publish: publishValue,
+    stream,
     subscribe,
+    subscribeStream,
     topic,
     values,
   };

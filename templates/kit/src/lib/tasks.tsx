@@ -1,6 +1,8 @@
 import * as Stream from "effect/Stream";
+import { atom, watch } from "ilha";
 import { createMutationQueue } from "oxidejs/mutation-queue";
 
+import { authClient, hardNav } from "./auth-client";
 import type { Task } from "./db";
 import { add, list, remove, toggle } from "./tasks.server";
 
@@ -31,9 +33,8 @@ const addItem = async (event: SubmitEvent) => {
   form.reset();
 };
 
-/** Client UI for the streaming `list` action — keep UI out of `*.server.tsx`. */
-export const Tasks = function Tasks() {
-  return Stream.map(
+const TaskList = () =>
+  Stream.map(
     Stream.fromAsyncIterable(list(), toStreamError),
     (items: Task[]) => (
       <>
@@ -88,5 +89,50 @@ export const Tasks = function Tasks() {
         </div>
       </>
     )
+  );
+
+/** Signed-in task UI — redirects to `/login` when there is no session. */
+export const Tasks = () => {
+  const ready = atom(false);
+  const label = atom("");
+  const busy = atom(false);
+
+  watch.once(() => {
+    void (async () => {
+      const { data } = await authClient.getSession();
+      if (!data?.user) {
+        hardNav("/login");
+        return;
+      }
+      label.set(data.user.name || data.user.email);
+      ready.set(true);
+    })();
+  });
+
+  const signOut = async () => {
+    busy.set(true);
+    await authClient.signOut();
+    hardNav("/login");
+  };
+
+  if (!ready()) {
+    return <p class="text-sm opacity-70">Loading…</p>;
+  }
+
+  return (
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-sm opacity-70">{label()}</p>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          disabled={busy()}
+          onclick={signOut}
+        >
+          Sign out
+        </button>
+      </div>
+      <TaskList />
+    </div>
   );
 };

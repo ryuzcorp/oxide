@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
 
+import { deferred } from "./deferred";
 import type { OxidejsJson } from "./types";
 
 const ALS_KEY = Symbol.for("oxidejs.requestContext");
@@ -54,7 +55,7 @@ export const inWebcontainer = function inWebcontainer(): boolean {
 /**
  * Runtimes where request context must survive on a sync fallback because
  * AsyncLocalStorage does not keep the store across `await` (WebContainer,
- * Cloudflare Workers / celld).
+ * Cloudflare Workers).
  */
 export const needsSyncRequestStore = function needsSyncRequestStore(): boolean {
   if (syncRequestStoreOverride !== null) {
@@ -63,7 +64,7 @@ export const needsSyncRequestStore = function needsSyncRequestStore(): boolean {
   if (inWebcontainer()) {
     return true;
   }
-  // Cloudflare Workers / celld expose WebSocketPair; Node and Bun do not.
+  // Cloudflare Workers expose WebSocketPair; Node and Bun do not.
   // SAFETY: Workers add WebSocketPair on globalThis; missing means a non-Worker host.
   const workerApi = globalThis as typeof globalThis & {
     WebSocketPair?: object;
@@ -124,6 +125,38 @@ const isPromiseLike = function isPromiseLike(
     return false;
   }
   return typeof value.then === "function";
+};
+
+/**
+ * Install the Worker / WebContainer sync fallback store. Returns the previous
+ * value for {@link exitRequestStore}. Prefer {@link withRequestStore} for
+ * Promise handlers; Effect handlers need this pair so the store survives the
+ * whole fiber (codegen must not clear it when `fn` returns an Effect).
+ */
+export const enterRequestStore = function enterRequestStore(
+  ctx: ActionContext
+): ActionContext | null {
+  const previous = syncStore;
+  syncStore = ctx;
+  return previous;
+};
+
+/** Restore sync fallback after {@link enterRequestStore}, if still ours. */
+export const exitRequestStore = function exitRequestStore(
+  ctx: ActionContext,
+  previous: ActionContext | null
+): void {
+  if (syncStore === ctx) {
+    syncStore = previous;
+  }
+};
+
+/** Run `fn` under ALS for `ctx` (does not touch the sync fallback). */
+export const runWithAls = function runWithAls<T>(
+  ctx: ActionContext,
+  fn: () => T
+): T {
+  return als().run(ctx, fn);
 };
 
 /** Current request context: ALS first, then the WebContainer sync fallback. */
@@ -198,7 +231,7 @@ export const withRequestEntry = async function withRequestEntry<T>(
   if (!needsSyncRequestStore()) {
     return fn();
   }
-  const { promise: gate, resolve: release } = Promise.withResolvers<null>();
+  const { promise: gate, resolve: release } = deferred<null>();
   const previous = entryTail;
   entryTail = gate;
   await previous;

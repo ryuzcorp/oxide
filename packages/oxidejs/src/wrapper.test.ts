@@ -31,7 +31,7 @@ describe("generateWorkerWrapper", () => {
       actions: "ws",
       hasActions: true,
       middleware: ["./db.ts"],
-      preset: "celld",
+      preset: "worker",
     });
     const mw = out.indexOf("for (const __mw of");
     const ws = out.indexOf('get("Upgrade")');

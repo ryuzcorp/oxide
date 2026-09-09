@@ -1,3 +1,4 @@
+/* eslint-disable func-names -- Effect.gen uses anonymous generators (AGENTS.md) */
 import { describe, expect, test } from "bun:test";
 
 import * as Effect from "effect/Effect";
@@ -26,7 +27,7 @@ describe("action Effect surface", () => {
 
   test("Effect handlers can read OxideRequest / OxideCtx", async () => {
     const who = action(() =>
-      Effect.gen(function* whoGen() {
+      Effect.gen(function* () {
         const req = yield* OxideRequest;
         const ctx = yield* OxideCtx;
         return { hasReq: ctx.req === req, path: new URL(req.url).pathname };
@@ -40,7 +41,7 @@ describe("action Effect surface", () => {
   });
 
   test("marks async generators and Stream actions as stream meta", async () => {
-    const ticks = action(async function* ticksGen() {
+    const ticks = action(async function* () {
       yield 1;
     });
     expect(readActionMeta(ticks).stream).toBe(true);

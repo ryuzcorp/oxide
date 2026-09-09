@@ -99,13 +99,20 @@ describe("resolveOptions", () => {
     ).toThrow("unknown actions transport");
   });
 
-  test("allows actions ws with preset celld", () => {
+  test("allows actions ws with preset worker", () => {
     expect(
       resolveOptions(
-        { actions: "ws", preset: "celld", wrangler },
+        { actions: "ws", preset: "worker", wrangler },
         process.cwd()
       ).actions
     ).toBe("ws");
+  });
+
+  test("rejects removed celld preset name", () => {
+    expect(() =>
+      // SAFETY: "celld" is no longer a valid OxidejsPreset; cast asserts runtime rejection.
+      resolveOptions({ preset: "celld" as never, wrangler }, process.cwd())
+    ).toThrow('unknown preset "celld"');
   });
 
   test("detects client when index.html exists", () => {
@@ -138,14 +145,14 @@ describe("resolveOptions", () => {
     ).toBe(false);
   });
 
-  test("celld requires wrangler.name and compatibility_date", () => {
-    expect(() => resolveOptions({ preset: "celld" }, process.cwd())).toThrow(
+  test("worker requires wrangler.name and compatibility_date", () => {
+    expect(() => resolveOptions({ preset: "worker" }, process.cwd())).toThrow(
       "wrangler.name and wrangler.compatibility_date are required"
     );
     expect(() =>
       // SAFETY: incomplete wrangler fixture — name only — to assert required-field rejection.
       resolveOptions(
-        { preset: "celld", wrangler: { name: "x" } as never },
+        { preset: "worker", wrangler: { name: "x" } as never },
         process.cwd()
       )
     ).toThrow("wrangler.name and wrangler.compatibility_date are required");
@@ -154,14 +161,14 @@ describe("resolveOptions", () => {
   test("rejects unknown wrangler keys", () => {
     expect(() =>
       resolveOptions(
-        // SAFETY: routes is intentionally unsupported to assert key rejection.
+        // SAFETY: tail_consumers is intentionally unsupported to assert key rejection.
         {
-          preset: "celld",
-          wrangler: { ...wrangler, routes: [] } as never,
+          preset: "worker",
+          wrangler: { ...wrangler, tail_consumers: [] } as never,
         },
         process.cwd()
       )
-    ).toThrow("not supported by celld deploy: routes");
+    ).toThrow("not supported by the worker preset: tail_consumers");
   });
 
   test("rejects user-supplied main and assets", () => {
@@ -169,7 +176,7 @@ describe("resolveOptions", () => {
       resolveOptions(
         // SAFETY: user-supplied main is forbidden; cast bypasses the OxidejsWranglerOptions type.
         {
-          preset: "celld",
+          preset: "worker",
           wrangler: { ...wrangler, main: "./nope.js" } as never,
         },
         process.cwd()
@@ -178,7 +185,7 @@ describe("resolveOptions", () => {
     expect(() =>
       resolveOptions(
         {
-          preset: "celld",
+          preset: "worker",
           // SAFETY: user-supplied assets is forbidden; cast bypasses the OxidejsWranglerOptions type.
           wrangler: { ...wrangler, assets: { directory: "./nope" } } as never,
         },
@@ -204,20 +211,29 @@ describe("resolveOptions", () => {
 });
 
 interface EmittedWranglerJson {
-  assets?: { binding: string; directory: string };
+  assets?: {
+    binding: string;
+    directory: string;
+    not_found_handling?: "single-page-application";
+  };
   compatibility_date: string;
   compatibility_flags: string[];
   d1_databases?: OxidejsJson[];
   main: string;
   name: string;
   vars?: { [key: string]: OxidejsJson };
+  workflows?: {
+    binding: string;
+    class_name: string;
+    name: string;
+  }[];
 }
 
 describe("tryEmitWranglerConfig", () => {
   test("no-ops if server.js is missing", () => {
     const root = makeTempRoot();
     temps.push(root);
-    const resolved = resolveOptions({ preset: "celld", wrangler }, root);
+    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
     fs.mkdirSync(resolved.outDir, { recursive: true });
     tryEmitWranglerConfig(resolved, createEmitState());
     expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(
@@ -229,7 +245,7 @@ describe("tryEmitWranglerConfig", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
-    const resolved = resolveOptions({ preset: "celld", wrangler }, root);
+    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
     fs.mkdirSync(resolved.outDir, { recursive: true });
     fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
     tryEmitWranglerConfig(resolved, createEmitState());
@@ -241,7 +257,7 @@ describe("tryEmitWranglerConfig", () => {
   test("writes wrangler.jsonc without assets when there is no index.html", () => {
     const root = makeTempRoot();
     temps.push(root);
-    const resolved = resolveOptions({ preset: "celld", wrangler }, root);
+    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
     fs.mkdirSync(resolved.outDir, { recursive: true });
     fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
     tryEmitWranglerConfig(resolved, createEmitState());
@@ -251,9 +267,39 @@ describe("tryEmitWranglerConfig", () => {
       )
     ).toEqual({
       compatibility_date: "2026-01-01",
-      compatibility_flags: ["nodejs_compat"],
       main: "./server.js",
       name: "vite-cf",
+    });
+  });
+
+  test("emits Cloudflare deploy keys into wrangler.jsonc", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    const resolved = resolveOptions(
+      {
+        preset: "worker",
+        wrangler: {
+          ...wrangler,
+          account_id: "acct",
+          kv_namespaces: [{ binding: "KV", id: "kv-id" }],
+          routes: [{ pattern: "example.com/*", zone_name: "example.com" }],
+          workers_dev: true,
+        },
+      },
+      root
+    );
+    fs.mkdirSync(resolved.outDir, { recursive: true });
+    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
+    tryEmitWranglerConfig(resolved, createEmitState());
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(resolved.outDir, "wrangler.jsonc"), "utf-8")
+      )
+    ).toMatchObject({
+      account_id: "acct",
+      kv_namespaces: [{ binding: "KV", id: "kv-id" }],
+      routes: [{ pattern: "example.com/*", zone_name: "example.com" }],
+      workers_dev: true,
     });
   });
 
@@ -263,7 +309,7 @@ describe("tryEmitWranglerConfig", () => {
     fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
     const resolved = resolveOptions(
       {
-        preset: "celld",
+        preset: "worker",
         wrangler: {
           ...wrangler,
           compatibility_flags: ["nodejs_compat"],
@@ -293,7 +339,11 @@ describe("tryEmitWranglerConfig", () => {
     // SAFETY: emitted wrangler.jsonc matches EmittedWranglerJson; JSON.parse is untyped.
     const parsed = JSON.parse(first) as EmittedWranglerJson;
     expect(parsed).toEqual({
-      assets: { binding: "ASSETS", directory: "./client" },
+      assets: {
+        binding: "ASSETS",
+        directory: "./client",
+        not_found_handling: "single-page-application",
+      },
       compatibility_date: "2026-01-01",
       compatibility_flags: ["nodejs_compat"],
       d1_databases: [
@@ -345,12 +395,12 @@ describe("copyPublicDir", () => {
     ).toBe("ico");
   });
 
-  test("skips public/ on celld", () => {
+  test("skips public/ on worker", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.mkdirSync(path.join(root, "public"), { recursive: true });
     fs.writeFileSync(path.join(root, "public", "favicon.ico"), "ico");
-    copyPublicDir(resolveOptions({ preset: "celld", wrangler }, root));
+    copyPublicDir(resolveOptions({ preset: "worker", wrangler }, root));
     expect(
       fs.existsSync(path.join(root, "dist", "client", "favicon.ico"))
     ).toBe(false);

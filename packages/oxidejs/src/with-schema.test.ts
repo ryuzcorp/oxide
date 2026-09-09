@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { action } from "./action";
@@ -13,6 +14,18 @@ import { SchemaDecodeError, withSchema } from "./with-schema";
 const AddTask = Schema.Struct({
   text: Schema.String,
 });
+
+const runSchema = async <A>(
+  value: A | Effect.Effect<A, SchemaDecodeError>
+): Promise<A> => {
+  if (Effect.isEffect(value)) {
+    // SAFETY: Effect.isEffect narrows to Effect; Fail is SchemaDecodeError.
+    return await Effect.runPromise(
+      value as Effect.Effect<A, SchemaDecodeError>
+    );
+  }
+  return value;
+};
 
 describe("withSchema", () => {
   test("decodes a valid payload and runs the handler", async () => {
@@ -26,7 +39,7 @@ describe("withSchema", () => {
     expect(result).toEqual({ id: "1", text: "Milk" });
   });
 
-  test("rejects with SchemaDecodeError for invalid input", async () => {
+  test("fails with SchemaDecodeError for invalid input", async () => {
     const add = action(withSchema(AddTask, (payload) => payload.text));
     // SAFETY: intentional bad Encoded shape to assert decode failure.
     await expect(add({ text: 1 } as never)).rejects.toBeInstanceOf(
@@ -36,8 +49,10 @@ describe("withSchema", () => {
 
   test("decodes Encoded input into Type for the handler", async () => {
     const run = withSchema(Schema.FiniteFromString, (n) => n + 1);
-    expect(await run("41")).toBe(42);
-    await expect(run("nope")).rejects.toBeInstanceOf(SchemaDecodeError);
+    expect(await runSchema(run("41"))).toBe(42);
+    await expect(runSchema(run("nope"))).rejects.toBeInstanceOf(
+      SchemaDecodeError
+    );
   });
 
   test("over RPC scrub maps SchemaDecodeError to Invalid params", async () => {

@@ -72,4 +72,28 @@ describe("createMutationQueue", () => {
     expect(await add("milk")).toBe("milk");
     expect(seen).toBe("add:milk");
   });
+
+  test("flush retries transient failures with Schedule", async () => {
+    const queue = createMutationQueue({
+      retries: 3,
+      retryBase: "1 millis",
+    });
+    let attempts = 0;
+    const add = queue.wrap(() => {
+      attempts += 1;
+      if (attempts < 3) {
+        return Promise.reject(new Error("SocketCloseError: 1006"));
+      }
+      return Promise.resolve("ok");
+    });
+
+    const pending = add();
+    await Bun.sleep(5);
+    expect(queue.pending).toBe(1);
+
+    await queue.flush();
+    expect(await pending).toBe("ok");
+    expect(attempts).toBeGreaterThanOrEqual(3);
+    expect(queue.pending).toBe(0);
+  });
 });

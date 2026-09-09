@@ -2,20 +2,48 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
+import type { QueueExportDef, QueueModule } from "./queue-build";
+import { appendQueueClientExports, parseQueueExports } from "./queue-build";
+import type { ScheduleExportDef } from "./schedule-build";
+import {
+  appendScheduleClientExports,
+  parseScheduleExports,
+} from "./schedule-build";
 import type {
   OxidejsActionHeaders,
   OxidejsActionTransport,
   OxidejsJson,
   OxidejsPreset,
 } from "./types";
+import {
+  ACTION_PATH,
+  VIRTUAL_ACTIONS_ID,
+  VIRTUAL_CLIENT_ID,
+  VIRTUAL_QUEUES_ID,
+  VIRTUAL_SCHEDULES_ID,
+  VIRTUAL_WORKFLOWS_ID,
+} from "./virtual-ids";
+import type { WorkflowExportDef, WorkflowModule } from "./workflow-build";
+import {
+  appendWorkflowClientExports,
+  parseWorkflowExports,
+} from "./workflow-build";
 
-export const VIRTUAL_ACTIONS_ID = "virtual:oxide/actions";
-export const RESOLVED_VIRTUAL_ACTIONS_ID = `\0${VIRTUAL_ACTIONS_ID}`;
-export const VIRTUAL_WORKER_ID = "virtual:oxide/worker";
-export const RESOLVED_VIRTUAL_WORKER_ID = `\0${VIRTUAL_WORKER_ID}`;
-export const VIRTUAL_CLIENT_ID = "virtual:oxide/client";
-export const RESOLVED_VIRTUAL_CLIENT_ID = `\0${VIRTUAL_CLIENT_ID}`;
-export const ACTION_PATH = "/__oxide/action";
+export {
+  ACTION_PATH,
+  RESOLVED_VIRTUAL_ACTIONS_ID,
+  RESOLVED_VIRTUAL_CLIENT_ID,
+  RESOLVED_VIRTUAL_QUEUES_ID,
+  RESOLVED_VIRTUAL_SCHEDULES_ID,
+  RESOLVED_VIRTUAL_WORKER_ID,
+  RESOLVED_VIRTUAL_WORKFLOWS_ID,
+  VIRTUAL_ACTIONS_ID,
+  VIRTUAL_CLIENT_ID,
+  VIRTUAL_QUEUES_ID,
+  VIRTUAL_SCHEDULES_ID,
+  VIRTUAL_WORKER_ID,
+  VIRTUAL_WORKFLOWS_ID,
+} from "./virtual-ids";
 
 /** Match the action endpoint with or without a trailing slash (Effect RPC posts to `path/`). */
 export const matchesActionPath = function matchesActionPath(
@@ -29,8 +57,67 @@ const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 /** Only `export const name = action(...)` become remote RPC actions. Everything else stays server-local. */
 const EXPORT_RE =
   /^\s*export\s+const\s+(?<exportName>[A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?action\s*\(/gmu;
-const STREAM_EXPORT_RE =
-  /^\s*export\s+const\s+(?<exportName>[A-Za-z_$][\w$]*)\s*=\s*action\s*\(\s*(?:async\s+function\s*\*|[\w$.]+\.subscribe\s*\(|[\s\S]*?\bStream\.)/gmu;
+
+/** Contents inside `action(...)` for one export — stops at the matching `)`. */
+const extractActionCallInner = function extractActionCallInner(
+  source: string,
+  openParenIndex: number
+): string | null {
+  if (source[openParenIndex] !== "(") {
+    return null;
+  }
+  let depth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let escape = false;
+  for (let i = openParenIndex; i < source.length; i += 1) {
+    const c = source[i];
+    if (quote !== null) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(") {
+      depth += 1;
+      continue;
+    }
+    if (c === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(openParenIndex + 1, i);
+      }
+    }
+  }
+  return null;
+};
+
+const isStreamActionInner = function isStreamActionInner(inner: string) {
+  const trimmed = inner.trimStart();
+  if (/^async\s+function\s*\*/u.test(trimmed)) {
+    return true;
+  }
+  if (/^[\w$.]+\.subscribe\s*\(/u.test(trimmed)) {
+    return true;
+  }
+  // Authoritative: `action(fn, { stream: true })`.
+  if (/\bstream\s*:\s*true\b/u.test(inner)) {
+    return true;
+  }
+  // Effect Stream helpers (`Stream.unwrap`, `Stream.from…`) inside this call only.
+  return /\bStream\./u.test(inner);
+};
 
 export interface ServerModule {
   abs: string;
@@ -67,9 +154,14 @@ export const parseStreamExports = function parseStreamExports(
   source: string
 ): string[] {
   const names = new Set<string>();
-  for (const match of source.matchAll(STREAM_EXPORT_RE)) {
-    const [, name] = match;
-    if (name) {
+  for (const match of source.matchAll(EXPORT_RE)) {
+    const name = match.groups?.["exportName"] ?? match[1];
+    if (!(name && match.index !== undefined)) {
+      continue;
+    }
+    const openParen = match.index + match[0].length - 1;
+    const inner = extractActionCallInner(source, openParen);
+    if (inner !== null && isStreamActionInner(inner)) {
       names.add(name);
     }
   }
@@ -198,9 +290,16 @@ export const client = createClient(actionsGroup, ${JSON.stringify(opts)});
 };
 
 export const generateClientStub = function generateClientStub(
-  mod: Pick<ServerModule, "key" | "exports" | "streams">
+  mod: Pick<ServerModule, "key" | "exports" | "streams"> & {
+    queues?: QueueExportDef[];
+    schedules?: ScheduleExportDef[];
+    workflows?: WorkflowExportDef[];
+  }
 ): string {
   const streams = new Set(mod.streams);
+  const workflows = mod.workflows ?? [];
+  const queues = mod.queues ?? [];
+  const schedules = mod.schedules ?? [];
   const lines = [
     `// oxidejs:client-stub`,
     `import { wrapClientRpc, wrapClientStreamRpc } from "oxidejs";`,
@@ -230,11 +329,16 @@ export const generateClientStub = function generateClientStub(
       lines.push(`export const ${name} = wrapClientRpc(${peel});`);
     }
   }
+  appendWorkflowClientExports(lines, workflows);
+  appendQueueClientExports(lines, queues);
+  appendScheduleClientExports(lines, schedules);
   return `${lines.join("\n")}\n`;
 };
 
 export const generateActionsClientModule = function generateActionsClientModule(
-  modules: ServerModule[]
+  modules: ServerModule[],
+  workflows: WorkflowModule[] = [],
+  queues: QueueModule[] = []
 ): string {
   const lines = [
     `import { Schema } from "effect";`,
@@ -252,6 +356,30 @@ export const generateActionsClientModule = function generateActionsClientModule(
       );
     }
   }
+  for (const [i, mod] of workflows.entries()) {
+    for (const exp of mod.exports) {
+      for (const method of ["start", "status", "send"] as const) {
+        const rpc = `__wrpc_${i}_${exp.exportName}_${method}`;
+        rpcNames.push(rpc);
+        const tag = `${exp.name}.${method}`;
+        lines.push(
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown });`
+        );
+      }
+    }
+  }
+  for (const [i, mod] of queues.entries()) {
+    for (const exp of mod.exports) {
+      for (const method of ["send", "sendBatch"] as const) {
+        const rpc = `__qrpc_${i}_${exp.exportName}_${method}`;
+        rpcNames.push(rpc);
+        const tag = `${exp.name}.${method}`;
+        lines.push(
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown });`
+        );
+      }
+    }
+  }
   lines.push(
     `export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`,
     `export default actionsGroup;`,
@@ -262,15 +390,33 @@ export const generateActionsClientModule = function generateActionsClientModule(
 
 export const generateActionsModule = function generateActionsModule(
   modules: ServerModule[],
-  opts?: { bust?: boolean }
+  opts?: {
+    bust?: boolean;
+    queues?: QueueModule[];
+    workflows?: WorkflowModule[];
+  }
 ): string {
+  const workflows = opts?.workflows ?? [];
+  const queues = opts?.queues ?? [];
   const lines = [
     `import { Schema } from "effect";`,
     `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
-    `import { ACTION_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream } from "oxidejs";`,
+    `import { ACTION_META, WORKFLOW_META, QUEUE_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream } from "oxidejs";`,
     `const __meta = (fn) => (fn && fn[ACTION_META]) || {};`,
+    `const __wmeta = (h) => (h && h[WORKFLOW_META]) || {};`,
+    `const __qmeta = (h) => (h && h[QUEUE_META]) || {};`,
     `const __payload = (meta) => meta.payload`,
     `  ? Schema.Struct({ args: Schema.Tuple([meta.payload]) })`,
+    `  : Schema.Struct({ args: Schema.Array(Schema.Unknown) });`,
+    `const __queueSendOpts = Schema.Struct({`,
+    `  contentType: Schema.optionalKey(Schema.String),`,
+    `  delaySeconds: Schema.optionalKey(Schema.Number),`,
+    `});`,
+    `const __qpayload = (meta) => meta.payload`,
+    `  ? Schema.Struct({ args: Schema.Union([`,
+    `      Schema.Tuple([meta.payload]),`,
+    `      Schema.Tuple([meta.payload, __queueSendOpts]),`,
+    `    ]) })`,
     `  : Schema.Struct({ args: Schema.Array(Schema.Unknown) });`,
     `const __withStore = (store, fn) => withRequestStore(store, fn);`,
   ];
@@ -300,6 +446,66 @@ export const generateActionsModule = function generateActionsModule(
     }
     return { alias, i, mod };
   });
+  const workflowAliases = workflows.map((mod, i) => {
+    const alias = `__w${i}`;
+    const spec =
+      opts?.bust === true
+        ? `${mod.abs}?t=${fs.statSync(mod.abs).mtimeMs}`
+        : mod.abs;
+    lines.push(`import * as ${alias} from ${JSON.stringify(spec)};`);
+    for (const exp of mod.exports) {
+      lines.push(
+        `const __wmeta_${i}_${exp.exportName} = __wmeta(${alias}[${JSON.stringify(exp.exportName)}]);`
+      );
+      for (const method of ["start", "status", "send"] as const) {
+        const rpc = `__wrpc_${i}_${exp.exportName}_${method}`;
+        rpcNames.push(rpc);
+        const tag = `${exp.name}.${method}`;
+        const payloadExpr =
+          method === "start"
+            ? `__payload(__wmeta_${i}_${exp.exportName})`
+            : `Schema.Struct({ args: Schema.Array(Schema.Unknown) })`;
+        lines.push(
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, {`,
+          `  payload: ${payloadExpr},`,
+          `  success: Schema.Unknown,`,
+          `  error: Schema.Never,`,
+          `});`
+        );
+      }
+    }
+    return { alias, i, mod };
+  });
+  const queueAliases = queues.map((mod, i) => {
+    const alias = `__q${i}`;
+    const spec =
+      opts?.bust === true
+        ? `${mod.abs}?t=${fs.statSync(mod.abs).mtimeMs}`
+        : mod.abs;
+    lines.push(`import * as ${alias} from ${JSON.stringify(spec)};`);
+    for (const exp of mod.exports) {
+      lines.push(
+        `const __qmeta_${i}_${exp.exportName} = __qmeta(${alias}[${JSON.stringify(exp.exportName)}]);`
+      );
+      for (const method of ["send", "sendBatch"] as const) {
+        const rpc = `__qrpc_${i}_${exp.exportName}_${method}`;
+        rpcNames.push(rpc);
+        const tag = `${exp.name}.${method}`;
+        const payloadExpr =
+          method === "send"
+            ? `__qpayload(__qmeta_${i}_${exp.exportName})`
+            : `Schema.Struct({ args: Schema.Array(Schema.Unknown) })`;
+        lines.push(
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, {`,
+          `  payload: ${payloadExpr},`,
+          `  success: Schema.Unknown,`,
+          `  error: Schema.Never,`,
+          `});`
+        );
+      }
+    }
+    return { alias, i, mod };
+  });
   lines.push(
     `export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`,
     `export const actionsHandlers = actionsGroup.toLayer({`
@@ -314,9 +520,37 @@ export const generateActionsModule = function generateActionsModule(
         `    if (__stream_${i}_${name}) {`,
         `      return actionResultToStream(${JSON.stringify(tag)}, __s, __fn, (fn) => __withStore(__s, fn));`,
         `    }`,
-        `    return runActionInContext(${JSON.stringify(tag)}, __s, () => __withStore(__s, __fn));`,
+        `    return runActionInContext(${JSON.stringify(tag)}, __s, __fn);`,
         `  },`
       );
+    }
+  }
+  for (const { alias, mod } of workflowAliases) {
+    for (const exp of mod.exports) {
+      for (const method of ["start", "status", "send"] as const) {
+        const tag = `${exp.name}.${method}`;
+        lines.push(
+          `  ${JSON.stringify(tag)}: ({ args }) => {`,
+          `    const __s = getRequestStore();`,
+          `    const __fn = () => ${alias}[${JSON.stringify(exp.exportName)}].${method}.apply(null, args);`,
+          `    return runActionInContext(${JSON.stringify(tag)}, __s, __fn);`,
+          `  },`
+        );
+      }
+    }
+  }
+  for (const { alias, mod } of queueAliases) {
+    for (const exp of mod.exports) {
+      for (const method of ["send", "sendBatch"] as const) {
+        const tag = `${exp.name}.${method}`;
+        lines.push(
+          `  ${JSON.stringify(tag)}: ({ args }) => {`,
+          `    const __s = getRequestStore();`,
+          `    const __fn = () => ${alias}[${JSON.stringify(exp.exportName)}].${method}.apply(null, args);`,
+          `    return runActionInContext(${JSON.stringify(tag)}, __s, __fn);`,
+          `  },`
+        );
+      }
     }
   }
   lines.push(
@@ -373,10 +607,16 @@ interface WorkerWrapperOpts {
   hasActions?: boolean;
   hasClient?: boolean;
   hasPublic?: boolean;
+  /** When true, attach same-worker `queue` handler (Cloudflare Workers). */
+  hasQueues?: boolean;
+  /** When true, attach same-worker `scheduled` handler (Cloudflare Workers). */
+  hasSchedules?: boolean;
   imports?: string[];
   middleware?: (string | MiddlewareModuleConfig)[];
   notFound?: string | undefined;
   preset?: OxidejsPreset;
+  /** Named WorkflowEntrypoint class exports for Cloudflare Workers. */
+  workflowClassNames?: string[];
 }
 
 interface MiddlewareModuleConfig {
@@ -447,9 +687,27 @@ async function __asset(request, spa) {
 const buildAfterAction = function buildAfterAction(
   serveAssets: boolean,
   preset: OxidejsPreset,
-  envJson: string
+  envJson: string,
+  spaFallback: boolean
 ): string {
-  const celldAfterAction = `{
+  const workerAfterAction = spaFallback
+    ? `{
+    const hit = __userFetch ? await __userFetch(request, env ?? ${envJson}, ctx) : undefined;
+    if (hit) return hit;
+    const assets = env?.ASSETS;
+    if (assets && typeof assets.fetch === "function") {
+      const res = await assets.fetch(request);
+      if (res.status !== 404) return res;
+      const dest = request.headers.get("sec-fetch-dest");
+      const isNav = dest ? dest === "document" : (request.headers.get("accept") ?? "").includes("text/html");
+      if (!isNav) return res;
+      const spa = new URL(request.url);
+      spa.pathname = "/index.html";
+      return assets.fetch(new Request(spa, request));
+    }
+    return __nf();
+  }`
+    : `{
     const hit = __userFetch ? await __userFetch(request, env ?? ${envJson}, ctx) : undefined;
     if (hit) return hit;
     const assets = env?.ASSETS;
@@ -463,8 +721,8 @@ const buildAfterAction = function buildAfterAction(
     }
     return (await __asset(request)) ?? (__nav(request) ? await __asset(request, true) : undefined) ?? __nf();`;
   }
-  if (preset === "celld") {
-    return celldAfterAction;
+  if (preset === "worker") {
+    return workerAfterAction;
   }
   return `return __userFetch
       ? __userFetch(request, env, ctx)
@@ -636,10 +894,10 @@ const buildMiddlewareGate = function buildMiddlewareGate(
     `;
 };
 
-const buildCelldDomBlock = function buildCelldDomBlock(
+const buildWorkerDomBlock = function buildWorkerDomBlock(
   preset: OxidejsPreset
 ): string {
-  if (preset !== "celld") {
+  if (preset !== "worker") {
     return "";
   }
   return `import "oxidejs/worker-dom/install";\n`;
@@ -665,6 +923,28 @@ const __userFetch =
 `;
 };
 
+const buildQueueWorkerBits = function buildQueueWorkerBits(hasQueues: boolean) {
+  if (!hasQueues) {
+    return { import: "", method: "" };
+  }
+  return {
+    import: `import { handleQueue as __oxideQueue } from ${JSON.stringify(VIRTUAL_QUEUES_ID)};\n`,
+    method: `,\n  async queue(batch, env, ctx) {\n    return __oxideQueue(batch, env, ctx);\n  }`,
+  };
+};
+
+const buildScheduleWorkerBits = function buildScheduleWorkerBits(
+  hasSchedules: boolean
+) {
+  if (!hasSchedules) {
+    return { import: "", method: "" };
+  }
+  return {
+    import: `import { handleSchedule as __oxideSchedule } from ${JSON.stringify(VIRTUAL_SCHEDULES_ID)};\n`,
+    method: `,\n  async scheduled(controller, env, ctx) {\n    return __oxideSchedule(controller, env, ctx);\n  }`,
+  };
+};
+
 export const generateWorkerWrapper = function generateWorkerWrapper(
   userWorkerAbs: string | null,
   opts: WorkerWrapperOpts = {}
@@ -685,7 +965,12 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
   const nfBlock = `const __nf = ${__nf};\n`;
   const assetBlock = buildAssetBlock(serveAssets, clientDir);
   const envJson = JSON.stringify(opts.env ?? {});
-  const afterAction = buildAfterAction(serveAssets, preset, envJson);
+  const afterAction = buildAfterAction(
+    serveAssets,
+    preset,
+    envJson,
+    preset === "worker" && opts.hasClient === true
+  );
   const listen = buildListenBlock(preset, bodyLimit, ws);
   const actionImports = buildActionImports(
     hasActions,
@@ -702,17 +987,24 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
   const sideEffectImports = (opts.imports ?? [])
     .map((spec) => `import ${JSON.stringify(spec)};`)
     .join("\n");
-  const celldDomBlock = buildCelldDomBlock(preset);
+  const workerDomBlock = buildWorkerDomBlock(preset);
   const userBlock = buildUserEntryBlock(userWorkerAbs);
-  return `${sideEffectImports}${celldDomBlock}${userBlock}const __fetch = Symbol.for("oxidejs.fetch");
+  const workflowClasses = opts.workflowClassNames ?? [];
+  const workflowExport =
+    preset === "worker" && workflowClasses.length > 0
+      ? `export { ${workflowClasses.join(", ")} } from ${JSON.stringify(VIRTUAL_WORKFLOWS_ID)};\n`
+      : "";
+  const queueBits = buildQueueWorkerBits(opts.hasQueues === true);
+  const scheduleBits = buildScheduleWorkerBits(opts.hasSchedules === true);
+  return `${sideEffectImports}${workerDomBlock}${userBlock}${queueBits.import}${scheduleBits.import}const __fetch = Symbol.for("oxidejs.fetch");
 ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${assetBlock}${nfBlock}const app = {
   ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
     ${middlewareGate}${wsUpgradeGate}${actionGate}${afterAction}
-  },
+  }${queueBits.method}${scheduleBits.method},
 };
-export default app;
+${workflowExport}export default app;
 ${listen}`;
 };
 
@@ -820,7 +1112,10 @@ export const loadClientStub = function loadClientStub(id: string): string {
   return generateClientStub({
     exports: parseExportedNames(source),
     key: moduleKey(file),
+    queues: parseQueueExports(source),
+    schedules: parseScheduleExports(source),
     streams: parseStreamExports(source),
+    workflows: parseWorkflowExports(source),
   });
 };
 

@@ -1,0 +1,13 @@
+export const VIRTUAL_ACTIONS_ID = "virtual:oxide/actions";
+export const RESOLVED_VIRTUAL_ACTIONS_ID = `\0${VIRTUAL_ACTIONS_ID}`;
+export const VIRTUAL_WORKER_ID = "virtual:oxide/worker";
+export const RESOLVED_VIRTUAL_WORKER_ID = `\0${VIRTUAL_WORKER_ID}`;
+export const VIRTUAL_CLIENT_ID = "virtual:oxide/client";
+export const RESOLVED_VIRTUAL_CLIENT_ID = `\0${VIRTUAL_CLIENT_ID}`;
+export const VIRTUAL_WORKFLOWS_ID = "virtual:oxide/workflows";
+export const RESOLVED_VIRTUAL_WORKFLOWS_ID = `\0${VIRTUAL_WORKFLOWS_ID}`;
+export const VIRTUAL_QUEUES_ID = "virtual:oxide/queues";
+export const RESOLVED_VIRTUAL_QUEUES_ID = `\0${VIRTUAL_QUEUES_ID}`;
+export const VIRTUAL_SCHEDULES_ID = "virtual:oxide/schedules";
+export const RESOLVED_VIRTUAL_SCHEDULES_ID = `\0${VIRTUAL_SCHEDULES_ID}`;
+export const ACTION_PATH = "/__oxide/action";
