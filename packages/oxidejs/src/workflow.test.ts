@@ -167,6 +167,9 @@ describe("workflow codegen", () => {
       "export class InvoiceWorkflow extends WorkflowEntrypoint"
     );
     expect(code).toContain("readWorkflowMeta");
+    expect(code).toContain("withRequestStore");
+    expect(code).toContain("const __ctx = { env: this.env, step };");
+    expect(code).toContain("__meta_InvoiceWorkflow.run(event, __ctx)");
   });
 
   test("actions module registers workflow rpcs", () => {

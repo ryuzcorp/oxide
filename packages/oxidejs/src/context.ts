@@ -165,6 +165,7 @@ export type {
   WorkflowHandle,
   WorkflowInstanceStatus,
   WorkflowMeta,
+  WorkflowRunContext,
   WorkflowRunEvent,
   WorkflowSendEvent,
   WorkflowStartResult,

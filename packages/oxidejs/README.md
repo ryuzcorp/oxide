@@ -205,7 +205,7 @@ const Params = Schema.Struct({ orderId: Schema.String });
 export const invoice = workflow({
   name: "invoice",
   payload: Params,
-  run: async ({ payload }, step) => {
+  run: async ({ payload }, { step }) => {
     const charged = await step.do("charge", () => charge(payload.orderId));
     await step.sleep("settle", "1 day");
     return charged;
@@ -219,7 +219,7 @@ const { id } = await invoice.start({ orderId: "…" });
 const status = await invoice.status(id);
 ```
 
-Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className` (string literals — the build scanner does not evaluate variables). Pass `{ idempotencyKey }` on `start` for a stable instance id. Retries with the same id reuse the existing instance (`create` is not idempotent on Cloudflare; oxide falls back to `get`). Keep side effects inside `step.do` — the runtime replays `run()` from the start. Requires `preset: "worker"`. Do not use the same workflow `name` as a `*.server.ts` module key that also exports `action()`s. `status` returns `{ status: "not_found" }` when the instance does not exist yet (e.g. right after a queue `send`, before the consumer creates it) instead of an Internal error. A Vercel / fetch driver is not wired yet.
+Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className` (string literals — the build scanner does not evaluate variables). Pass `{ idempotencyKey }` on `start` for a stable instance id. Retries with the same id reuse the existing instance (`create` is not idempotent on Cloudflare; oxide falls back to `get`). Keep side effects inside `step.do` — the runtime replays `run()` from the start. The second `run` argument is `{ step, env }` (plus optional `signal` later); oxide also stamps a request store so `useEnv()` / `useCtx()` work inside `run`. Requires `preset: "worker"`. Do not use the same workflow `name` as a `*.server.ts` module key that also exports `action()`s. `status` returns `{ status: "not_found" }` when the instance does not exist yet (e.g. right after a queue `send`, before the consumer creates it) instead of an Internal error. A Vercel / fetch driver is not wired yet.
 
 ### Queues (worker)
 
@@ -235,7 +235,7 @@ const Params = Schema.Struct({ orderId: Schema.String });
 export const invoice = workflow({
   name: "invoice",
   payload: Params,
-  run: async ({ payload }, step) => {
+  run: async ({ payload }, { step }) => {
     await step.do("charge", () => charge(payload.orderId));
   },
 });
@@ -270,7 +270,7 @@ Cron ticks that start a workflow (or enqueue / run a custom `handle`). Export `s
 export const invoice = workflow({
   name: "invoice",
   payload: Params,
-  run: async ({ payload }, step) => {
+  run: async ({ payload }, { step }) => {
     await step.do("charge", () => charge(payload.orderId));
   },
 });

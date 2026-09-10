@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Breaking
+
+- `workflow({ run })` second argument is now a context bag: `run(event, { step, env?, signal? })` instead of a bare `step` (so action-style context can grow without another signature break)
+
 ## 0.5.1
 
 ### Fixed

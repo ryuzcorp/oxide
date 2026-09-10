@@ -241,7 +241,7 @@ export const generateWorkflowClassesModule =
     }
     const lines = [
       `import { WorkflowEntrypoint } from "cloudflare:workers";`,
-      `import { readWorkflowMeta } from "oxidejs";`,
+      `import { readWorkflowMeta, withRequestStore } from "oxidejs";`,
     ];
     for (const [i, mod] of modules.entries()) {
       const alias = `__w${i}`;
@@ -256,7 +256,11 @@ export const generateWorkflowClassesModule =
           `if (!__meta_${exp.className}) throw new Error(${JSON.stringify(`oxidejs: missing workflow meta for ${exp.exportName}`)});`,
           `export class ${exp.className} extends WorkflowEntrypoint {`,
           `  async run(event, step) {`,
-          `    return __meta_${exp.className}.run(event, step);`,
+          `    const __ctx = { env: this.env, step };`,
+          `    return withRequestStore(`,
+          `      { env: this.env, req: new Request("https://oxide.local/workflow") },`,
+          `      () => __meta_${exp.className}.run(event, __ctx)`,
+          `    );`,
           `  }`,
           `}`
         );

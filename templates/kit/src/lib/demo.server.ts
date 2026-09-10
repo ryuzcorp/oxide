@@ -12,7 +12,7 @@ const Params = Schema.Struct({
 export const demo = workflow({
   name: "demo",
   payload: Params,
-  run: async ({ payload }, step) => {
+  run: async ({ payload }, { step }) => {
     const normalized = await step.do("normalize", () =>
       payload.message.trim().toUpperCase()
     );

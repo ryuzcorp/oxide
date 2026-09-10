@@ -32,7 +32,7 @@
     },
     "packages/oxidejs": {
       "name": "oxidejs",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "dependencies": {
         "effect": "~4.0.0-rc.112",
         "linkedom": "^0.18.13",

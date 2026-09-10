@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
 import { useEnv, useIdempotencyKey } from "./request-store";
+import type { OxidejsJson } from "./types";
 import { SchemaDecodeError } from "./with-schema";
 
 export const WORKFLOW_META = Symbol.for("oxidejs.workflowMeta");
@@ -41,6 +42,15 @@ export interface WorkflowRunEvent<P> {
   workflowName?: string;
 }
 
+/** Second argument to `workflow({ run })` — durable step API plus host context. */
+export interface WorkflowRunContext {
+  /** Worker env bindings (`this.env` on `WorkflowEntrypoint`). */
+  env?: { [key: string]: OxidejsJson | object | undefined };
+  /** Cancellation signal when the host provides one. */
+  signal?: AbortSignal;
+  step: WorkflowStep;
+}
+
 export interface WorkflowDefinition<P, R = unknown> {
   /** Env binding. Default: UPPER_SNAKE from `name`. */
   binding?: string;
@@ -50,7 +60,7 @@ export interface WorkflowDefinition<P, R = unknown> {
   name: string;
   /** Decode `start` params (Encoded in, Type out). */
   payload?: Schema.Codec<P, unknown, never, never>;
-  run: (event: WorkflowRunEvent<P>, step: WorkflowStep) => R | Promise<R>;
+  run: (event: WorkflowRunEvent<P>, ctx: WorkflowRunContext) => R | Promise<R>;
 }
 
 export interface WorkflowInstanceStatus {
@@ -368,7 +378,7 @@ const decodePayload = function decodePayload<P>(
  * export const invoice = workflow({
  *   name: "invoice",
  *   payload: Schema.Struct({ orderId: Schema.String }),
- *   run: async ({ payload }, step) => {
+ *   run: async ({ payload }, { step }) => {
  *     await step.do("charge", () => charge(payload.orderId));
  *   },
  * });
