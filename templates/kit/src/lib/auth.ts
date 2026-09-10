@@ -161,6 +161,30 @@ export const authFromEnv = (db: D1Database, env: KitEnv, origin: string) => {
   );
 };
 
+/** Effect form of {@link authFromEnv} — Fail channel, not throw. */
+export const authFromEnvEffect = (
+  db: D1Database,
+  env: KitEnv,
+  origin: string
+) =>
+  Effect.gen(function* () {
+    if (!env.BETTER_AUTH_SECRET) {
+      return yield* Effect.fail(
+        new MissingAuthSecretError({
+          message: "kit: BETTER_AUTH_SECRET is missing",
+        })
+      );
+    }
+    return createAuth(
+      db,
+      {
+        BETTER_AUTH_SECRET: env.BETTER_AUTH_SECRET,
+        BETTER_AUTH_URL: env.BETTER_AUTH_URL,
+      },
+      env.BETTER_AUTH_URL ?? origin
+    );
+  });
+
 export interface SessionUser {
   email: string;
   id: string;
@@ -181,7 +205,7 @@ export const requireUser = Effect.gen(function* () {
     throw missingD1();
   }
   yield* ensureDbEffect(db);
-  const auth = authFromEnv(db, env, new URL(request.url).origin);
+  const auth = yield* authFromEnvEffect(db, env, new URL(request.url).origin);
   const session = yield* Effect.tryPromise({
     catch: () => new UnauthorizedError({ message: "Sign in required" }),
     try: () => auth.api.getSession({ headers: request.headers }),

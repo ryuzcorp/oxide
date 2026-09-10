@@ -10,7 +10,8 @@ export const filesStorage = (bucket: R2Bucket | undefined) => {
     throw missingR2();
   }
   return createStorage({
-    driver: cloudflareR2BindingDriver({ binding: bucket }),
+    // SAFETY: unstorage's bundled R2 typings lag @cloudflare/workers-types; the Worker binding is correct at runtime.
+    driver: cloudflareR2BindingDriver({ binding: bucket as never }),
   });
 };
 

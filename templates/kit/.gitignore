@@ -7,6 +7,10 @@ dist
 *.tgz
 .ilha
 .celld
+.wrangler
+.dev.vars
+.dev.vars*
+!.dev.vars.example
 
 # code coverage
 coverage

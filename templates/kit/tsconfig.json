@@ -5,10 +5,13 @@
     "jsxImportSource": "ilha",
     "paths": {
       "$lib/*": ["./src/lib/*"],
-      "oxidejs": ["../../packages/oxidejs/src/index.ts"],
-      "oxidejs/*": ["../../packages/oxidejs/src/*"]
+      "oxidejs": ["../../packages/oxidejs/dist/index.d.mts"],
+      "oxidejs/client": ["../../packages/oxidejs/client.d.ts"],
+      "oxidejs/virtual": ["../../packages/oxidejs/virtual.d.ts"],
+      "oxidejs/vite": ["../../packages/oxidejs/dist/vite.d.mts"],
+      "oxidejs/wrangler": ["../../packages/oxidejs/dist/wrangler.d.mts"]
     },
-    "types": ["@cloudflare/workers-types", "vite/client"],
+    "types": ["vite/client", "oxidejs/client", "oxidejs/virtual"],
     "strictNullChecks": true
   },
   "include": ["src", "vite.config.ts", ".ilha/pages.d.ts"]

@@ -25,7 +25,27 @@ describe("generateWorkerWrapper", () => {
     expect(gate).toBeLessThan(mw);
   });
 
-  test("middleware runs before WebSocket upgrade so context stamps apply", () => {
+  test("WebSocket upgrade honors middleware Responses except Ilha SSR", () => {
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      actions: "ws",
+      hasActions: true,
+      middleware: ["./db.ts", "@ilha/router/ssr"],
+      preset: "worker",
+    });
+    expect(out).toContain("__wsSkipDoc");
+    expect(out).toContain("new Set([1])");
+    expect(out).toContain("if (__mwHit.webSocket) return __mwHit");
+    expect(out).toContain("if (__wsSkipDoc?.has(__i)) continue");
+    const upgrade = out.indexOf("Sec-WebSocket-Key");
+    const skip = out.indexOf("__wsSkipDoc");
+    const responseMw = out.indexOf("if (hit) return hit;", skip);
+    expect(upgrade).toBeGreaterThan(-1);
+    expect(skip).toBeGreaterThan(upgrade);
+    expect(responseMw).toBeGreaterThan(skip);
+  });
+
+  test("WebSocket upgrade returns any middleware Response when no Ilha SSR", () => {
     const out = generateWorkerWrapper("/x/server.ts", {
       ...BASE,
       actions: "ws",
@@ -33,11 +53,8 @@ describe("generateWorkerWrapper", () => {
       middleware: ["./db.ts"],
       preset: "worker",
     });
-    const mw = out.indexOf("for (const __mw of");
-    const ws = out.indexOf('get("Upgrade")');
-    expect(mw).toBeGreaterThan(-1);
-    expect(ws).toBeGreaterThan(-1);
-    expect(mw).toBeLessThan(ws);
+    expect(out).toContain("__wsSkipDoc = undefined");
+    expect(out).toContain("return __mwHit");
   });
 
   test("imports option emits side-effect imports at the top", () => {

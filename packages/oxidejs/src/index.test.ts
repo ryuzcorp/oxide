@@ -12,8 +12,6 @@ import {
   applyViteEnvironments,
 } from "./worker-build";
 
-const wrangler = { compatibility_date: "2026-01-01", name: "vite-cf" };
-
 interface DevContext {
   ctx?: undefined;
   env: { mode: string };
@@ -44,7 +42,10 @@ interface LoadThis {
 }
 
 type AppHandler = (request: Request, context: DevContext) => undefined;
-type ViteConfigHook = (config: { root: string }) => undefined;
+type ViteConfigHook = (
+  config: { root: string },
+  env?: { command: "build" | "serve" }
+) => undefined;
 type ConnectHandler = (
   req: NodeReq,
   res: ConnectResponse,
@@ -178,7 +179,11 @@ describe("factory shape", () => {
     expect(plugin.resolveId).toBeInstanceOf(Function);
     expect(plugin.load).toBeInstanceOf(Function);
     expect(plugin.transform).toBeInstanceOf(Function);
-    expect(plugin.writeBundle).toBeInstanceOf(Function);
+    expect(plugin.buildStart).toBeInstanceOf(Function);
+    // SAFETY: unplugin forwards Rollup `closeBundle`; UnpluginOptions omits it from typings.
+    expect((plugin as { closeBundle?: unknown }).closeBundle).toBeInstanceOf(
+      Function
+    );
     expect(plugin.vite?.config).toBeInstanceOf(Function);
     expect(plugin.vite?.configureServer).toBeInstanceOf(Function);
     expect(plugin.vite?.configurePreviewServer).toBeInstanceOf(Function);
@@ -196,7 +201,7 @@ describe("factory shape", () => {
       throw new Error("expected vite hooks");
     }
     // SAFETY: vite.config accepts a partial UserConfig in this harness.
-    (plugin.vite.config as ViteConfigHook)({ root });
+    (plugin.vite.config as ViteConfigHook)({ root }, { command: "serve" });
 
     const handlers: ConnectHandler[] = [];
     const server: ViteDevServerMock = {
@@ -270,7 +275,7 @@ describe("factory shape", () => {
       throw new Error("expected vite hooks");
     }
     // SAFETY: vite.config accepts a partial UserConfig in this harness.
-    (plugin.vite.config as ViteConfigHook)({ root });
+    (plugin.vite.config as ViteConfigHook)({ root }, { command: "serve" });
 
     let loads = 0;
     const errors: string[] = [];
@@ -362,7 +367,7 @@ describe("factory shape", () => {
     }
   });
 
-  test("fetch preset writes dist/server.js for node", () => {
+  test("Node build writes dist/server.js", () => {
     const root = rootWithHtml();
     try {
       const resolved = resolveOptions({}, root);
@@ -394,27 +399,16 @@ describe("factory shape", () => {
     });
   });
 
-  test("worker preset targets webworker", () => {
-    const resolved = resolveOptions(
-      { preset: "worker", wrangler },
-      "/tmp/project"
-    );
+  test("worker preset skips vite worker environments", () => {
+    const resolved = resolveOptions({ preset: "worker" }, "/tmp/project");
     const config = applyViteEnvironments({}, resolved);
-    expect(config.environments?.["ssr"]?.resolve).toEqual({
-      conditions: ["worker"],
-      noExternal: true,
-    });
-    expect(config.environments?.["ssr"]?.ssr).toEqual({
-      external: [/^cloudflare:/u],
-      noExternal: true,
-      target: "webworker",
-    });
+    expect(config.environments).toBeUndefined();
   });
 
-  test("rsbuild fetch environments match vite output layout", () => {
+  test("rsbuild Node environments match vite output layout", () => {
     const root = rootWithHtml();
     try {
-      const resolved = resolveOptions({}, root);
+      const resolved = resolveOptions({ preset: "fetch" }, root);
       const config = applyRsbuildEnvironments({}, resolved);
       expect(config.environments?.["web"]?.output?.distPath?.root).toBe(
         path.join(resolved.outDir, "client")
@@ -432,15 +426,9 @@ describe("factory shape", () => {
     }
   });
 
-  test("rsbuild worker environment targets web-worker", () => {
-    const resolved = resolveOptions(
-      { preset: "worker", wrangler },
-      "/tmp/project"
-    );
+  test("rsbuild worker preset skips server environment", () => {
+    const resolved = resolveOptions({ preset: "worker" }, "/tmp/project");
     const config = applyRsbuildEnvironments({}, resolved);
-    expect(config.environments?.["server"]?.output?.target).toBe("web-worker");
-    expect(config.environments?.["server"]?.resolve).toEqual({
-      conditionNames: ["worker", "..."],
-    });
+    expect(config.environments).toBeUndefined();
   });
 });

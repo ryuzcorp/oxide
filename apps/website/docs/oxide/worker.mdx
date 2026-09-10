@@ -2,10 +2,10 @@
 title: Worker
 sidebar:
   icon: layers
-description: Workflows, queues, and cron schedules for the worker preset.
+description: Workflows, queues, and cron schedules for Cloudflare Workers mode.
 ---
 
-When you set `preset: "worker"`, Oxide targets Cloudflare Workers semantics (and the same-worker runtime shape on celld).
+When you use `preset: "worker"` (default when a root wrangler config exists), Oxide targets Cloudflare Workers semantics (and the same-worker runtime shape on celld).
 
 This page documents the `*.server.ts` exports that wire into Cloudflare Workflows, Queues, and Cron triggers.
 
@@ -130,6 +130,6 @@ export const nightly = schedule({
 });
 ```
 
-Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}:${scheduledTime}` `` (idempotent retries).
+Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}-${scheduledTime}` `` (idempotent retries; letters/digits/`-`/`_` only).
 
 `params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.

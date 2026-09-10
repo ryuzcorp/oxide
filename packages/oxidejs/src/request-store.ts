@@ -259,7 +259,7 @@ export const useRequest = function useRequest(): Request {
   return store().req;
 };
 
-/** Worker `env` from `fetch(request, env, ctx)`. `undefined` on the Node fetch preset. */
+/** Worker `env` from `fetch(request, env, ctx)`. `undefined` on Node. */
 export const useEnv = function useEnv<E = { [key: string]: OxidejsJson }>():
   | E
   | undefined {

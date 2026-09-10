@@ -22,10 +22,14 @@ export const DemoWorkflowPanel = () => {
       const next = await demo.status(current);
       status.set(next.status);
       output.set(
-        next.output === undefined ? "" : JSON.stringify(next.output, null, 2)
+        next.output === undefined || next.output === null
+          ? ""
+          : JSON.stringify(next.output, null, 2)
       );
       if (next.error?.message) {
         err.set(next.error.message);
+      } else {
+        err.set("");
       }
     } catch (error) {
       err.set(error instanceof Error ? error.message : String(error));

@@ -30,11 +30,11 @@
 
 ## oxidejs conventions
 
-- Default preset is `"fetch"`. `"worker"` writes `dist/wrangler.jsonc` and skips asset serving (Wrangler `ASSETS` does that).
+- Default is `"fetch"` when no wrangler config is at the project root; `"worker"` when `wrangler.jsonc` / `wrangler.toml` / `wrangler.json` exists (overridable). Workers apps use `@cloudflare/vite-plugin` + root wrangler (oxide supplies `virtual:oxide/worker`; wrap Cloudflare options with `withOxide` from `oxidejs/wrangler`). For celld, add `plugins: ["oxidejs/plugins/celld"]` and set `OXIDE_CELLD=1` on celld-only scripts so prepare does not pollute Cloudflare deploys.
 - `*.server.ts` / `*.server.js` are server-only. Client imports become Effect RPC stubs on `/__oxide/action` (HTTP or WebSocket). Method names are `<file>.<fn>` (`test.ping`).
-- `workflow()` in `*.server.ts` (worker): Cloudflare Workflows driver — emits class + wrangler `workflows`, RPC `name.start` / `name.status` / `name.send`.
-- `queue({ name, workflow })` in `*.server.ts` (worker): Cloudflare Queues — wrangler `queues` producers/consumers, same-worker `queue` handler starts the workflow per message (envelope id from `send` → `{ id }`), RPC `name.send` / `name.sendBatch`. Optional `producerStart: true` also starts the workflow from the producer for celld (same-worker consumers do not run with `fetch()`); default off so Cloudflare queue semantics control execution.
-- `schedule({ name, cron, workflow })` in `*.server.ts` (worker): Cron triggers — wrangler `triggers.crons`, same-worker `scheduled` handler starts the workflow with id `` `${name}:${scheduledTime}` `` (or `queue` / `handle` escape). Queue targets inherit `producerStart` from the queue handle.
+- `workflow()` in `*.server.ts` (`preset: "worker"`): Cloudflare Workflows driver — class export, wrangler `workflows` via `withOxide` / `mergeDurableBindings`, RPC `name.start` / `name.status` / `name.send`.
+- `queue({ name, workflow })` in `*.server.ts` (`preset: "worker"`): Cloudflare Queues — wrangler `queues` via merge, same-worker `queue` handler starts the workflow per message (envelope id from `send` → `{ id }`), RPC `name.send` / `name.sendBatch`. Optional `producerStart: true` also starts the workflow from the producer for celld (same-worker consumers do not run with `fetch()`); default off so Cloudflare queue semantics control execution.
+- `schedule({ name, cron, workflow })` in `*.server.ts` (`preset: "worker"`): Cron triggers — wrangler `triggers.crons` via merge, same-worker `scheduled` handler starts the workflow with id `` `${name}-${scheduledTime}` `` (or `queue` / `handle` escape). Queue targets inherit `producerStart` from the queue handle.
 - Return `undefined` from `src/server.ts` to fall through to static files / `index.html`. Missing the default `src/server.ts` is fine (actions / assets only).
 - `async function*` exports stream as NDJSON JSON-RPC over the same action endpoint. Effect `Stream` handlers need `{ stream: true }` (or an async generator).
 - `action(fn, { payload?, success?, error? })` stamps Effect Rpc schemas for the generated actions module. `withSchema(schema, fn)` is sugar for `{ payload: schema }` plus a local decode.
@@ -45,8 +45,8 @@
 - Host observability: `oxideRuntimeLayer()` provides a Logger Layer so `oxidejs.action` spans / logs can be collected.
 - Action handlers run under an `oxidejs.action` span / log annotations (`rpc.method`). Provide an Effect tracer/logger at the host if you want them collected.
 - `actions: "ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on worker). Answer Effect `@effect/rpc/Ping` with NDJSON `@effect/rpc/Pong`.
-- `clientDir` must stay inside `outDir`. Unknown wrangler keys fail at build time.
-- Non-goals: no `wrangler dev` / workerd emulation, no automatic `celld deploy` / `wrangler deploy`, no Node-builtin polyfills.
+- `clientDir` must stay inside `outDir`.
+- Non-goals: no oxide-owned workerd emulation (use `@cloudflare/vite-plugin`), no automatic `celld deploy` / `wrangler deploy`, no Node-builtin polyfills.
 
 ### Effect roadmap (nice-to-have later)
 

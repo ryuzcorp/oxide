@@ -8,6 +8,35 @@ declare module "virtual:oxide/actions" {
   export { actionsGroup as actions };
 }
 
+declare module "virtual:oxide/worker" {
+  const app: {
+    fetch: (
+      request: Request,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF Worker env
+      env?: unknown,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF ExecutionContext
+      ctx?: unknown
+    ) => Response | Promise<Response>;
+    queue?: (
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF MessageBatch
+      batch: unknown,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF Worker env
+      env?: unknown,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF ExecutionContext
+      ctx?: unknown
+    ) => void | Promise<void>;
+    scheduled?: (
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF ScheduledController
+      controller: unknown,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF Worker env
+      env?: unknown,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- CF ExecutionContext
+      ctx?: unknown
+    ) => void | Promise<void>;
+  };
+  export default app;
+}
+
 declare module "virtual:oxide/workflows" {
   // Named WorkflowEntrypoint exports are generated per `workflow()` in `*.server.ts`.
 }

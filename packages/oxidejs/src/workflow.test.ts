@@ -10,7 +10,8 @@ import {
   generateActionsModule,
   generateWorkerWrapper,
 } from "./actions";
-import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { mergeDurableBindings } from "./core";
+import type { DurableWranglerConfig } from "./core";
 import { withRequestStore } from "./request-store";
 import { toWorkflowBinding, toWorkflowClassName, workflow } from "./workflow";
 import {
@@ -406,37 +407,62 @@ describe("workflow runtime", () => {
       }
     );
   });
+
+  test("status normalizes null error/output and surfaces host throws", async () => {
+    const env = {
+      INVOICE: {
+        create: () => Promise.resolve({ id: "x" }),
+        get: (id: string) => {
+          if (id === "boom") {
+            return Promise.reject(
+              new Error("workflows.api.error.internal_server")
+            );
+          }
+          return Promise.resolve({
+            status: () =>
+              Promise.resolve({
+                error: null,
+                output: null,
+                rollback: null,
+                status: "running",
+              }),
+          });
+        },
+      },
+    };
+    const invoice = workflow({
+      name: "invoice",
+      run: () => Promise.resolve(),
+    });
+    await withRequestStore(
+      {
+        // SAFETY: test fixture stubs Workflow binding methods.
+        env: env as never,
+        req: new Request("http://localhost/"),
+      },
+      async () => {
+        expect(await invoice.status("ok")).toEqual({ status: "running" });
+        expect(await invoice.status("boom")).toEqual({
+          error: {
+            message: "Error workflows.api.error.internal_server",
+          },
+          status: "unknown",
+        });
+      }
+    );
+  });
 });
 
-describe("wrangler workflows emit", () => {
-  test("merges scanned workflows into wrangler.jsonc", () => {
+describe("wrangler workflows merge", () => {
+  test("merges scanned workflows into durable bindings", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-wf-emit-"));
-    const outDir = path.join(root, "dist");
-    fs.mkdirSync(outDir);
-    fs.writeFileSync(path.join(outDir, "server.js"), "export default {}\n");
     fs.writeFileSync(
       path.join(root, "invoice.server.ts"),
       `export const invoice = workflow({ name: "invoice", run: async () => {} })\n`
     );
     try {
-      const resolved = resolveOptions(
-        {
-          preset: "worker",
-          wrangler: {
-            compatibility_date: "2026-01-01",
-            name: "app",
-          },
-        },
-        root
-      );
-      const opts = { ...resolved, outDir, root };
-      tryEmitWranglerConfig(opts, createEmitState());
-      // SAFETY: emitted wrangler.jsonc shape asserted below.
-      const config = JSON.parse(
-        fs.readFileSync(path.join(outDir, "wrangler.jsonc"), "utf-8")
-      ) as {
-        workflows: { binding: string; class_name: string; name: string }[];
-      };
+      const config: DurableWranglerConfig = {};
+      mergeDurableBindings(config, root);
       expect(config.workflows).toEqual([
         {
           binding: "INVOICE",

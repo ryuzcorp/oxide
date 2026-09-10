@@ -9,46 +9,44 @@ Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` �
 
 | Option | Default | What it controls |
 | --- | --- | --- |
-| [`preset`](#preset) | `"fetch"` | Node-style fetch server or Workers output |
+| [`preset`](#preset) | auto | `"fetch"` (Node) or `"worker"` (Cloudflare) |
 | [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file (optional when default is missing) |
 | [`outDir`](#outdir) | `dist` | Build output folder |
 | [`clientDir`](#clientdir) | `client` | Client folder inside `outDir` |
-| [`wrangler.name`](#wrangler) | required if `emitConfig` | Worker name |
-| [`wrangler.compatibility_date`](#wrangler) | required if `emitConfig` | Worker compatibility date |
-| [`wrangler.compatibility_flags`](#wrangler) | - | Optional worker flags |
-| [`wrangler.account_id`](#wrangler) | - | Optional Cloudflare account id |
-| [`wrangler.workers_dev`](#wrangler) | - | Optional Cloudflare `*.workers.dev` |
-| [`wrangler.routes`](#wrangler) | - | Optional Cloudflare routes |
-| [`wrangler.kv_namespaces`](#wrangler) | - | Optional KV namespaces |
-| [`wrangler.durable_objects`](#wrangler) | - | Optional Durable Object config |
-| [`wrangler.migrations`](#wrangler) | - | Optional migrations |
-| [`wrangler.services`](#wrangler) | - | Optional service bindings |
-| [`wrangler.vars`](#wrangler) | - | Optional variables |
-| [`emitConfig`](#emitconfig) | `true` on `worker` | Whether to write `wrangler.jsonc` |
 | [`actions`](#actions) | `"http"` | Action transport, endpoint path, and same-origin protection |
 | [`actionHeaders`](#actionheaders) | - | Public static headers added by the browser action client |
 | [`middleware`](#middleware) | `[]` | Production request middleware, in order |
 | [`imports`](#imports) | `[]` | Side-effect modules loaded at server startup |
 | [`bodyLimit`](#bodylimit) | `1048576` | Max Node request body size (413 when exceeded) |
-| [`notFound`](#notfound) | - | Custom HTML 404 body on the fetch preset |
-| [`env`](#env) | - | Node preset value passed to `fetch(request, env, ctx)` |
-
-`main` is always `./server.js`. Oxide adds `assets` only when the project has an `index.html`. Unknown Wrangler keys fail the build instead of being silently ignored.
+| [`notFound`](#notfound) | - | Custom HTML 404 body on Node |
+| [`env`](#env) | - | Node value passed to `fetch(request, env, ctx)` |
 
 ## preset
 
-Use `"fetch"` for the default Node-compatible server. It serves built client files, copies `public/`, and gives hashed assets a long immutable cache lifetime.
+Defaults from the project root:
 
-Use `"worker"` for Cloudflare Workers. This preset writes worker configuration and leaves asset serving to the `ASSETS` binding.
+1. `wrangler.jsonc`, `wrangler.toml`, or `wrangler.json` present → `"worker"`
+2. Otherwise → `"fetch"`
+3. Pass `preset: "worker"` or `preset: "fetch"` to override
+
+`"fetch"` builds a Node server (`dist/server.js` + optional client). `"worker"` is companion mode for [`@cloudflare/vite-plugin`](https://developers.cloudflare.com/workers/vite-plugin/): oxide supplies `virtual:oxide/worker` and durable scan; Cloudflare owns the Vite Worker environment and deploy config.
 
 ```ts twoslash
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { withOxide } from "oxidejs/wrangler";
 import oxide from "oxidejs/vite";
+import { defineConfig } from "vite";
 
-oxide({
-  preset: "worker",
-  wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
+export default defineConfig({
+  plugins: [
+    // wrangler.jsonc in the project → preset defaults to "worker"
+    oxide({ actions: "ws" }),
+    cloudflare(withOxide()),
+  ],
 });
 ```
+
+Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. Wrap Cloudflare options with `withOxide` from `oxidejs/wrangler` so scanned `workflow()` / `queue()` / `schedule()` bindings merge and the Worker uses Vite's `ssr` environment (or call `mergeDurableBindings` yourself inside `config`).
 
 ## workerEntry
 
@@ -62,19 +60,11 @@ oxide({ workerEntry: "src/api.ts" });
 
 ## outDir
 
-The default is `dist`. Oxide writes `server.js` and any client build under this folder.
+The default is `dist`. On `"fetch"`, Oxide writes `server.js` and any client build under this folder. With `"worker"`, Cloudflare's plugin owns the output layout.
 
 ## clientDir
 
-The default is `client`, producing `dist/client/`. It must stay inside [`outDir`](#outdir); Oxide rejects paths that escape the output folder.
-
-## wrangler
-
-These fields are copied into generated `wrangler.jsonc` when [`emitConfig`](#emitconfig) is enabled. `name` and `compatibility_date` are required. Oxide computes `main` and `assets`, so do not provide those keys yourself. Pass `compatibility_flags` when you need them (`nodejs_compat` is optional — celld ignores it). Cloudflare-only keys (`account_id`, `workers_dev`, `routes`, `kv_namespaces`) are emitted when you set them for wrangler deploy; **omit them for celld** — unknown top-level keys fail `celld deploy`.
-
-## emitConfig
-
-This defaults to `true` for `"worker"` and `false` for `"fetch"`. Set it to `false` when another tool owns the worker config.
+The default is `client`, producing `dist/client/` on `"fetch"`. It must stay inside [`outDir`](#outdir); Oxide rejects paths that escape the output folder.
 
 ## actions
 
@@ -100,11 +90,11 @@ oxide({
 });
 ```
 
-- `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node/`fetch`, `WebSocketPair` on [`preset: "worker"`](#preset)).
+- `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with [`preset: "worker"`](#preset)).
 - `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
 - `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
 
-On the worker preset, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
+With `"worker"`, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
 
 Turn `sameOrigin` off only when cross-origin RPC is intentional. You must then provide the appropriate authentication, CORS, and CSRF policy.
 
@@ -171,6 +161,35 @@ export default defineConfig({
 });
 ```
 
+## plugins
+
+Build plugins with `beforeBuild` / `afterBuild` hooks (once per production build). Pass a plugin object or a module specifier that default-exports one. Relative paths resolve against the project root.
+
+```ts twoslash
+// vite.config.ts
+import { defineConfig } from "vite";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [
+    oxide({
+      plugins: ["oxidejs/plugins/celld"],
+    }),
+  ],
+});
+```
+
+`oxidejs/plugins/celld` runs `prepareCelldDeploy` after a production build when `OXIDE_CELLD=1` and `dist/ssr/wrangler.json` exists (Cloudflare Vite layout). Set the env on celld-only scripts so Cloudflare `wrangler deploy` does not upload `celld-entry.js`.
+
+```json
+{
+  "scripts": {
+    "deploy": "vite build && wrangler deploy",
+    "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist"
+  }
+}
+```
+
 ## imports
 
 Module specifiers imported for side effects at the top of the generated server bundle — for virtual modules or integrations that self-register handlers. Also loaded once during development.
@@ -187,7 +206,7 @@ export default defineConfig({
 
 ## bodyLimit
 
-Maximum request body size in bytes on the Node preset. Larger requests receive `413 Payload Required`. Defaults to 1 MiB.
+Maximum request body size in bytes on Node. Larger requests receive `413 Payload Required`. Defaults to 1 MiB.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -197,7 +216,7 @@ oxide({ bodyLimit: 4 * 1024 * 1024 });
 
 ## notFound
 
-Custom HTML served with a 404 status when no action, user fetch, route, or asset handled the request (fetch preset). Defaults to a minimal `<h1>404 Not Found</h1>`.
+Custom HTML served with a 404 status when no action, user fetch, route, or asset handled the request (Node). Defaults to a minimal `<h1>404 Not Found</h1>`.
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -207,7 +226,7 @@ oxide({ notFound: "<h1>Page not found</h1>" });
 
 ## env
 
-Extra values passed as the second argument to `fetch(request, env, ctx)` on the Node preset. Read them with [`useEnv()`](/oxide/server-actions#useenv-and-usefetchctx).
+Extra values passed as the second argument to `fetch(request, env, ctx)` on Node. Read them with [`useEnv()`](/oxide/server-actions#useenv-and-usefetchctx).
 
 ```ts twoslash
 import oxide from "oxidejs/vite";

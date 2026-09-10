@@ -37,6 +37,68 @@ export interface WsHooksOptions {
   sameOrigin?: boolean;
 }
 
+/** Hostname without port; brackets stripped for IPv6. */
+const hostnameOf = function hostnameOf(host: string): string {
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end === -1 ? host.toLowerCase() : host.slice(1, end).toLowerCase();
+  }
+  const colon = host.lastIndexOf(":");
+  // IPv6 without brackets has multiple colons — leave as-is.
+  if (colon !== -1 && host.indexOf(":") === colon) {
+    return host.slice(0, colon).toLowerCase();
+  }
+  return host.toLowerCase();
+};
+
+const isLoopbackHost = function isLoopbackHost(host: string): boolean {
+  const name = hostnameOf(host);
+  return name === "localhost" || name === "127.0.0.1" || name === "::1";
+};
+
+/**
+ * True when this request is a WebSocket upgrade. Prefer `Upgrade`, but also
+ * accept `Sec-WebSocket-Key` — some hosts (celld) may strip `Upgrade` while
+ * still expecting a 101 + `webSocket` Response.
+ */
+export const isWebsocketUpgradeRequest = function isWebsocketUpgradeRequest(
+  request: Request
+): boolean {
+  if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+    return true;
+  }
+  return request.headers.get("Sec-WebSocket-Key") !== null;
+};
+
+/**
+ * sameOrigin for WebSocket upgrades. celld (and some proxies) omit Origin /
+ * Sec-Fetch-Site on the upgrade request — allow that case when Host matches
+ * the request URL (treating localhost / 127.0.0.1 / ::1 as equivalent). If
+ * either header is present, use the normal CSRF check.
+ */
+export const isWsUpgradeSameOrigin = function isWsUpgradeSameOrigin(
+  request: Request
+): boolean {
+  if (isSameOrigin(request)) {
+    return true;
+  }
+  const origin = request.headers.get("origin");
+  const site = request.headers.get("sec-fetch-site");
+  if (origin || site) {
+    return false;
+  }
+  try {
+    const urlHost = new URL(request.url).host;
+    const host = request.headers.get("host") ?? urlHost;
+    if (host === urlHost) {
+      return true;
+    }
+    return isLoopbackHost(host) && isLoopbackHost(urlHost);
+  } catch {
+    return false;
+  }
+};
+
 const parseMessage = function parseMessage(
   message: WsMessage,
   maxBytes: number
@@ -188,6 +250,35 @@ const canSendOnSocket = function canSendOnSocket(socket: {
   return state === WS_OPEN || state === WS_CONNECTING;
 };
 
+/**
+ * URL for the synthetic HTTP action Request built from a WS upgrade.
+ * Preserve https — auth cookies (e.g. Better Auth `__Secure-*`) are keyed off
+ * the request origin scheme. Always forcing `http://` makes getSession miss
+ * Secure cookies set on `https://*.workers.dev`.
+ */
+export const wsActionRequestUrl = function wsActionRequestUrl(
+  upgrade: Request | undefined,
+  actionPath: string
+): string {
+  if (upgrade) {
+    try {
+      const url = new URL(upgrade.url);
+      url.protocol =
+        url.protocol === "https:" || url.protocol === "wss:"
+          ? "https:"
+          : "http:";
+      url.pathname = actionPath;
+      url.search = "";
+      url.hash = "";
+      return url.href;
+    } catch {
+      // fall through to Host header
+    }
+  }
+  const host = upgrade?.headers.get("host") ?? "localhost";
+  return `http://${host}${actionPath}`;
+};
+
 export const createWsHooks = function createWsHooks(
   group: RpcGroup.RpcGroup<Rpc.Any>,
   handlers: Layer.Layer<unknown, unknown, unknown>,
@@ -228,7 +319,6 @@ export const createWsHooks = function createWsHooks(
     const abort = new AbortController();
     peer.onClose?.(() => abort.abort());
 
-    const host = peer.request?.headers.get("host") ?? "localhost";
     const headers = new Headers(peer.request?.headers);
     headers.set("content-type", NDJSON_CONTENT);
 
@@ -236,12 +326,14 @@ export const createWsHooks = function createWsHooks(
     // SAFETY: peer.context is the host-supplied ActionContext bag; req is attached below.
     const peerCtx =
       (await options.createContext?.(peer)) ?? (peer.context as ActionContext);
+    // Upgrade already passed sameOrigin; skip re-check on the synthetic POST.
     const rpc = createActionHandler(group, handlers, {
       ...baseOptions,
       createContext: (req) => ({ ...peerCtx, req }),
+      sameOrigin: false,
     });
 
-    const request = new Request(`http://${host}${path}`, {
+    const request = new Request(wsActionRequestUrl(peer.request, path), {
       body: parsed.value,
       headers,
       method: "POST",
@@ -263,7 +355,7 @@ export const createWsHooks = function createWsHooks(
     if (!matchesActionPath(pathname, path)) {
       return new Response("Not Found", { status: 404 });
     }
-    if (sameOrigin && !isSameOrigin(req)) {
+    if (sameOrigin && !isWsUpgradeSameOrigin(req)) {
       return new Response("Forbidden", { status: 403 });
     }
     // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
@@ -279,7 +371,7 @@ export const createWsHooks = function createWsHooks(
     req: Request,
     context: WsPeerContext = {}
   ): Response | undefined {
-    if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    if (!isWebsocketUpgradeRequest(req)) {
       // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
       return undefined;
     }

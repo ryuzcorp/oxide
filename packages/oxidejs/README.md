@@ -8,7 +8,7 @@ dist/
 └── server.js         # ESM server bundle
 ```
 
-`preset: "worker"` also writes `dist/wrangler.jsonc` with `main: "./server.js"`.
+For Cloudflare Workers, add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@cloudflare/vite-plugin` — oxide supplies `virtual:oxide/worker` and durable bindings; Cloudflare owns the Worker build and deploy. Override with `preset: "fetch"` or `preset: "worker"` when needed.
 
 v1 targets **Vite** and **Rsbuild** via unplugin. Other bundlers are out of scope for now.
 
@@ -36,20 +36,28 @@ vite build
 node dist/server.js
 ```
 
-Default preset is `"fetch"`. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` when present (`undefined` continues) → static file → `index.html` for navigations. Missing the default `src/server.ts` is fine — actions and static assets still run. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`. No `wrangler.jsonc`.
+Default is Node when no wrangler config is present. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` when present (`undefined` continues) → static file → `index.html` for navigations. Missing the default `src/server.ts` is fine — actions and static assets still run. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`.
+
+Workers apps add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@cloudflare/vite-plugin` — oxide stays companion-only:
 
 ```ts
-oxide({
-  preset: "worker",
-  wrangler: { name: "my-app", compatibility_date: "2026-01-01" },
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { withOxide } from "oxidejs/wrangler";
+import oxide from "oxidejs/vite";
+
+export default defineConfig({
+  plugins: [
+    oxide({ actions: "ws", middleware: [...], plugins: ["oxidejs/plugins/celld"] }),
+    cloudflare(withOxide()),
+  ],
 });
 ```
 
-`"worker"` writes `dist/wrangler.jsonc` for Cloudflare Workers / celld and skips asset serving (`ASSETS` does that). With a client build, oxide sets `assets.not_found_handling: "single-page-application"` and, when `ASSETS.fetch` returns 404 for a document navigation, retries `/index.html` so SPA routes like `/login` work. The generated worker imports `oxidejs/worker-dom/install` so Ilha SSR has a DOM before your entry evaluates. Pass `compatibility_flags` when you need them (`nodejs_compat` is optional — celld ignores it). Cloudflare-only keys (`account_id`, `workers_dev`, `routes`) are emitted when you set them for wrangler deploy; **omit them for celld** — unknown top-level keys fail `celld deploy`.
+Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. `preset: "worker"` uses the Worker wrapper (ASSETS, workflow class exports, `WebSocketPair`) and leaves Vite Worker environments to Cloudflare's plugin. Put name, compat, D1/R2/vars in the root wrangler file. Override with `preset: "fetch"` or `preset: "worker"` when auto-detect is wrong.
 
 ## Server actions
 
-Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "worker"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. Middleware runs before the action gate and before WebSocket upgrade so stamped fields are visible to WS actions. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
+Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "worker"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. WebSocket upgrades run first (middleware Responses short-circuit, including auth `302`/`401`; only `@ilha/router/ssr` document Responses are ignored so celld does not see `has_target=false`). Other requests run middleware before the action gate. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
 
 ```ts
 // src/test.server.ts
@@ -183,9 +191,9 @@ export const add = action((text: string) =>
 
 Keep UI out of `*.server.*`. One `Stream.fromAsyncIterable(list(), …)` consumer is enough.
 
-### Workflows (worker)
+### Workflows (`preset: "worker"`)
 
-Durable multi-step jobs on Cloudflare Workflows / celld. Export `workflow()` from a `*.server.ts` file — oxide emits the `WorkflowEntrypoint` class, merges `[[workflows]]` into `wrangler.jsonc`, and exposes `start` / `status` / `send` over the same action RPC.
+Durable multi-step jobs on Cloudflare Workflows / celld. Export `workflow()` from a `*.server.ts` file — oxide emits the `WorkflowEntrypoint` class, merges bindings via `mergeDurableBindings`, and exposes `start` / `status` / `send` over the same action RPC.
 
 ```ts
 // src/invoice.server.ts
@@ -241,7 +249,7 @@ await invoices.send({ orderId: "…" });
 await invoices.sendBatch([{ body: { orderId: "…" } }]);
 ```
 
-Oxide merges `queues.producers` / `queues.consumers` into `wrangler.jsonc` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`.
+Oxide merges `queues.producers` / `queues.consumers` via `mergeDurableBindings` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`.
 
 ```ts
 const { id } = await invoices.send({ orderId: "…" });
@@ -275,7 +283,7 @@ export const nightly = schedule({
 });
 ```
 
-Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into wrangler `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}:${scheduledTime}` `` (idempotent retries). `params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.
+Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into wrangler `triggers.crons` via `mergeDurableBindings` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}-${scheduledTime}` `` (letters/digits/`-`/`_` only — celld and Cloudflare reject `:`). `params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.
 
 ### Mutation queue (client)
 
@@ -355,34 +363,36 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `preset` | `"fetch"` | `"fetch"` or `"worker"` |
+| `preset` | auto | `"worker"` when `wrangler.jsonc` / `.toml` / `.json` exists, else `"fetch"`. Override explicitly. |
 | `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
-| `outDir` | `dist` | Output root |
+| `outDir` | `dist` | Output root (Node / `"fetch"`) |
 | `clientDir` | `client` | Must stay inside `outDir` |
-| `wrangler.name` | required if `emitConfig` |  |
-| `wrangler.compatibility_date` | required if `emitConfig` |  |
-| `wrangler.compatibility_flags` | — | optional (not auto-merged; celld ignores `nodejs_compat`) |
-| `wrangler.account_id` | — | optional; Cloudflare wrangler deploy only (breaks `celld deploy`) |
-| `wrangler.workers_dev` | — | optional; Cloudflare `*.workers.dev` |
-| `wrangler.routes` | — | optional; Cloudflare route patterns |
-| `wrangler.d1_databases` | — | optional |
-| `wrangler.durable_objects` | — | optional |
-| `wrangler.migrations` | — | optional |
-| `wrangler.kv_namespaces` | — | optional |
-| `wrangler.r2_buckets` | — | optional |
-| `wrangler.services` | — | optional |
-| `wrangler.vars` | — | optional |
-| `wrangler.workflows` | — | optional; merged with scanned `workflow()` exports in `*.server.ts` |
-| `wrangler.queues` | — | optional; merged with scanned `queue()` exports in `*.server.ts` |
-| `wrangler.triggers` | — | optional; `crons` merged with scanned `schedule()` exports |
-| `emitConfig` | `true` on `worker` | Set `false` to skip `wrangler.jsonc` |
-| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` on worker); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with `"worker"`); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
 | `actionHeaders` | — | Static headers on the HTTP client |
-| `middleware` | `[]` | Fetch middleware, run in order before WS upgrade, actions, and the server entry |
+| `middleware` | `[]` | Fetch middleware. On WS: honor Responses (auth 302/401/…); ignore only `@ilha/router/ssr` document Responses. Otherwise Response short-circuits before actions / server entry. |
+| `plugins` | `[]` | Build plugins (`beforeBuild` / `afterBuild`). Pass objects or module IDs such as `"oxidejs/plugins/celld"`. |
 | `imports` | `[]` | Modules imported for side effects at server startup |
 | `bodyLimit` | `1048576` | Max Node request body size; larger requests get 413 |
 | `notFound` | — | Custom HTML 404 body when no route or asset matches |
-| `env` | — | Node preset value passed to `fetch(request, env, ctx)` |
+| `env` | — | Node value passed to `fetch(request, env, ctx)` |
+
+Durable bindings (`workflow` / `queue` / `schedule`) merge via `withOxide` (or `mergeDurableBindings`) from `oxidejs/wrangler` into your Cloudflare plugin options — not via oxide options.
+
+`writeCelldWrangler(path)` / `toCelldWrangler(config)` strip Cloudflare Vite snapshot keys that `celld deploy` rejects (`workers_dev`, `dev`, `jsx_*`, `no_bundle`, …). Dropping `no_bundle` matters: the Vite Worker graph is multi-chunk, and celld only stubs `node:*` / `cloudflare:*` — relative `./assets/…` imports fail at load unless celld runs esbuild.
+
+For the Cloudflare Vite layout (`dist/ssr` + `dist/client`), add `plugins: ["oxidejs/plugins/celld"]` and set `OXIDE_CELLD=1` on celld-only scripts (`dev:celld` / `deploy:celld`) so prepare does not run during `wrangler deploy` — or call `prepareCelldDeploy("dist")` yourself. That writes `dist/wrangler.json` with relocated paths (`main: "ssr/celld-entry.js"`, `assets.directory: "client"`), removes Cloudflare-only asset files celld rejects (`.assetsignore`), strips bare unused `import "node:fs"` / `import "node:path"` side-effects (celld 0.4 has no `node:fs` stub), and merges project `.dev.vars` into `vars` (celld does not load `.dev.vars` like `wrangler dev`). Keep the allowlist aligned with celld's `SUPPORTED_KEYS`.
+
+### `plugins`
+
+```ts
+oxide({
+  plugins: ["oxidejs/plugins/celld"],
+});
+// package.json
+// "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist"
+```
+
+Each plugin may define `beforeBuild` and/or `afterBuild` `(ctx) => void | Promise<void>` where `ctx` is `{ root, outDir, preset }`. Hooks run once per production build (not during `vite` / `vite dev`). Specifiers are dynamic-imported (relative paths against the project root) and must default-export an `OxidePlugin`. The bundled `oxidejs/plugins/celld` plugin runs `prepareCelldDeploy` after build when `OXIDE_CELLD=1` and `dist/ssr/wrangler.json` exists.
 
 ### `middleware` and `imports`
 
@@ -393,19 +403,17 @@ oxide({
 });
 ```
 
-Middleware modules receive `(request, { env, ctx })`. They run before actions, the server entry, and assets. Return a `Response` to stop the chain or `undefined` to continue. Vite loads the same modules through its SSR graph in development. Middleware entries may carry their own `imports`.
-
-`main` is always `./server.js`. `assets` is added only when `index.html` exists. Unknown wrangler keys fail at build time.
+Middleware modules receive `(request, { env, ctx })`. On WebSocket upgrades, any middleware `Response` short-circuits except `@ilha/router/ssr` (document HTML has no `webSocket` target for celld). On other requests, return a `Response` to stop the chain or `undefined` to continue. Vite loads the same modules through its SSR graph in development. Middleware entries may carry their own `imports`.
 
 ## Non-goals
 
-- No `wrangler dev` / workerd emulation
-- No automatic `celld deploy`
+- No oxide-owned `wrangler` / workerd emulation (use `@cloudflare/vite-plugin`)
+- No automatic `celld deploy` / `wrangler deploy`
 - No Node-builtin polyfills — Vite `ssr.noExternal: true` is a hard-fail for stray Node imports
 
 ## Security
 
-### Asset serving (`preset: "fetch"`)
+### Asset serving (Node)
 
 The generated server serves static files from `dist/client/` (or the `public/` directory merged into it). These guards are active:
 
@@ -432,7 +440,7 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 - Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
 - Batch requests capped at 20 items (both HTTP and WebSocket transports).
 - Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. Clients see plain JSON-RPC errors (`code` + `message` only). Thrown messages become `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
-- `actions.sameOrigin` defaults to `true`. Requests without both `Origin` and `Sec-Fetch-Site` are rejected when that check is on.
+- `actions.sameOrigin` defaults to `true`. HTTP actions require `Origin` and/or `Sec-Fetch-Site` and reject cross-site callers. WebSocket upgrades additionally allow requests that omit both headers when `Host` matches the request URL host (celld and some proxies strip those headers; `localhost` / `127.0.0.1` / `::1` count as the same host).
 - StackBlitz WebContainers do not keep `AsyncLocalStorage` across `async/await`. Oxide detects `process.versions.webcontainer` and falls back to a sync request store, capturing context before Effect schedules work and serializing handler entry so concurrent requests do not stomp that store. Stream pulls re-enter the captured store. This is a demo/dev workaround, not a concurrency model for production.
 
 ### Host header

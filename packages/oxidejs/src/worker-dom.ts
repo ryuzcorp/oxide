@@ -5,6 +5,12 @@ const SKIP_LINKEDOM_KEYS = new Set([
   "parseJSON",
   "toJSON",
   "Document",
+  // Never install linkedom stand-ins for host event / fetch APIs — even when
+  // the global is missing at install time. Overwriting EventTarget broke
+  // WebSocketPair message delivery on celld/workerd.
+  "Event",
+  "EventTarget",
+  "CustomEvent",
 ]);
 
 /** Install a minimal DOM on `globalThis` for Ilha `renderToString` in Workers. */

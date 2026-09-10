@@ -107,7 +107,7 @@ export class MissingD1Error extends Schema.TaggedError<MissingD1Error>()(
 export const missingD1 = () =>
   new MissingD1Error({
     message:
-      "kit: D1 binding env.DB is missing. Build the app and run it with celld (celld dev dist).",
+      "kit: D1 binding env.DB is missing. Build the app and run it with celld (bun run dev) or Wrangler (bun run dev:cf).",
   });
 
 const migrations = new WeakMap<D1Database, Promise<null>>();

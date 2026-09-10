@@ -90,10 +90,12 @@ export type {
   WorkflowStepConfig,
 } from "./context";
 export type {
+  OxideBuildContext,
   OxidejsActionHeaders,
   OxidejsActionTransport,
   OxidejsOptions,
   OxidejsPreset,
-  OxidejsWranglerOptions,
+  OxidePlugin,
+  OxidePluginInput,
   ResolvedOptions,
 } from "./types";

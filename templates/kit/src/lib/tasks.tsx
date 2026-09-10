@@ -96,10 +96,17 @@ export const Tasks = () => {
   const ready = atom(false);
   const label = atom("");
   const busy = atom(false);
+  const fail = atom("");
 
   watch.once(() => {
     void (async () => {
-      const { data } = await authClient.getSession();
+      const { data, error } = await authClient.getSession();
+      // Auth misconfig (e.g. missing BETTER_AUTH_SECRET → 500) must not
+      // hard-navigate — that reconnect-loops /login while the page remounts.
+      if (error) {
+        fail.set(error.message ?? "Session check failed");
+        return;
+      }
       if (!data?.user) {
         hardNav("/login");
         return;
@@ -114,6 +121,10 @@ export const Tasks = () => {
     await authClient.signOut();
     hardNav("/login");
   };
+
+  if (fail()) {
+    return <p class="text-error text-sm">{fail()}</p>;
+  }
 
   if (!ready()) {
     return <p class="text-sm opacity-70">Loading…</p>;

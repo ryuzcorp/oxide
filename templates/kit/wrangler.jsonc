@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "kit",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "./src/worker.ts",
+  "workers_dev": true,
+  // D1 / R2 / queues provision on first CF deploy. celld also needs bucket_name.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kit",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "files",
+    },
+  ],
+  // Secrets: copy `.dev.vars.example` → `.dev.vars` locally. The celld
+  // oxide plugin merges `.dev.vars` into deploy `vars`. Use
+  // `wrangler secret put BETTER_AUTH_SECRET` for Cloudflare.
+  "assets": {
+    "binding": "ASSETS",
+    // Oxide's worker SPA-falls-back document navigations (fetches `/` — celld
+    // redirects `/index.html` → `/` and missing HTML paths → `/` with 307).
+    // Keep Assets on real 404s — `single-page-application` would return
+    // index.html (text/html) for missing `/assets/*.js` and break hashed
+    // client bundles after deploy.
+    "not_found_handling": "none",
+    "run_worker_first": true,
+  },
+}

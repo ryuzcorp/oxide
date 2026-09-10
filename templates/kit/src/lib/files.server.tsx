@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { action, useEnv, withSchema } from "oxidejs";
 
-import { requireUser, UnauthorizedError } from "./auth";
+import { MissingAuthSecretError, requireUser, UnauthorizedError } from "./auth";
 import {
   displayNameFor,
   filesStorage,
@@ -73,7 +73,7 @@ export const listFiles = action(
       });
       return files;
     }),
-  { error: UnauthorizedError }
+  { error: Schema.Union([UnauthorizedError, MissingAuthSecretError]) }
 );
 
 /** Delete one object owned by the signed-in user. */
@@ -94,5 +94,5 @@ export const removeFile = action(
       });
     })
   ),
-  { error: UnauthorizedError }
+  { error: Schema.Union([UnauthorizedError, MissingAuthSecretError]) }
 );

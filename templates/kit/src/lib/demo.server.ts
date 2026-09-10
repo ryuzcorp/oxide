@@ -36,7 +36,7 @@ export const demos = queue({
 });
 
 /**
- * Hourly cron → starts `demo` with id `demo-hourly:<scheduledTime>`.
+ * Hourly cron → starts `demo` with id `demo-hourly-<scheduledTime>`.
  */
 export const demoHourly = schedule({
   cron: "0 * * * *",

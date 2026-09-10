@@ -602,6 +602,8 @@ interface WorkerWrapperOpts {
   actionSameOrigin?: boolean;
   actions?: OxidejsActionTransport;
   bodyLimit?: number;
+  /** Worker preset (`preset: "worker"`). */
+  preset?: OxidejsPreset;
   clientDir?: string;
   env?: { [key: string]: OxidejsJson } | undefined;
   hasActions?: boolean;
@@ -614,7 +616,6 @@ interface WorkerWrapperOpts {
   imports?: string[];
   middleware?: (string | MiddlewareModuleConfig)[];
   notFound?: string | undefined;
-  preset?: OxidejsPreset;
   /** Named WorkflowEntrypoint class exports for Cloudflare Workers. */
   workflowClassNames?: string[];
 }
@@ -696,13 +697,33 @@ const buildAfterAction = function buildAfterAction(
     if (hit) return hit;
     const assets = env?.ASSETS;
     if (assets && typeof assets.fetch === "function") {
+      // Never run Assets / SPA fallback for WebSocket upgrades (no webSocket target).
+      if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || request.headers.get("Sec-WebSocket-Key") != null) {
+        return new Response("Bad Request", { status: 400 });
+      }
       const res = await assets.fetch(request);
-      if (res.status !== 404) return res;
       const dest = request.headers.get("sec-fetch-dest");
       const isNav = dest ? dest === "document" : (request.headers.get("accept") ?? "").includes("text/html");
-      if (!isNav) return res;
+      // celld returns 307 → / for missing HTML paths even with
+      // not_found_handling: "none" — treat that like 404 for SPA.
+      const missing =
+        res.status === 404 ||
+        (isNav && res.status >= 300 && res.status < 400 && res.status !== 304);
+      if (!missing) {
+        if (isNav) return res;
+        const ct = res.headers.get("content-type") ?? "";
+        // Assets \`not_found_handling: single-page-application\` returns index.html
+        // with 200 for missing paths — never serve that as JS/CSS.
+        if (!(res.status === 200 && ct.includes("text/html"))) return res;
+      }
+      if (!isNav) {
+        return res.status === 404
+          ? res
+          : new Response("Not Found", { status: 404 });
+      }
       const spa = new URL(request.url);
-      spa.pathname = "/index.html";
+      // celld redirects /index.html → / (307). Fetch / for the shell.
+      spa.pathname = "/";
       return assets.fetch(new Request(spa, request));
     }
     return __nf();
@@ -711,7 +732,12 @@ const buildAfterAction = function buildAfterAction(
     const hit = __userFetch ? await __userFetch(request, env ?? ${envJson}, ctx) : undefined;
     if (hit) return hit;
     const assets = env?.ASSETS;
-    if (assets && typeof assets.fetch === "function") return assets.fetch(request);
+    if (assets && typeof assets.fetch === "function") {
+      if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || request.headers.get("Sec-WebSocket-Key") != null) {
+        return new Response("Bad Request", { status: 400 });
+      }
+      return assets.fetch(request);
+    }
     return __nf();
   }`;
   if (serveAssets) {
@@ -734,7 +760,7 @@ const buildListenBlock = function buildListenBlock(
   bodyLimit: number,
   ws: boolean
 ): string {
-  if (preset !== "fetch") {
+  if (preset === "worker") {
     return "";
   }
   const wsUpgrade = ws
@@ -817,16 +843,52 @@ const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.
 `;
 };
 
+const isIlhaSsrMiddleware = function isIlhaSsrMiddleware(
+  entry: string | MiddlewareModuleConfig
+): boolean {
+  const module = isMiddlewareSpecifier(entry) ? entry : entry.module;
+  return module === "@ilha/router/ssr";
+};
+
 const buildWsUpgradeGate = function buildWsUpgradeGate(
   hasActions: boolean,
-  ws: boolean
+  ws: boolean,
+  middleware: (string | MiddlewareModuleConfig)[] | undefined
 ): string {
   if (!(hasActions && ws)) {
     return "";
   }
-  return `if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+  if (!(middleware && middleware.length > 0)) {
+    return `if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || request.headers.get("Sec-WebSocket-Key") != null) {
       const hit = __ws.handleUpgrade(request, request[__fetch] ?? {});
       if (hit) return hit;
+      return new Response("Bad Request", { status: 400 });
+    }
+    `;
+  }
+  const middlewareList = middleware.map((_, i) => `__mw${i}`).join(", ");
+  const skipDocIndices = middleware.flatMap((entry, i) =>
+    isIlhaSsrMiddleware(entry) ? [i] : []
+  );
+  const skipDocInit =
+    skipDocIndices.length > 0
+      ? `const __wsSkipDoc = new Set([${skipDocIndices.join(", ")}]);
+    `
+      : "const __wsSkipDoc = undefined;\n    ";
+  return `if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || request.headers.get("Sec-WebSocket-Key") != null) {
+      ${skipDocInit}const __wsMw = [${middlewareList}];
+      for (let __i = 0; __i < __wsMw.length; __i++) {
+        const __mwHit = await __wsMw[__i](request, { env, ctx });
+        if (!__mwHit) continue;
+        if (__mwHit.webSocket) return __mwHit;
+        // Only Ilha SSR may return document HTML on the action path — ignore
+        // those so celld does not see has_target=false. Auth 302/401/etc. honor.
+        if (__wsSkipDoc?.has(__i)) continue;
+        return __mwHit;
+      }
+      const hit = __ws.handleUpgrade(request, request[__fetch] ?? {});
+      if (hit) return hit;
+      return new Response("Bad Request", { status: 400 });
     }
     `;
 };
@@ -917,9 +979,7 @@ const user = __userMod.default;
 const __userFetch =
   user != null && typeof user.fetch === "function"
     ? user.fetch.bind(user)
-    : typeof __userMod.fetch === "function"
-      ? __userMod.fetch
-      : undefined;
+    : undefined;
 `;
 };
 
@@ -980,9 +1040,10 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
   );
   const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
   const actionGate = buildActionGate(hasActions, ws);
-  const wsUpgradeGate = buildWsUpgradeGate(hasActions, ws);
+  const wsUpgradeGate = buildWsUpgradeGate(hasActions, ws, opts.middleware);
   const mwEntries = normalizeMiddlewareEntries(opts.middleware ?? []);
   const middlewareImports = buildMiddlewareImports(mwEntries);
+  // Non-WS only: WS gate above already stamped middleware and returned.
   const middlewareGate = buildMiddlewareGate(opts.middleware);
   const sideEffectImports = (opts.imports ?? [])
     .map((spec) => `import ${JSON.stringify(spec)};`)
@@ -1001,7 +1062,7 @@ ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${a
   ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
-    ${middlewareGate}${wsUpgradeGate}${actionGate}${afterAction}
+    ${wsUpgradeGate}${middlewareGate}${actionGate}${afterAction}
   }${queueBits.method}${scheduleBits.method},
 };
 ${workflowExport}export default app;

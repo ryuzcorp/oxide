@@ -369,7 +369,7 @@ Read them with `useCtx().db` (or a small `useDb()` helper).
 
 ### `useEnv()` and `useFetchCtx()`
 
-On [`preset: "worker"`](/oxide/configuration#preset), these are the Worker `env` and `ctx` from `fetch(request, env, ctx)`. On the Node fetch preset they are `undefined` unless you pass [`env`](/oxide/configuration#env):
+On [`preset: "worker"`](/oxide/configuration#preset), these are the Worker `env` and `ctx` from `fetch(request, env, ctx)`. On Node they are `undefined` unless you pass [`env`](/oxide/configuration#env):
 
 ```ts twoslash src/env.server.ts
 import { action, useEnv, useFetchCtx } from "oxidejs";

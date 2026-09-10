@@ -191,22 +191,98 @@ const requireBinding = function requireBinding(
     typeof value.get !== "function"
   ) {
     throw new TypeError(
-      `oxidejs: workflow binding "${binding}" is missing — use preset: "worker" and ensure wrangler workflows were emitted`
+      `oxidejs: workflow binding "${binding}" is missing — use preset: "worker" and ensure wrangler workflows were merged`
     );
   }
   return value;
+};
+
+/** Flatten CF / host throwables into searchable text (`instance.not_found`, etc.). */
+export const workflowErrorText = function workflowErrorText(
+  error: unknown
+): string {
+  if (error instanceof Error) {
+    return `${error.name} ${error.message}`;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (typeof error === "object" && error !== null) {
+    // SAFETY: host throwables are plain bags with optional name/message/code.
+    const bag = error as { code?: unknown; message?: unknown; name?: unknown };
+    return [bag.name, bag.message, bag.code].filter(Boolean).join(" ");
+  }
+  return String(error);
 };
 
 /** CF `create({ id })` throws when the id already exists within retention. */
 export const isWorkflowIdConflict = function isWorkflowIdConflict(
   error: unknown
 ): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = workflowErrorText(error);
   return (
     /already exists/iu.test(message) ||
     /instance.*exist/iu.test(message) ||
     /duplicate/iu.test(message)
   );
+};
+
+/** CF `Workflow.get` / `status` when the instance id is missing or not ready yet. */
+export const isWorkflowInstanceMissing = function isWorkflowInstanceMissing(
+  error: unknown
+): boolean {
+  const message = workflowErrorText(error);
+  return (
+    /not[_ ]?found/iu.test(message) ||
+    /does not exist/iu.test(message) ||
+    /unknown.?instance/iu.test(message)
+  );
+};
+
+/**
+ * Plain JSON status for Rpc. CF host objects / `error: null` / `rollback`
+ * must not leak into Schema encode (Defect → "Internal error" on the client).
+ */
+export const normalizeWorkflowStatus = function normalizeWorkflowStatus(
+  raw: unknown
+): WorkflowInstanceStatus {
+  if (raw === null || typeof raw !== "object") {
+    return { status: "unknown" };
+  }
+  // SAFETY: InstanceStatus is a plain bag; read known fields only.
+  const bag = raw as {
+    error?: unknown;
+    output?: unknown;
+    status?: unknown;
+  };
+  const out: WorkflowInstanceStatus = {
+    status: typeof bag.status === "string" ? bag.status : "unknown",
+  };
+  if (bag.output !== undefined && bag.output !== null) {
+    try {
+      // Re-hydrate through JSON so Rpc never sees host proxies.
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON strips CF host values
+      out.output = JSON.parse(JSON.stringify(bag.output));
+    } catch {
+      out.output = bag.output;
+    }
+  }
+  if (
+    bag.error !== undefined &&
+    bag.error !== null &&
+    typeof bag.error === "object"
+  ) {
+    // SAFETY: narrowed to object; CF error bags expose optional message/name strings.
+    const e = bag.error as { message?: unknown; name?: unknown };
+    out.error = {};
+    if (typeof e.message === "string") {
+      out.error.message = e.message;
+    }
+    if (typeof e.name === "string") {
+      out.error.name = e.name;
+    }
+  }
+  return out;
 };
 
 /**
@@ -250,8 +326,16 @@ export const createWorkflowInstanceBatch =
       return;
     }
     if (typeof wf.createBatch === "function") {
-      await wf.createBatch(batch);
-      return;
+      try {
+        await wf.createBatch(batch);
+        return;
+      } catch (error) {
+        // Some hosts throw on duplicate ids instead of skipping — fall through
+        // to idempotent per-id create/get.
+        if (!isWorkflowIdConflict(error) && batch.length > 1) {
+          throw error;
+        }
+      }
     }
     for (const opts of batch) {
       // Sequential creates keep message order when max_batch_size > 1.
@@ -333,15 +417,19 @@ export const workflow = function workflow<P, R = unknown>(
     const id = args[0] as string;
     try {
       const instance = await requireBinding(binding).get(id);
-      return await instance.status();
+      return normalizeWorkflowStatus(await instance.status());
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       // CF `Workflow.get` throws when the instance does not exist yet (e.g. queue
       // consumer has not created it) — surface as a status, not a Defect.
-      if (/not[_ ]?found/iu.test(message) || /does not exist/iu.test(message)) {
+      if (isWorkflowInstanceMissing(error)) {
         return { status: "not_found" };
       }
-      throw error;
+      // Platform / host errors become status.error so Rpc scrub does not hide
+      // the message behind JSON-RPC "Internal error".
+      return {
+        error: { message: workflowErrorText(error) || "status failed" },
+        status: "unknown",
+      };
     }
   };
 

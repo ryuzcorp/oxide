@@ -195,7 +195,7 @@ export const scheduleTickId = function scheduleTickId(
   name: string,
   scheduledTime: number
 ): string {
-  return `${name}:${scheduledTime}`;
+  return `${name}-${scheduledTime}`;
 };
 
 /**
@@ -214,7 +214,7 @@ export const scheduleTickId = function scheduleTickId(
  * ```
  *
  * Exactly one of `workflow` / `queue` / `handle` is required. Workflow
- * instance id is `${name}:${scheduledTime}`.
+ * instance id is `${name}-${scheduledTime}` (letters, digits, `-`, `_` only).
  */
 export const schedule = function schedule<P = unknown>(
   def: ScheduleDefinition<P>
@@ -281,7 +281,7 @@ export const schedule = function schedule<P = unknown>(
 
 /**
  * Run every schedule that matches `controller.cron`. Workflow ticks use
- * `${name}:${scheduledTime}` as the instance id.
+ * `${name}-${scheduledTime}` as the instance id.
  */
 export const dispatchSchedule = async function dispatchSchedule(
   metas: readonly ScheduleMeta[],

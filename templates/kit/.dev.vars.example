@@ -1,0 +1,4 @@
+# Local secrets for `vite` / `wrangler` / celld. Copy to `.dev.vars` (gitignored).
+BETTER_AUTH_SECRET=replace-me-with-a-long-random-string
+# Optional after first Cloudflare deploy:
+# BETTER_AUTH_URL=https://kit.<account>.workers.dev

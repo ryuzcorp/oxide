@@ -4,13 +4,14 @@ import * as Schema from "effect/Schema";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";
 import { action, liveQuery, useEnv, useRequest, withSchema } from "oxidejs";
 
-import { UnauthorizedError, authFromEnv } from "./auth";
+import { authFromEnv, MissingAuthSecretError, UnauthorizedError } from "./auth";
 import type { SessionUser } from "./auth";
 import { ensureDb, orm, useDb, withDb } from "./db";
 import type { Task } from "./db";
 
 const AddTask = Schema.Struct({ text: Schema.String });
 const TaskId = Schema.String;
+const AuthError = Schema.Union([UnauthorizedError, MissingAuthSecretError]);
 
 const asTask = (row: Task): Task => ({
   ...row,
@@ -79,7 +80,7 @@ export const add = action(
       })
     );
   }),
-  { error: UnauthorizedError }
+  { error: AuthError }
 );
 
 export const toggle = action(
@@ -99,7 +100,7 @@ export const toggle = action(
       })
     );
   }),
-  { error: UnauthorizedError }
+  { error: AuthError }
 );
 
 export const remove = action(
@@ -116,7 +117,7 @@ export const remove = action(
       })
     );
   }),
-  { error: UnauthorizedError }
+  { error: AuthError }
 );
 
 /** Live snapshots. Capture `useDb()` before any await (Worker sync-store path). */
@@ -125,9 +126,11 @@ export const list = action(
     const db = useDb();
     const user = await sessionUser(db);
     const tasks = tasksFor(user.id);
-    yield* tasks.subscribe(() =>
-      tasks.mutate(() => Effect.runPromise(withDb(snapshot(user.id), db)))
-    )();
+    yield* tasks.subscribe(async () => {
+      await tasks.mutate(() =>
+        Effect.runPromise(withDb(snapshot(user.id), db))
+      );
+    })();
   },
-  { error: UnauthorizedError }
+  { error: AuthError }
 );

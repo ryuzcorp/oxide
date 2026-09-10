@@ -17,59 +17,37 @@ import type {
   OxidejsActionTransport,
   OxidejsOptions,
   OxidejsPreset,
-  OxidejsWranglerOptions,
   ResolvedOptions,
 } from "./types";
 import { scanWorkflowFiles, workflowWranglerEntries } from "./workflow-build";
 
-export const WORKER_WRANGLER_KEYS = [
-  "name",
-  "main",
-  "compatibility_date",
-  "compatibility_flags",
-  "account_id",
-  "workers_dev",
-  "routes",
-  "d1_databases",
-  "durable_objects",
-  "migrations",
-  "assets",
-  "kv_namespaces",
-  "r2_buckets",
-  "services",
-  "vars",
-  "workflows",
-  "queues",
-  "triggers",
+const WRANGLER_CONFIG_NAMES = [
+  "wrangler.jsonc",
+  "wrangler.toml",
+  "wrangler.json",
 ] as const;
 
-const USER_FORBIDDEN_KEYS = ["main", "assets"] as const;
-
-export interface EmitState {
-  emitted: boolean;
-}
-
-export const createEmitState = function createEmitState(): EmitState {
-  return { emitted: false };
+/** True when a root wrangler config file is present. */
+export const hasWranglerConfig = function hasWranglerConfig(
+  root: string
+): boolean {
+  return WRANGLER_CONFIG_NAMES.some((name) =>
+    fs.existsSync(path.join(root, name))
+  );
 };
 
-export const validateWranglerOptions = function validateWranglerOptions(
-  wrangler: OxidejsWranglerOptions
-): void {
-  const allowed: readonly string[] = WORKER_WRANGLER_KEYS;
-  const invalid = Object.keys(wrangler).filter((key) => !allowed.includes(key));
-  if (invalid.length) {
-    throw new Error(
-      `oxidejs: these wrangler keys are not supported by the worker preset: ${invalid.join(", ")}`
-    );
+const resolvePreset = function resolvePreset(
+  raw: OxidejsOptions | undefined,
+  rootAbs: string
+): OxidejsPreset {
+  const preset = raw?.preset;
+  if (preset === undefined) {
+    return hasWranglerConfig(rootAbs) ? "worker" : "fetch";
   }
-
-  const forbidden = USER_FORBIDDEN_KEYS.filter((key) => key in wrangler);
-  if (forbidden.length) {
-    throw new Error(
-      `oxidejs: wrangler keys ${forbidden.join(", ")} are computed by the plugin and cannot be user-supplied`
-    );
+  if (preset !== "fetch" && preset !== "worker") {
+    throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
   }
+  return preset;
 };
 
 export const assertContained = function assertContained(
@@ -89,17 +67,6 @@ export const assertContained = function assertContained(
       `oxidejs: ${label} must resolve inside outDir (got ${relative || "."})`
     );
   }
-};
-
-const requireWranglerFields = function requireWranglerFields(
-  wrangler: OxidejsWranglerOptions | undefined
-): OxidejsWranglerOptions {
-  if (!wrangler?.name || !wrangler.compatibility_date) {
-    throw new Error(
-      "oxidejs: wrangler.name and wrangler.compatibility_date are required when emitConfig is true"
-    );
-  }
-  return wrangler;
 };
 
 type HtmlInput = string | string[] | { [key: string]: string };
@@ -138,22 +105,16 @@ const flattenInput = function flattenInput(
   return [input as string];
 };
 
-const envInput = function envInput(
-  env: HtmlEnvironment | undefined
-): HtmlInput | undefined {
-  if (env === undefined) {
-    return;
-  }
+const envInput = function envInput(env: HtmlEnvironment | undefined) {
   return (
-    env.build?.rolldownOptions?.input ||
-    env.build?.rollupOptions?.input ||
-    env.build?.input ||
-    env.input
+    env?.input ||
+    env?.build?.input ||
+    env?.build?.rolldownOptions?.input ||
+    env?.build?.rollupOptions?.input
   );
 };
 
-/** Vite client input: rolldown/rollup `input`, else `path.resolve(root, "index.html")`. */
-const hasHtmlEntry = function hasHtmlEntry(
+export const hasHtmlEntry = function hasHtmlEntry(
   root: string,
   config?: HtmlEntryConfig
 ): boolean {
@@ -202,16 +163,6 @@ const resolveActions = function resolveActions(
   return { path: actionsPath, sameOrigin: raw.sameOrigin ?? true, transport };
 };
 
-const resolvePreset = function resolvePreset(
-  raw: OxidejsOptions | undefined
-): OxidejsPreset {
-  const preset = raw?.preset ?? "fetch";
-  if (preset !== "fetch" && preset !== "worker") {
-    throw new Error(`oxidejs: unknown preset "${String(preset)}"`);
-  }
-  return preset;
-};
-
 interface ResolvedPaths {
   clientDir: string;
   hasWorkerEntry: boolean;
@@ -245,16 +196,6 @@ const resolvePaths = function resolvePaths(
     workerEntry,
     workerEntryAbs,
   };
-};
-
-const resolveWrangler = function resolveWrangler(
-  raw: OxidejsOptions | undefined,
-  emitConfig: boolean
-): OxidejsWranglerOptions | undefined {
-  if (raw?.wrangler) {
-    validateWranglerOptions(raw.wrangler);
-  }
-  return emitConfig ? requireWranglerFields(raw?.wrangler) : raw?.wrangler;
 };
 
 const assertClientDir = function assertClientDir(
@@ -299,13 +240,6 @@ export const resolveOptions = function resolveOptions(
   root: string,
   config?: HtmlEntryConfig
 ): ResolvedOptions {
-  const preset = resolvePreset(raw);
-  const {
-    transport: actions,
-    path: actionPath,
-    sameOrigin: actionSameOrigin,
-  } = resolveActions(raw?.actions);
-  const emitConfig = raw?.emitConfig ?? preset === "worker";
   const {
     clientDir,
     hasWorkerEntry,
@@ -314,10 +248,15 @@ export const resolveOptions = function resolveOptions(
     workerEntry,
     workerEntryAbs,
   } = resolvePaths(raw, root);
+  const preset = resolvePreset(raw, rootAbs);
+  const {
+    transport: actions,
+    path: actionPath,
+    sameOrigin: actionSameOrigin,
+  } = resolveActions(raw?.actions);
   const hasClient = hasHtmlEntry(rootAbs, config);
   const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
   assertClientDir(outDir, clientDir, hasClient, hasPublic);
-  const wrangler = resolveWrangler(raw, emitConfig);
 
   return {
     actionHeaders: raw?.actionHeaders,
@@ -326,7 +265,6 @@ export const resolveOptions = function resolveOptions(
     actions,
     bodyLimit: raw?.bodyLimit ?? 1_048_576,
     clientDir,
-    emitConfig,
     env: raw?.env,
     hasClient,
     hasPublic,
@@ -335,11 +273,11 @@ export const resolveOptions = function resolveOptions(
     middleware: resolveMiddleware(raw?.middleware ?? [], rootAbs),
     notFound: raw?.notFound,
     outDir,
+    plugins: raw?.plugins ?? [],
     preset,
     root: rootAbs,
     workerEntry,
     workerEntryAbs,
-    wrangler,
   };
 };
 
@@ -359,39 +297,47 @@ export const copyPublicDir = function copyPublicDir(
   });
 };
 
-interface EmittedWranglerConfig {
-  account_id?: string;
-  assets?: {
-    binding: string;
-    directory: string;
-    not_found_handling?: "single-page-application";
-  };
-  compatibility_date: string;
-  compatibility_flags?: string[];
-  d1_databases?: OxidejsWranglerOptions["d1_databases"];
-  durable_objects?: OxidejsWranglerOptions["durable_objects"];
-  kv_namespaces?: OxidejsWranglerOptions["kv_namespaces"];
-  main: string;
-  migrations?: OxidejsWranglerOptions["migrations"];
+export interface DurableWorkflowBinding {
+  binding: string;
+  class_name: string;
   name: string;
-  r2_buckets?: OxidejsWranglerOptions["r2_buckets"];
-  routes?: OxidejsWranglerOptions["routes"];
-  services?: OxidejsWranglerOptions["services"];
-  vars?: OxidejsWranglerOptions["vars"];
-  workers_dev?: boolean;
-  workflows?: OxidejsWranglerOptions["workflows"];
-  queues?: OxidejsWranglerOptions["queues"];
-  triggers?: OxidejsWranglerOptions["triggers"];
+  script_name?: string;
+}
+
+export interface DurableQueueConfig {
+  consumers?: {
+    dead_letter_queue?: string;
+    max_batch_size?: number;
+    max_batch_timeout?: number;
+    max_retries?: number;
+    queue: string;
+  }[];
+  producers?: {
+    binding: string;
+    /** Present on oxide-scanned producers; Cloudflare's config type allows omit. */
+    queue?: string;
+  }[];
+}
+
+export interface DurableTriggersConfig {
+  crons?: string[];
+}
+
+/** Mutable wrangler bag that receives scanned workflow / queue / schedule bindings. */
+export interface DurableWranglerConfig {
+  workflows?: DurableWorkflowBinding[];
+  queues?: DurableQueueConfig;
+  triggers?: DurableTriggersConfig;
 }
 
 const mergeWranglerWorkflows = function mergeWranglerWorkflows(
-  manual: NonNullable<OxidejsWranglerOptions["workflows"]>,
-  scanned: NonNullable<OxidejsWranglerOptions["workflows"]>
+  manual: DurableWorkflowBinding[],
+  scanned: DurableWorkflowBinding[]
 ) {
   if (scanned.length === 0 && manual.length === 0) {
     return;
   }
-  const byBinding = new Map<string, (typeof scanned)[number]>();
+  const byBinding = new Map<string, DurableWorkflowBinding>();
   for (const entry of [...manual, ...scanned]) {
     const prior = byBinding.get(entry.binding);
     if (
@@ -408,7 +354,7 @@ const mergeWranglerWorkflows = function mergeWranglerWorkflows(
 };
 
 const mergeWranglerQueues = function mergeWranglerQueues(
-  manual: NonNullable<OxidejsWranglerOptions["queues"]>,
+  manual: DurableQueueConfig,
   scanned: ReturnType<typeof queueWranglerEntries>
 ) {
   const producers = [...(manual.producers ?? []), ...scanned.producers];
@@ -443,7 +389,7 @@ const mergeWranglerQueues = function mergeWranglerQueues(
 };
 
 const mergeWranglerTriggers = function mergeWranglerTriggers(
-  manual: NonNullable<OxidejsWranglerOptions["triggers"]>,
+  manual: DurableTriggersConfig,
   scannedCrons: string[]
 ) {
   const crons = [...new Set([...(manual.crons ?? []), ...scannedCrons])];
@@ -456,13 +402,13 @@ const mergeWranglerTriggers = function mergeWranglerTriggers(
 };
 
 const applyScannedBindings = function applyScannedBindings(
-  config: EmittedWranglerConfig,
-  wrangler: NonNullable<ResolvedOptions["wrangler"]>,
-  root: string
+  config: DurableWranglerConfig,
+  root: string,
+  manual: DurableWranglerConfig = {}
 ): void {
   const scannedWorkflows = scanWorkflowFiles(root);
   const workflows = mergeWranglerWorkflows(
-    wrangler.workflows ?? [],
+    manual.workflows ?? [],
     workflowWranglerEntries(scannedWorkflows)
   );
   if (workflows) {
@@ -471,7 +417,7 @@ const applyScannedBindings = function applyScannedBindings(
   const scannedQueues = scanQueueFiles(root);
   resolveQueueWorkflowRefs(scannedQueues, scannedWorkflows);
   const queues = mergeWranglerQueues(
-    wrangler.queues ?? {},
+    manual.queues ?? {},
     queueWranglerEntries(scannedQueues)
   );
   if (queues) {
@@ -480,7 +426,7 @@ const applyScannedBindings = function applyScannedBindings(
   const scannedSchedules = scanScheduleFiles(root);
   resolveScheduleRefs(scannedSchedules, scannedWorkflows, scannedQueues);
   const triggers = mergeWranglerTriggers(
-    wrangler.triggers ?? {},
+    manual.triggers ?? {},
     scheduleWranglerCrons(scannedSchedules)
   );
   if (triggers) {
@@ -488,85 +434,15 @@ const applyScannedBindings = function applyScannedBindings(
   }
 };
 
-export const tryEmitWranglerConfig = function tryEmitWranglerConfig(
-  opts: ResolvedOptions,
-  state: EmitState
+/**
+ * Merge scanned `workflow()` / `queue()` / `schedule()` bindings into a wrangler
+ * config object (mutates in place). Use with `@cloudflare/vite-plugin`'s `config`
+ * customizer — mutate `config` and return nothing so Cloudflare's `defu` merge
+ * does not concatenate the same arrays twice.
+ */
+export const mergeDurableBindings = function mergeDurableBindings(
+  config: DurableWranglerConfig,
+  root: string = process.cwd()
 ): void {
-  if (state.emitted || opts.emitConfig === false) {
-    return;
-  }
-
-  const wrangler = requireWranglerFields(opts.wrangler);
-  const serverFile = path.join(opts.outDir, "server.js");
-  const clientDirPath = path.join(opts.outDir, opts.clientDir);
-
-  if (!fs.existsSync(serverFile)) {
-    return;
-  }
-  if (opts.hasClient && !fs.existsSync(clientDirPath)) {
-    return;
-  }
-
-  assertContained(opts.outDir, serverFile, "main");
-  if (opts.hasClient) {
-    assertContained(opts.outDir, clientDirPath, "assets.directory");
-  }
-
-  const flags = wrangler.compatibility_flags
-    ? [...new Set(wrangler.compatibility_flags)]
-    : [];
-  const config: EmittedWranglerConfig = {
-    compatibility_date: wrangler.compatibility_date,
-    main: "./server.js",
-    name: wrangler.name,
-  };
-  if (flags.length > 0) {
-    config.compatibility_flags = flags;
-  }
-  // Cloudflare-only deploy keys. Omit them for celld — unknown top-level keys
-  // fail `celld deploy`. Set these when you deploy with wrangler to Cloudflare.
-  if (wrangler.account_id) {
-    config.account_id = wrangler.account_id;
-  }
-  if (wrangler.workers_dev !== undefined) {
-    config.workers_dev = wrangler.workers_dev;
-  }
-  if (wrangler.routes) {
-    config.routes = wrangler.routes;
-  }
-  if (wrangler.d1_databases) {
-    config.d1_databases = wrangler.d1_databases;
-  }
-  if (wrangler.durable_objects) {
-    config.durable_objects = wrangler.durable_objects;
-  }
-  if (wrangler.migrations) {
-    config.migrations = wrangler.migrations;
-  }
-  if (wrangler.kv_namespaces) {
-    config.kv_namespaces = wrangler.kv_namespaces;
-  }
-  if (wrangler.r2_buckets) {
-    config.r2_buckets = wrangler.r2_buckets;
-  }
-  if (wrangler.services) {
-    config.services = wrangler.services;
-  }
-  if (wrangler.vars) {
-    config.vars = wrangler.vars;
-  }
-  applyScannedBindings(config, wrangler, opts.root);
-  if (opts.hasClient) {
-    config.assets = {
-      binding: "ASSETS",
-      directory: `./${opts.clientDir}`,
-      not_found_handling: "single-page-application",
-    };
-  }
-
-  fs.writeFileSync(
-    path.join(opts.outDir, "wrangler.jsonc"),
-    `${JSON.stringify(config, null, 2)}\n`
-  );
-  state.emitted = true;
+  applyScannedBindings(config, root);
 };

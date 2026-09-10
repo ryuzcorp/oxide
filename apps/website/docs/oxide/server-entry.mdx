@@ -25,13 +25,13 @@ export const fetch = ((request, _env, ctx) => {
 
 Bare `return` (or `undefined`) means fall through. With a page in the project, Oxide tries a matching static file, then `index.html` for navigations (`Sec-Fetch-Dest: document` or `Accept: text/html`). A fetch for `/missing.js` stays `404` — not a silent SPA rewrite.
 
-`export default { fetch }` works when you prefer an object entry (or need `scheduled` / `queue` on the default for the worker preset). If both a default `fetch` and a named `fetch` exist, the default wins.
+`export default { fetch }` works when you prefer an object entry (or need `scheduled` / `queue` on the default for Cloudflare Workers mode). If both a default `fetch` and a named `fetch` exist, the default wins.
 
-On [`preset: "fetch"`](/oxide/configuration#preset), `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable` and `ETag` / `304`. `index.html` is `no-cache`. Without a page, the build is only the server bundle — there is nothing to fall through to.
+On Node, `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable` and `ETag` / `304`. `index.html` is `no-cache`. Without a page, the build is only the server bundle — there is nothing to fall through to.
 
 Named exports such as `scheduled` and `queue` are re-exported (`export *`). Put them on `export default { … }` as well when the host only reads the default.
 
-On the Node preset the generated server handles `SIGTERM` / `SIGINT`: stop accepting connections, drain in-flight requests, force exit after 5 seconds.
+On Node the generated server handles `SIGTERM` / `SIGINT`: stop accepting connections, drain in-flight requests, force exit after 5 seconds.
 
 ## `FetchHandler`
 

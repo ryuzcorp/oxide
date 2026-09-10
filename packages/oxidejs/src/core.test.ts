@@ -4,14 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  assertContained,
   copyPublicDir,
-  createEmitState,
+  hasWranglerConfig,
+  mergeDurableBindings,
   resolveOptions,
-  tryEmitWranglerConfig,
 } from "./core";
-import type { OxidejsJson } from "./types";
-
-const wrangler = { compatibility_date: "2026-01-01", name: "vite-cf" };
+import type { DurableWranglerConfig } from "./core";
 
 const makeTempRoot = function makeTempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "oxidejs-"));
@@ -26,15 +25,15 @@ afterEach(() => {
 });
 
 describe("resolveOptions", () => {
-  test("applies fetch defaults", () => {
+  test("defaults to fetch when no wrangler config", () => {
     const root = makeTempRoot();
     temps.push(root);
     const resolved = resolveOptions({}, root);
     expect(resolved.preset).toBe("fetch");
+    expect(hasWranglerConfig(root)).toBe(false);
     expect(resolved.workerEntry).toBe("src/server.ts");
     expect(resolved.outDir).toBe(path.resolve(root, "dist"));
     expect(resolved.clientDir).toBe("client");
-    expect(resolved.emitConfig).toBe(false);
     expect(resolved.workerEntryAbs).toBe(path.resolve(root, "src/server.ts"));
     expect(resolved.hasWorkerEntry).toBe(false);
     expect(resolved.hasClient).toBe(false);
@@ -44,6 +43,38 @@ describe("resolveOptions", () => {
     expect(resolved.actionSameOrigin).toBe(true);
   });
 
+  test("defaults to worker when wrangler.jsonc exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "wrangler.jsonc"), "{}\n");
+    expect(resolveOptions({}, root).preset).toBe("worker");
+  });
+
+  test("defaults to worker when wrangler.toml exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(path.join(root, "wrangler.toml"), 'name = "x"\n');
+    expect(resolveOptions({}, root).preset).toBe("worker");
+  });
+
+  test("manual preset overrides wrangler detection", () => {
+    const withWrangler = makeTempRoot();
+    const bare = makeTempRoot();
+    temps.push(withWrangler, bare);
+    fs.writeFileSync(path.join(withWrangler, "wrangler.jsonc"), "{}\n");
+    expect(resolveOptions({ preset: "fetch" }, withWrangler).preset).toBe(
+      "fetch"
+    );
+    expect(resolveOptions({ preset: "worker" }, bare).preset).toBe("worker");
+  });
+
+  test("rejects unknown preset", () => {
+    expect(() =>
+      // SAFETY: intentional invalid preset to assert runtime rejection.
+      resolveOptions({ preset: "celld" as never }, process.cwd())
+    ).toThrow('unknown preset "celld"');
+  });
+
   test("resolves custom action path and explicit cross-origin opt-out", () => {
     const resolved = resolveOptions(
       { actions: { path: "/rpc", sameOrigin: false } },
@@ -51,9 +82,12 @@ describe("resolveOptions", () => {
     );
     expect(resolved.actionPath).toBe("/rpc");
     expect(resolved.actionSameOrigin).toBe(false);
+  });
+
+  test("rejects actions.path with a query string", () => {
     expect(() =>
       resolveOptions({ actions: { path: "rpc?bad" } }, process.cwd())
-    ).toThrow("actions.path");
+    ).toThrow("actions.path must start with");
   });
 
   test("detects public/", () => {
@@ -67,7 +101,7 @@ describe("resolveOptions", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "src", "server.ts"), "export default {}");
+    fs.writeFileSync(path.join(root, "src/server.ts"), "export default {}");
     expect(resolveOptions({}, root).hasWorkerEntry).toBe(true);
   });
 
@@ -76,19 +110,19 @@ describe("resolveOptions", () => {
     temps.push(root);
     expect(() =>
       resolveOptions({ workerEntry: "src/missing.ts" }, root)
-    ).toThrow('workerEntry "src/missing.ts" not found');
+    ).toThrow("workerEntry");
   });
 
   test("resolves relative middleware paths against project root", () => {
     const root = makeTempRoot();
     temps.push(root);
     const resolved = resolveOptions(
-      { middleware: ["./src/middleware/db.ts", "@ilha/router/ssr"] },
+      { middleware: ["./src/mw.ts", "pkg/mw"] },
       root
     );
     expect(resolved.middleware).toEqual([
-      path.join(root, "src/middleware/db.ts"),
-      "@ilha/router/ssr",
+      path.resolve(root, "src/mw.ts"),
+      "pkg/mw",
     ]);
   });
 
@@ -101,18 +135,8 @@ describe("resolveOptions", () => {
 
   test("allows actions ws with preset worker", () => {
     expect(
-      resolveOptions(
-        { actions: "ws", preset: "worker", wrangler },
-        process.cwd()
-      ).actions
+      resolveOptions({ actions: "ws", preset: "worker" }, process.cwd()).actions
     ).toBe("ws");
-  });
-
-  test("rejects removed celld preset name", () => {
-    expect(() =>
-      // SAFETY: "celld" is no longer a valid OxidejsPreset; cast asserts runtime rejection.
-      resolveOptions({ preset: "celld" as never, wrangler }, process.cwd())
-    ).toThrow('unknown preset "celld"');
   });
 
   test("detects client when index.html exists", () => {
@@ -140,58 +164,9 @@ describe("resolveOptions", () => {
     fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
     expect(
       resolveOptions({}, root, {
-        build: { rolldownOptions: { input: "src/main.ts" } },
+        build: { rollupOptions: { input: "src/main.ts" } },
       }).hasClient
     ).toBe(false);
-  });
-
-  test("worker requires wrangler.name and compatibility_date", () => {
-    expect(() => resolveOptions({ preset: "worker" }, process.cwd())).toThrow(
-      "wrangler.name and wrangler.compatibility_date are required"
-    );
-    expect(() =>
-      // SAFETY: incomplete wrangler fixture — name only — to assert required-field rejection.
-      resolveOptions(
-        { preset: "worker", wrangler: { name: "x" } as never },
-        process.cwd()
-      )
-    ).toThrow("wrangler.name and wrangler.compatibility_date are required");
-  });
-
-  test("rejects unknown wrangler keys", () => {
-    expect(() =>
-      resolveOptions(
-        // SAFETY: tail_consumers is intentionally unsupported to assert key rejection.
-        {
-          preset: "worker",
-          wrangler: { ...wrangler, tail_consumers: [] } as never,
-        },
-        process.cwd()
-      )
-    ).toThrow("not supported by the worker preset: tail_consumers");
-  });
-
-  test("rejects user-supplied main and assets", () => {
-    expect(() =>
-      resolveOptions(
-        // SAFETY: user-supplied main is forbidden; cast bypasses the OxidejsWranglerOptions type.
-        {
-          preset: "worker",
-          wrangler: { ...wrangler, main: "./nope.js" } as never,
-        },
-        process.cwd()
-      )
-    ).toThrow("computed by the plugin");
-    expect(() =>
-      resolveOptions(
-        {
-          preset: "worker",
-          // SAFETY: user-supplied assets is forbidden; cast bypasses the OxidejsWranglerOptions type.
-          wrangler: { ...wrangler, assets: { directory: "./nope" } } as never,
-        },
-        process.cwd()
-      )
-    ).toThrow("computed by the plugin");
   });
 
   test("rejects clientDir that escapes outDir", () => {
@@ -202,207 +177,69 @@ describe("resolveOptions", () => {
       "clientDir must resolve inside outDir"
     );
   });
-
-  test("skips required wrangler fields on fetch", () => {
-    const resolved = resolveOptions({ preset: "fetch" }, process.cwd());
-    expect(resolved.emitConfig).toBe(false);
-    expect(resolved.wrangler).toBeUndefined();
-  });
 });
 
-interface EmittedWranglerJson {
-  assets?: {
-    binding: string;
-    directory: string;
-    not_found_handling?: "single-page-application";
-  };
-  compatibility_date: string;
-  compatibility_flags: string[];
-  d1_databases?: OxidejsJson[];
-  main: string;
-  name: string;
-  vars?: { [key: string]: OxidejsJson };
-  workflows?: {
-    binding: string;
-    class_name: string;
-    name: string;
-  }[];
-}
-
-describe("tryEmitWranglerConfig", () => {
-  test("no-ops if server.js is missing", () => {
+describe("mergeDurableBindings", () => {
+  test("merges scanned workflows queues and crons", () => {
     const root = makeTempRoot();
     temps.push(root);
-    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
-    fs.mkdirSync(resolved.outDir, { recursive: true });
-    tryEmitWranglerConfig(resolved, createEmitState());
-    expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(
-      false
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "src/demo.server.ts"),
+      `
+import { queue, schedule, workflow } from "oxidejs";
+export const demo = workflow({
+  name: "demo",
+  run: async () => {},
+});
+export const demos = queue({ name: "demos", workflow: demo });
+export const hourly = schedule({ name: "demo-hourly", cron: "0 * * * *", workflow: demo });
+`
     );
-  });
-
-  test("no-ops if client dir is missing when index.html exists", () => {
-    const root = makeTempRoot();
-    temps.push(root);
-    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
-    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
-    fs.mkdirSync(resolved.outDir, { recursive: true });
-    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
-    tryEmitWranglerConfig(resolved, createEmitState());
-    expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(
-      false
-    );
-  });
-
-  test("writes wrangler.jsonc without assets when there is no index.html", () => {
-    const root = makeTempRoot();
-    temps.push(root);
-    const resolved = resolveOptions({ preset: "worker", wrangler }, root);
-    fs.mkdirSync(resolved.outDir, { recursive: true });
-    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
-    tryEmitWranglerConfig(resolved, createEmitState());
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(resolved.outDir, "wrangler.jsonc"), "utf-8")
-      )
-    ).toEqual({
-      compatibility_date: "2026-01-01",
-      main: "./server.js",
-      name: "vite-cf",
-    });
-  });
-
-  test("emits Cloudflare deploy keys into wrangler.jsonc", () => {
-    const root = makeTempRoot();
-    temps.push(root);
-    const resolved = resolveOptions(
-      {
-        preset: "worker",
-        wrangler: {
-          ...wrangler,
-          account_id: "acct",
-          kv_namespaces: [{ binding: "KV", id: "kv-id" }],
-          routes: [{ pattern: "example.com/*", zone_name: "example.com" }],
-          workers_dev: true,
-        },
-      },
-      root
-    );
-    fs.mkdirSync(resolved.outDir, { recursive: true });
-    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
-    tryEmitWranglerConfig(resolved, createEmitState());
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(resolved.outDir, "wrangler.jsonc"), "utf-8")
-      )
-    ).toMatchObject({
-      account_id: "acct",
-      kv_namespaces: [{ binding: "KV", id: "kv-id" }],
-      routes: [{ pattern: "example.com/*", zone_name: "example.com" }],
-      workers_dev: true,
-    });
-  });
-
-  test("writes wrangler.jsonc once when both outputs exist", () => {
-    const root = makeTempRoot();
-    temps.push(root);
-    fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
-    const resolved = resolveOptions(
-      {
-        preset: "worker",
-        wrangler: {
-          ...wrangler,
-          compatibility_flags: ["nodejs_compat"],
-          d1_databases: [
-            {
-              binding: "DB",
-              database_id: "00000000-0000-0000-0000-000000000000",
-              database_name: "kit",
-            },
-          ],
-          vars: { FOO: "bar" },
-        },
-      },
-      root
-    );
-    fs.mkdirSync(path.join(resolved.outDir, resolved.clientDir), {
-      recursive: true,
-    });
-    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
-
-    const state = createEmitState();
-    tryEmitWranglerConfig(resolved, state);
-    tryEmitWranglerConfig(resolved, state);
-
-    const file = path.join(resolved.outDir, "wrangler.jsonc");
-    const first = fs.readFileSync(file, "utf-8");
-    // SAFETY: emitted wrangler.jsonc matches EmittedWranglerJson; JSON.parse is untyped.
-    const parsed = JSON.parse(first) as EmittedWranglerJson;
-    expect(parsed).toEqual({
-      assets: {
-        binding: "ASSETS",
-        directory: "./client",
-        not_found_handling: "single-page-application",
-      },
-      compatibility_date: "2026-01-01",
-      compatibility_flags: ["nodejs_compat"],
-      d1_databases: [
-        {
-          binding: "DB",
-          database_id: "00000000-0000-0000-0000-000000000000",
-          database_name: "kit",
-        },
-      ],
-      main: "./server.js",
-      name: "vite-cf",
-      vars: { FOO: "bar" },
-    });
-    expect(state.emitted).toBe(true);
-
-    fs.writeFileSync(file, "changed");
-    tryEmitWranglerConfig(resolved, state);
-    expect(fs.readFileSync(file, "utf-8")).toBe("changed");
-  });
-
-  test("fetch never writes wrangler.jsonc", () => {
-    const root = makeTempRoot();
-    temps.push(root);
-    const resolved = resolveOptions({ preset: "fetch" }, root);
-    fs.mkdirSync(path.join(resolved.outDir, resolved.clientDir), {
-      recursive: true,
-    });
-    fs.writeFileSync(path.join(resolved.outDir, "server.js"), "export {}");
-    tryEmitWranglerConfig(resolved, createEmitState());
-    expect(fs.existsSync(path.join(resolved.outDir, "wrangler.jsonc"))).toBe(
-      false
-    );
+    const config: DurableWranglerConfig = {};
+    mergeDurableBindings(config, root);
+    expect(config.workflows).toEqual([
+      { binding: "DEMO", class_name: "DemoWorkflow", name: "demo" },
+    ]);
+    expect(config.queues?.producers).toEqual([
+      { binding: "DEMOS", queue: "demos" },
+    ]);
+    expect(config.queues?.consumers).toEqual([{ queue: "demos" }]);
+    expect(config.triggers?.crons).toEqual(["0 * * * *"]);
   });
 });
 
 describe("copyPublicDir", () => {
-  test("copies public/ next to client assets", () => {
+  test("copies public/ next to client assets on fetch", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.mkdirSync(path.join(root, "public"), { recursive: true });
-    fs.writeFileSync(path.join(root, "public", "favicon.ico"), "ico");
-    const resolved = resolveOptions({}, root);
+    fs.writeFileSync(path.join(root, "public/a.txt"), "a");
+    const resolved = resolveOptions({ preset: "fetch" }, root);
+    fs.mkdirSync(path.join(resolved.outDir, resolved.clientDir), {
+      recursive: true,
+    });
     copyPublicDir(resolved);
     expect(
       fs.readFileSync(
-        path.join(resolved.outDir, "client", "favicon.ico"),
+        path.join(resolved.outDir, resolved.clientDir, "a.txt"),
         "utf-8"
       )
-    ).toBe("ico");
+    ).toBe("a");
   });
 
   test("skips public/ on worker", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.mkdirSync(path.join(root, "public"), { recursive: true });
-    fs.writeFileSync(path.join(root, "public", "favicon.ico"), "ico");
-    copyPublicDir(resolveOptions({ preset: "worker", wrangler }, root));
+    fs.writeFileSync(path.join(root, "public/a.txt"), "a");
+    const resolved = resolveOptions({ preset: "worker" }, root);
+    fs.mkdirSync(path.join(resolved.outDir, resolved.clientDir), {
+      recursive: true,
+    });
+    copyPublicDir(resolved);
     expect(
-      fs.existsSync(path.join(root, "dist", "client", "favicon.ico"))
+      fs.existsSync(path.join(resolved.outDir, resolved.clientDir, "a.txt"))
     ).toBe(false);
   });
 });
@@ -411,11 +248,9 @@ describe("assertContained", () => {
   test("rejects paths that escape outDir", () => {
     const root = makeTempRoot();
     temps.push(root);
-    const out = path.join(root, "dist");
-    fs.mkdirSync(out, { recursive: true });
     expect(() =>
-      resolveOptions({ clientDir: "../outside" }, root)
-    ).not.toThrow();
+      assertContained(root, path.join(root, "..", "outside"), "x")
+    ).toThrow("must resolve inside outDir");
     fs.writeFileSync(path.join(root, "index.html"), "<html></html>");
     expect(() => resolveOptions({ clientDir: "../outside" }, root)).toThrow(
       "clientDir must resolve inside outDir"

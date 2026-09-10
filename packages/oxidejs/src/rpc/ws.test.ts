@@ -4,7 +4,30 @@ import path from "node:path";
 
 import type { ActionContext } from "../context";
 import { waitUntil, writeGeneratedActions } from "./test-harness";
-import { createWsHooks } from "./ws";
+import { createWsHooks, wsActionRequestUrl } from "./ws";
+
+test("wsActionRequestUrl preserves https from the upgrade request", () => {
+  expect(
+    wsActionRequestUrl(
+      new Request("https://kit.example.workers.dev/__oxide/action", {
+        headers: { Upgrade: "websocket" },
+      }),
+      "/__oxide/action"
+    )
+  ).toBe("https://kit.example.workers.dev/__oxide/action");
+  expect(
+    wsActionRequestUrl(
+      new Request("wss://kit.example.workers.dev/__oxide/action"),
+      "/__oxide/action"
+    )
+  ).toBe("https://kit.example.workers.dev/__oxide/action");
+  expect(
+    wsActionRequestUrl(
+      new Request("http://localhost:8787/__oxide/action"),
+      "/__oxide/action"
+    )
+  ).toBe("http://localhost:8787/__oxide/action");
+});
 
 const mockSocket = function mockSocket() {
   const listeners = new Map<string, Set<() => void>>();
@@ -203,6 +226,87 @@ export const ping = action(() => "pong")
       expect(hooks.handleUpgrade(new Request("http://localhost/other"))).toBe(
         undefined
       );
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("handleUpgrade allows localhost Host with 127.0.0.1 URL (celld)", async () => {
+  const server = mockSocket();
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-loopback-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+
+  try {
+    await withWebSocketPair(client, server, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        path: "/__oxide/action",
+        sameOrigin: true,
+      });
+      const response = hooks.handleUpgrade(
+        new Request("http://127.0.0.1:8080/__oxide/action", {
+          headers: {
+            Host: "localhost:8080",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          },
+        })
+      );
+      expect(response?.status).toBe(101);
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("handleUpgrade allows missing Origin when sameOrigin (celld)", async () => {
+  const server = mockSocket();
+  const client = mockSocket();
+  const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-celld-"));
+  const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
+  fs.writeFileSync(
+    path.join(root, "noop.server.ts"),
+    `import { action } from ${ctx};
+export const ping = action(() => "pong")
+`
+  );
+  const out = writeGeneratedActions(root);
+
+  try {
+    await withWebSocketPair(client, server, async () => {
+      const mod = await import(out);
+      const hooks = createWsHooks(mod.default, mod.actionsHandlers, {
+        path: "/__oxide/action",
+        sameOrigin: true,
+      });
+      const response = hooks.handleUpgrade(
+        new Request("http://127.0.0.1:8080/__oxide/action", {
+          headers: {
+            Host: "127.0.0.1:8080",
+            Upgrade: "websocket",
+          },
+        })
+      );
+      expect(response?.status).toBe(101);
+
+      const cross = hooks.handleUpgrade(
+        new Request("http://127.0.0.1:8080/__oxide/action", {
+          headers: {
+            Host: "127.0.0.1:8080",
+            Origin: "https://evil.example",
+            Upgrade: "websocket",
+          },
+        })
+      );
+      expect(cross?.status).toBe(403);
     });
   } finally {
     fs.rmSync(root, { force: true, recursive: true });

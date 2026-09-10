@@ -150,8 +150,12 @@ export const applyViteEnvironments = function applyViteEnvironments(
   ]);
   config.optimizeDeps.include = [...optimizeInclude];
 
-  const isWorker = opts.preset === "worker";
   mergeAliases(config, oxideRpcAliases());
+
+  // Cloudflare Vite plugin owns Worker + client environments.
+  if (opts.preset === "worker") {
+    return config;
+  }
 
   config.environments ??= {};
 
@@ -159,7 +163,7 @@ export const applyViteEnvironments = function applyViteEnvironments(
     emptyOutDir: true,
     outDir: opts.outDir,
     rolldownOptions: {
-      external: isWorker ? [/^cloudflare:/u] : [],
+      external: [],
       input: VIRTUAL_WORKER_ID,
       output: {
         entryFileNames: "server.js",
@@ -167,7 +171,7 @@ export const applyViteEnvironments = function applyViteEnvironments(
       },
     },
     rollupOptions: {
-      external: isWorker ? [/^cloudflare:/u] : [],
+      external: [],
       input: VIRTUAL_WORKER_ID,
       output: {
         entryFileNames: "server.js",
@@ -179,12 +183,8 @@ export const applyViteEnvironments = function applyViteEnvironments(
   const ssrEnvironment: ViteEnvironmentConfig = {
     build: ssrBuild,
     consumer: "server",
-    resolve: isWorker
-      ? { conditions: ["worker"], noExternal: true }
-      : { noExternal: ["effect", "oxidejs"] },
-    ssr: isWorker
-      ? { external: [/^cloudflare:/u], noExternal: true, target: "webworker" }
-      : { noExternal: ["effect", "oxidejs"] },
+    resolve: { noExternal: ["effect", "oxidejs"] },
+    ssr: { noExternal: ["effect", "oxidejs"] },
   };
   config.environments["ssr"] = ssrEnvironment;
 
@@ -243,6 +243,9 @@ export const applyRsbuildEnvironments = function applyRsbuildEnvironments(
   config: RsbuildUserConfig,
   opts: ResolvedOptions
 ): RsbuildUserConfig {
+  if (opts.preset === "worker") {
+    return config;
+  }
   config.environments ??= {};
   if (opts.hasClient) {
     const clientOutDir = path.join(opts.outDir, opts.clientDir);
@@ -266,13 +269,10 @@ export const applyRsbuildEnvironments = function applyRsbuildEnvironments(
     output: {
       distPath: { root: opts.outDir },
       filename: { js: "server.js" },
-      target: opts.preset === "worker" ? "web-worker" : "node",
+      target: "node",
     },
     source: { entry: { server: { html: false, import: VIRTUAL_WORKER_ID } } },
   };
-  if (opts.preset === "worker") {
-    server.resolve = { conditionNames: ["worker", "..."] };
-  }
   config.environments["server"] = server;
   return config;
 };

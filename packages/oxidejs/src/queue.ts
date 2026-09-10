@@ -242,7 +242,7 @@ const requireBinding = function requireBinding(binding: string): QueueBinding {
     typeof value.sendBatch !== "function"
   ) {
     throw new TypeError(
-      `oxidejs: queue binding "${binding}" is missing — use preset: "worker" and ensure wrangler queues were emitted`
+      `oxidejs: queue binding "${binding}" is missing — use preset: "worker" and ensure wrangler queues were merged`
     );
   }
   return value;

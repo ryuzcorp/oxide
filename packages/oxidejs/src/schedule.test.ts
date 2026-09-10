@@ -7,7 +7,8 @@ import path from "node:path";
 import { Schema } from "effect";
 
 import { generateWorkerWrapper } from "./actions";
-import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { mergeDurableBindings } from "./core";
+import type { DurableWranglerConfig } from "./core";
 import { queue } from "./queue";
 import {
   dispatchSchedule,
@@ -30,7 +31,7 @@ import type { WorkflowModule } from "./workflow-build";
 describe("scheduleTickId", () => {
   test("joins name and scheduledTime", () => {
     expect(scheduleTickId("nightly", 1_700_000_000_000)).toBe(
-      "nightly:1700000000000"
+      "nightly-1700000000000"
     );
   });
 });
@@ -219,7 +220,7 @@ describe("schedule runtime", () => {
       env,
       {}
     );
-    expect(created).toEqual([{ id: "hourly:42", params: { message: "tick" } }]);
+    expect(created).toEqual([{ id: "hourly-42", params: { message: "tick" } }]);
   });
 
   test("enqueues via queue target without producerStart by default", async () => {
@@ -265,7 +266,7 @@ describe("schedule runtime", () => {
     );
     expect(sent).toEqual([
       {
-        id: "hourly:7",
+        id: "hourly-7",
         oxide: "oxidejs.queue",
         payload: { message: "q" },
       },
@@ -317,7 +318,7 @@ describe("schedule runtime", () => {
       {}
     );
     expect(sent).toHaveLength(1);
-    expect(created).toEqual([{ id: "hourly:7", params: { message: "q" } }]);
+    expect(created).toEqual([{ id: "hourly-7", params: { message: "q" } }]);
   });
 
   test("handle escape", async () => {
@@ -341,39 +342,19 @@ describe("schedule runtime", () => {
   });
 });
 
-describe("wrangler triggers emit", () => {
-  test("merges scanned schedules into wrangler.jsonc", () => {
+describe("wrangler triggers merge", () => {
+  test("merges scanned schedules into durable bindings", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-sched-emit-"));
-    const outDir = path.join(root, "dist");
-    fs.mkdirSync(outDir);
-    fs.writeFileSync(path.join(outDir, "server.js"), "export default {}\n");
     fs.writeFileSync(
       path.join(root, "demo.server.ts"),
       `export const demo = workflow({ name: "demo", run: async () => {} })
 export const hourly = schedule({ name: "hourly", cron: "0 * * * *", workflow: demo })\n`
     );
     try {
-      const resolved = resolveOptions(
-        {
-          preset: "worker",
-          wrangler: {
-            compatibility_date: "2026-01-01",
-            name: "app",
-          },
-        },
-        root
-      );
-      const opts = { ...resolved, outDir, root };
-      tryEmitWranglerConfig(opts, createEmitState());
-      // SAFETY: emitted wrangler.jsonc shape asserted below.
-      const json = JSON.parse(
-        fs.readFileSync(path.join(outDir, "wrangler.jsonc"), "utf-8")
-      ) as {
-        triggers: { crons: string[] };
-        workflows: { binding: string; name: string }[];
-      };
-      expect(json.workflows.map((w) => w.name)).toEqual(["demo"]);
-      expect(json.triggers).toEqual({ crons: ["0 * * * *"] });
+      const config: DurableWranglerConfig = {};
+      mergeDurableBindings(config, root);
+      expect(config.workflows?.map((w) => w.name)).toEqual(["demo"]);
+      expect(config.triggers).toEqual({ crons: ["0 * * * *"] });
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }

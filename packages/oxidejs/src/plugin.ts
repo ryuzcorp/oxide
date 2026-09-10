@@ -36,12 +36,13 @@ import {
   VIRTUAL_WORKER_ID,
   VIRTUAL_WORKFLOWS_ID,
 } from "./actions";
+import { copyPublicDir, resolveOptions } from "./core";
 import {
-  copyPublicDir,
-  createEmitState,
-  resolveOptions,
-  tryEmitWranglerConfig,
-} from "./core";
+  resolveOxidePlugins,
+  runOxidePluginHook,
+  shouldRunAfterBuild,
+  toOxideBuildContext,
+} from "./oxide-plugins";
 import {
   assertQueueCollisions,
   generateQueueHandlerModule,
@@ -57,13 +58,12 @@ import {
   resolveScheduleRefs,
   scanScheduleFiles,
 } from "./schedule-build";
-import type { OxidejsOptions, ResolvedOptions } from "./types";
+import type { OxidejsOptions, OxidePlugin, ResolvedOptions } from "./types";
 import {
   applyRsbuildEnvironments,
   applyViteEnvironments,
 } from "./worker-build";
 import type { RsbuildUserConfig } from "./worker-build";
-import { ensureWorkerDom } from "./worker-dom";
 import {
   assertWorkflowActionCollisions,
   generateWorkflowClassesModule,
@@ -155,10 +155,6 @@ const isMiddlewareDefault = function isMiddlewareDefault(
   value: unknown
 ): value is MiddlewareDefault {
   return typeof value === "function";
-};
-
-const isObject = function isObject(value: unknown): value is object {
-  return typeof value === "object" && value !== null;
 };
 
 const resolveActionTransport = function resolveActionTransport(
@@ -304,6 +300,8 @@ interface RsbuildServer {
 
 interface RsbuildPluginApi {
   modifyRsbuildConfig: (fn: (config: RsbuildUserConfig) => void) => void;
+  onAfterBuild?: (fn: () => void | Promise<void>) => void;
+  onBeforeBuild?: (fn: () => void | Promise<void>) => void;
   onBeforeStartDevServer: (
     fn: (ctx: { server: RsbuildServer }) => void
   ) => void;
@@ -620,12 +618,74 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
   options
 ) => {
   let resolved: ResolvedOptions | undefined;
-  const emitState = createEmitState();
+  let oxidePlugins: OxidePlugin[] = [];
+  /** Which adapter owns production build hooks — avoids double-firing on Rsbuild. */
+  let buildHost: "vite" | "rsbuild" | null = null;
+  let viteProductionBuild = false;
+  let beforeBuildRan = false;
+  let afterBuildRan = false;
+
+  const loadPlugins = async function loadPlugins() {
+    if (!resolved) {
+      return;
+    }
+    oxidePlugins = await resolveOxidePlugins(resolved.plugins, resolved.root);
+  };
+
+  const runBeforeBuild = async function runBeforeBuild() {
+    if (!resolved || beforeBuildRan) {
+      return;
+    }
+    beforeBuildRan = true;
+    await loadPlugins();
+    await runOxidePluginHook(
+      oxidePlugins,
+      "beforeBuild",
+      toOxideBuildContext(resolved)
+    );
+  };
+
+  const runAfterBuild = async function runAfterBuild() {
+    if (!resolved || afterBuildRan) {
+      return;
+    }
+    afterBuildRan = true;
+    if (oxidePlugins.length === 0 && resolved.plugins.length > 0) {
+      await loadPlugins();
+    }
+    copyPublicDir(resolved);
+    await runOxidePluginHook(
+      oxidePlugins,
+      "afterBuild",
+      toOxideBuildContext(resolved)
+    );
+  };
 
   return {
-    buildStart() {
-      resolved ??= resolveOptions(options, process.cwd());
-      emitState.emitted = false;
+    async buildStart() {
+      if (buildHost === "rsbuild" || !viteProductionBuild) {
+        return;
+      }
+      // SAFETY: Vite plugin context — watchMode skips serve / rebuild noise.
+      const watchMode = Boolean(
+        (this as { meta?: { watchMode?: boolean } }).meta?.watchMode
+      );
+      if (watchMode) {
+        return;
+      }
+      await runBeforeBuild();
+    },
+    async closeBundle() {
+      if (buildHost === "rsbuild" || !viteProductionBuild || !resolved) {
+        return;
+      }
+      // SAFETY: Vite Environment API — each env closes separately; run once on last.
+      const environmentName = (this as { environment?: { name?: string } })
+        .environment?.name;
+      if (!shouldRunAfterBuild(environmentName, resolved.hasClient)) {
+        return;
+      }
+      await runAfterBuild();
     },
     enforce: "pre",
     load(id, extra?: { ssr?: boolean }) {
@@ -662,11 +722,21 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
     },
     rsbuild: {
       setup(api: RsbuildPluginApi) {
+        buildHost = "rsbuild";
         api.modifyRsbuildConfig((config) => {
           const root = isString(config.root) ? config.root : process.cwd();
           // SAFETY: RsbuildUserConfig is only probed for html entry paths (environments/build input).
           resolved = resolveOptions(options, root, config as never);
           applyRsbuildEnvironments(config, resolved);
+        });
+        api.onBeforeBuild?.(async () => {
+          beforeBuildRan = false;
+          afterBuildRan = false;
+          resolved ??= resolveOptions(options, process.cwd());
+          await runBeforeBuild();
+        });
+        api.onAfterBuild?.(async () => {
+          await runAfterBuild();
         });
         api.onBeforeStartDevServer(({ server }) => {
           const loadRouter = () => {
@@ -698,7 +768,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
           }
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {
-          if (resolved?.preset !== "fetch") {
+          if (resolved === undefined || resolved.preset === "worker") {
             return;
           }
           server.middlewares.use(
@@ -727,14 +797,18 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       });
     },
     vite: {
-      config(config) {
+      config(config, env) {
+        buildHost = "vite";
+        viteProductionBuild = env?.command === "build";
+        beforeBuildRan = false;
+        afterBuildRan = false;
         const root = isString(config.root) ? config.root : process.cwd();
         resolved = resolveOptions(options, root, config);
         // SAFETY: Vite UserConfig is passed through for the fields applyViteEnvironments reads (root, environments, build).
         applyViteEnvironments(config as never, resolved);
       },
       configurePreviewServer(server) {
-        if (resolved?.preset !== "fetch") {
+        if (resolved === undefined || resolved.preset === "worker") {
           return;
         }
         server.middlewares.use(
@@ -742,22 +816,9 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
         );
       },
       configureServer(server) {
+        // `@cloudflare/vite-plugin` runs the Worker in workerd; skip Node action middleware.
         if (resolved?.preset === "worker") {
-          ensureWorkerDom();
-          // Worker builds target workerd, but dev SSR runs on Node. Worker export
-          // conditions and noExternal:true pull in CJS deps (e.g. buffer-image-size)
-          // that call `require` and break ilha frame renders.
-          const { ssr } = server.environments;
-          const resolve = ssr?.config?.resolve;
-          if (resolve) {
-            resolve.conditions = ["node", "import", "module", "default"];
-            resolve.noExternal = ["effect", "oxidejs"];
-          }
-          const ssrOpts = ssr?.config?.ssr;
-          if (ssrOpts && isObject(ssrOpts)) {
-            ssrOpts.target = "node";
-            ssrOpts.noExternal = ["effect", "oxidejs"];
-          }
+          return;
         }
         const invalidateActions = () => {
           for (const env of Object.values(server.environments)) {
@@ -871,13 +932,6 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
           }
         };
       },
-    },
-    writeBundle() {
-      if (!resolved) {
-        return;
-      }
-      copyPublicDir(resolved);
-      tryEmitWranglerConfig(resolved, emitState);
     },
   };
 };

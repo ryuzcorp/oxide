@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite build && celld dev dist",
+    "dev": "vite",
+    "dev:celld": "OXIDE_CELLD=1 vite build && celld dev dist",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "celld deploy dist",
+    "deploy": "vite build && wrangler deploy",
+    "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist",
+    "cf:login": "wrangler login",
     "celld": "celld"
   },
   "dependencies": {
@@ -20,12 +23,14 @@
     "unstorage": "^2.0.0-alpha.10"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.54.6",
     "@cloudflare/workers-types": "^5.20260818.1",
     "@tailwindcss/vite": "^4.3.3",
     "daisyui": "^5.7.22",
-    "oxidejs": "^0.5.0",
+    "oxidejs": "^0.5.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "wrangler": "^4.130.0"
   }
 }

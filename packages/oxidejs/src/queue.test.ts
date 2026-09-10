@@ -11,7 +11,8 @@ import {
   generateActionsModule,
   generateWorkerWrapper,
 } from "./actions";
-import { createEmitState, resolveOptions, tryEmitWranglerConfig } from "./core";
+import { mergeDurableBindings } from "./core";
+import type { DurableWranglerConfig } from "./core";
 import {
   dispatchQueueBatch,
   queue,
@@ -700,44 +701,21 @@ describe("queue runtime", () => {
   });
 });
 
-describe("wrangler queues emit", () => {
-  test("merges scanned queues into wrangler.jsonc", () => {
+describe("wrangler queues merge", () => {
+  test("merges scanned queues into durable bindings", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-q-emit-"));
-    const outDir = path.join(root, "dist");
-    fs.mkdirSync(outDir);
-    fs.writeFileSync(path.join(outDir, "server.js"), "export default {}\n");
     fs.writeFileSync(
       path.join(root, "demo.server.ts"),
       `export const demo = workflow({ name: "demo", run: async () => {} })
 export const demos = queue({ name: "demos", workflow: demo, maxBatchSize: 10 })\n`
     );
     try {
-      const resolved = resolveOptions(
-        {
-          preset: "worker",
-          wrangler: {
-            compatibility_date: "2026-01-01",
-            name: "app",
-          },
-        },
-        root
-      );
-      const opts = { ...resolved, outDir, root };
-      tryEmitWranglerConfig(opts, createEmitState());
-      // SAFETY: emitted wrangler.jsonc shape asserted below.
-      const json = JSON.parse(
-        fs.readFileSync(path.join(outDir, "wrangler.jsonc"), "utf-8")
-      ) as {
-        queues: {
-          consumers: { max_batch_size?: number; queue: string }[];
-          producers: { binding: string; queue: string }[];
-        };
-        workflows: { binding: string; class_name: string; name: string }[];
-      };
-      expect(json.workflows).toEqual([
+      const config: DurableWranglerConfig = {};
+      mergeDurableBindings(config, root);
+      expect(config.workflows).toEqual([
         { binding: "DEMO", class_name: "DemoWorkflow", name: "demo" },
       ]);
-      expect(json.queues).toEqual({
+      expect(config.queues).toEqual({
         consumers: [{ max_batch_size: 10, queue: "demos" }],
         producers: [{ binding: "DEMOS", queue: "demos" }],
       });

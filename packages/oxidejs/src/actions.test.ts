@@ -551,14 +551,16 @@ ${stubSource}`
     expect(code).toContain("...(user ?? {})");
   });
 
-  test("worker wrapper SPA-falls back to index.html when client exists", () => {
+  test("worker wrapper SPA-falls back to / when client exists", () => {
     const code = generateWorkerWrapper("/app/src/server.ts", {
       hasClient: true,
       preset: "worker",
     });
-    expect(code).toContain('spa.pathname = "/index.html"');
+    expect(code).toContain('spa.pathname = "/"');
     expect(code).toContain('dest === "document"');
     expect(code).toContain("assets.fetch(new Request(spa, request))");
+    expect(code).toContain('ct.includes("text/html")');
+    expect(code).toContain("res.status !== 304");
   });
 
   test("fetch wrapper with public/ still serves assets", () => {
@@ -594,6 +596,9 @@ ${stubSource}`
     });
     expect(code).toContain("createWsHooks");
     expect(code).toContain("__ws.handleUpgrade");
+    expect(code).toContain(
+      'return new Response("Bad Request", { status: 400 })'
+    );
     expect(code).not.toContain("crossws/adapters/node");
     expect(code).not.toContain("createActionHandler");
   });
