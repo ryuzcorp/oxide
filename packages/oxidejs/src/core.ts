@@ -131,6 +131,7 @@ export const hasHtmlEntry = function hasHtmlEntry(
 };
 
 interface ResolvedActions {
+  openrpc: boolean;
   path: string;
   sameOrigin: boolean;
   transport: OxidejsActionTransport;
@@ -140,10 +141,20 @@ const resolveActions = function resolveActions(
   raw: OxidejsActions | undefined
 ): ResolvedActions {
   if (raw === undefined) {
-    return { path: ACTION_PATH, sameOrigin: true, transport: "http" };
+    return {
+      openrpc: false,
+      path: ACTION_PATH,
+      sameOrigin: true,
+      transport: "http",
+    };
   }
   if (raw === "http" || raw === "ws") {
-    return { path: ACTION_PATH, sameOrigin: true, transport: raw };
+    return {
+      openrpc: false,
+      path: ACTION_PATH,
+      sameOrigin: true,
+      transport: raw,
+    };
   }
   if (Object.prototype.toString.call(raw) !== "[object Object]") {
     throw new Error(`oxidejs: unknown actions transport "${String(raw)}"`);
@@ -160,7 +171,12 @@ const resolveActions = function resolveActions(
       `oxidejs: actions.path must start with "/" and contain no query string (got "${actionsPath}")`
     );
   }
-  return { path: actionsPath, sameOrigin: raw.sameOrigin ?? true, transport };
+  return {
+    openrpc: raw.openrpc === true,
+    path: actionsPath,
+    sameOrigin: raw.sameOrigin ?? true,
+    transport,
+  };
 };
 
 interface ResolvedPaths {
@@ -253,6 +269,7 @@ export const resolveOptions = function resolveOptions(
     transport: actions,
     path: actionPath,
     sameOrigin: actionSameOrigin,
+    openrpc: actionOpenRpc,
   } = resolveActions(raw?.actions);
   const hasClient = hasHtmlEntry(rootAbs, config);
   const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
@@ -260,6 +277,7 @@ export const resolveOptions = function resolveOptions(
 
   return {
     actionHeaders: raw?.actionHeaders,
+    actionOpenRpc,
     actionPath,
     actionSameOrigin,
     actions,

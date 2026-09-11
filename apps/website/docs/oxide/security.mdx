@@ -36,6 +36,8 @@ Generated `__asset` uses `path.join` — not `path.resolve` — so a leading `/`
 
 Set `sameOrigin: false` only when you accept cross-origin calls and provide CORS, CSRF, and authentication. See [`middleware`](/oxide/configuration#middleware).
 
+`actions.sameOrigin` defaults to `true`. HTTP actions require `Origin` and/or `Sec-Fetch-Site` and reject cross-site callers. WebSocket upgrades also allow requests that omit both headers when `Host` matches the request URL host (celld and some proxies strip those headers; `localhost` / `127.0.0.1` / `::1` count as the same host).
+
 ## Host header
 
 The generated Node server builds `request.url` from `req.headers.host` (same pattern as Express, Hono, Koa). If your entry uses that URL for redirects, validate the host yourself. In production your reverse proxy usually owns this.

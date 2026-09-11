@@ -351,8 +351,55 @@ export const stripCelldBareNodeImports = function stripCelldBareNodeImports(
 };
 
 /**
- * Write `celld-entry.js` next to the Worker main with bare unsupported node
- * imports stripped, and return a project-relative main path.
+ * Rewrite relative `import` / `export` specifiers so a file moved to `toDir`
+ * still resolves modules that lived next to the original under `fromDir`.
+ *
+ * Matches `from "…"`, `import("…")`, and side-effect `import "…"` only —
+ * do not parse binding lists (minified names use `$`, digits, …).
+ */
+export const rewriteRelativeModuleSpecifiers =
+  function rewriteRelativeModuleSpecifiers(
+    source: string,
+    fromDir: string,
+    toDir: string
+  ): string {
+    const fromResolved = path.resolve(fromDir);
+    const toResolved = path.resolve(toDir);
+    if (fromResolved === toResolved) {
+      return source;
+    }
+    const relocate = function relocate(spec: string) {
+      const absolute = path.resolve(fromResolved, spec);
+      let relocated = path
+        .relative(toResolved, absolute)
+        .split(path.sep)
+        .join("/");
+      if (!(relocated.startsWith("./") || relocated.startsWith("../"))) {
+        relocated = `./${relocated}`;
+      }
+      return relocated;
+    };
+    let out = source.replaceAll(
+      /\bfrom\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
+      (_full, quote: string, spec: string) =>
+        `from ${quote}${relocate(spec)}${quote}`
+    );
+    out = out.replaceAll(
+      /\bimport\s*\(\s*(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
+      (_full, quote: string, spec: string) =>
+        `import(${quote}${relocate(spec)}${quote}`
+    );
+    out = out.replaceAll(
+      /\bimport\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
+      (_full, quote: string, spec: string) =>
+        `import ${quote}${relocate(spec)}${quote}`
+    );
+    return out;
+  };
+
+/**
+ * Write a stripped Worker entry under `celld/` (not beside Cloudflare's
+ * `ssr/` main) and return a project-relative main path.
  */
 const writeCelldWorkerEntry = function writeCelldWorkerEntry(
   projectRoot: string,
@@ -374,18 +421,26 @@ const writeCelldWorkerEntry = function writeCelldWorkerEntry(
       `oxidejs: celld main escapes the deploy root (got ${JSON.stringify(mainRelative)})`
     );
   }
-  const celldEntryAbs = path.join(path.dirname(mainAbs), "celld-entry.js");
+  const celldDir = path.join(projectRoot, "celld");
+  fs.mkdirSync(celldDir, { recursive: true });
+  const celldEntryAbs = path.join(celldDir, "entry.js");
   const entrySource = fs.readFileSync(mainAbs, "utf-8");
-  fs.writeFileSync(celldEntryAbs, stripCelldBareNodeImports(entrySource));
-  return path.relative(projectRoot, celldEntryAbs).split(path.sep).join("/");
+  const stripped = stripCelldBareNodeImports(entrySource);
+  const rewritten = rewriteRelativeModuleSpecifiers(
+    stripped,
+    path.dirname(mainAbs),
+    celldDir
+  );
+  fs.writeFileSync(celldEntryAbs, rewritten);
+  return "celld/entry.js";
 };
 
 /**
  * Read the Cloudflare Vite wrangler snapshot under `dist/ssr`, strip unsupported
  * keys, relocate paths for a `dist/` deploy root, and write `dist/wrangler.json`.
  * Also removes Cloudflare-only asset files celld rejects (e.g. `.assetsignore`)
- * and rewrites `main` to a celld entry without bare `node:fs` / `node:path`
- * side-effect imports.
+ * and rewrites `main` to `celld/entry.js` without bare `node:fs` / `node:path`
+ * side-effect imports (kept outside `ssr/` so Cloudflare deploy does not upload it).
  */
 export const prepareCelldDeploy = function prepareCelldDeploy(
   distDir = "dist"
@@ -423,6 +478,17 @@ export const prepareCelldDeploy = function prepareCelldDeploy(
   stripCelldUnsupportedAssets(root, assetsDirectory);
 
   return cleaned;
+};
+
+/** Run {@link prepareCelldDeploy} when a Cloudflare Vite `ssr/wrangler.json` snapshot exists. */
+export const maybePrepareCelldDeploy = function maybePrepareCelldDeploy(
+  distDir = "dist"
+): CelldWranglerConfig | undefined {
+  const snapshot = path.join(path.resolve(distDir), "ssr", "wrangler.json");
+  if (!fs.existsSync(snapshot)) {
+    return;
+  }
+  return prepareCelldDeploy(distDir);
 };
 
 /**

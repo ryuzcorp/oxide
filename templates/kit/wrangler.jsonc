@@ -18,9 +18,9 @@
       "bucket_name": "files",
     },
   ],
-  // Secrets: copy `.dev.vars.example` → `.dev.vars` locally. The celld
-  // oxide plugin merges `.dev.vars` into deploy `vars`. Use
-  // `wrangler secret put BETTER_AUTH_SECRET` for Cloudflare.
+  // Secrets: copy `.dev.vars.example` → `.dev.vars` locally.
+  // `prepareCelldDeploy` merges `.dev.vars` into deploy `vars` for celld.
+  // Use `wrangler secret put BETTER_AUTH_SECRET` for Cloudflare.
   "assets": {
     "binding": "ASSETS",
     // Oxide's worker SPA-falls-back document navigations (fetches `/` — celld

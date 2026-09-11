@@ -11,7 +11,7 @@ export type OxidejsJson =
 
 export type OxidejsActionTransport = "http" | "ws";
 
-/** `actions` config: transport string, or an object with `transport`, `path`, `sameOrigin`. */
+/** `actions` config: transport string, or an object with `transport`, `path`, `sameOrigin`, `openrpc`. */
 export type OxidejsActions =
   | OxidejsActionTransport
   | {
@@ -20,6 +20,11 @@ export type OxidejsActions =
       path?: string;
       /** Reject cross-origin action requests (CSRF defense). Default: true. */
       sameOrigin?: boolean;
+      /**
+       * Serve `GET /__oxide/openrpc` with an OpenRPC 1.3 document for
+       * `action()` handlers only. Default: false.
+       */
+      openrpc?: boolean;
     };
 
 /** Static headers inlined into the shared action client. Functions cannot ship to the browser. */
@@ -98,8 +103,7 @@ export interface OxidejsOptions {
   /**
    * Build plugins with `beforeBuild` / `afterBuild` hooks (production builds
    * only; once per build). Pass an object or a module specifier (default
-   * export), e.g. `["oxidejs/plugins/celld"]`. Relative specifiers resolve
-   * against the Vite/Rsbuild project root.
+   * export). Relative specifiers resolve against the Vite/Rsbuild project root.
    */
   plugins?: OxidePluginInput[];
 }
@@ -124,6 +128,8 @@ export interface ResolvedOptions {
   actionPath: string;
   /** Reject cross-origin action requests (CSRF defense). Default: true. */
   actionSameOrigin: boolean;
+  /** Serve OpenRPC discovery for `action()` handlers at `/__oxide/openrpc`. */
+  actionOpenRpc: boolean;
   actionHeaders: OxidejsActionHeaders | undefined;
   middleware: (string | { module: string; imports?: string[] })[];
   imports: string[];

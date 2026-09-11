@@ -8,9 +8,10 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     oxide({
-      actions: "ws",
+      actions: {
+        transport: "ws",
+      },
       middleware: ["./src/middleware/db.ts", "@ilha/router/ssr"],
-      plugins: ["oxidejs/plugins/celld"],
     }),
     cloudflare(withOxide()),
     pages(),

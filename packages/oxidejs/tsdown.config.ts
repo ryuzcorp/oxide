@@ -16,7 +16,6 @@ export default defineConfig({
     index: "src/index.ts",
     "mutation-queue": "src/mutation-queue.ts",
     plugin: "src/plugin.ts",
-    "plugins/celld": "src/plugins/celld.ts",
     rpc: "src/rpc/index.ts",
     "rpc/client": "src/rpc/client.ts",
     rsbuild: "src/rsbuild.ts",

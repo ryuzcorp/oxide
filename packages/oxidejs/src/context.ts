@@ -172,3 +172,14 @@ export type {
   WorkflowStep,
   WorkflowStepConfig,
 } from "./workflow";
+export {
+  buildOpenRpcDocument,
+  codecToJsonSchema,
+  createOpenRpcResponse,
+  matchesOpenRpcPath,
+  OPENRPC_PATH,
+} from "./openrpc";
+export type {
+  BuildOpenRpcDocumentOptions,
+  OpenRpcActionEntry,
+} from "./openrpc";

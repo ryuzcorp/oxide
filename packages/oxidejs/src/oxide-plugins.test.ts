@@ -11,7 +11,6 @@ import {
   shouldRunAfterBuild,
   toOxideBuildContext,
 } from "./oxide-plugins";
-import celldPlugin, { isCelldPrepareEnabled } from "./plugins/celld";
 import type { OxidePlugin, ResolvedOptions } from "./types";
 
 describe("oxide plugins", () => {
@@ -26,9 +25,7 @@ describe("oxide plugins", () => {
     expect(resolvePluginModuleId("./plugins/mine.ts", root)).toBe(
       pathToFileURL(path.resolve(root, "./plugins/mine.ts")).href
     );
-    expect(resolvePluginModuleId("oxidejs/plugins/celld", root)).toBe(
-      "oxidejs/plugins/celld"
-    );
+    expect(resolvePluginModuleId("my-pkg/plugin", root)).toBe("my-pkg/plugin");
   });
 
   test("resolveOxidePlugins loads a relative plugin from the app root", async () => {
@@ -87,82 +84,5 @@ describe("oxide plugins", () => {
       preset: "fetch",
       root: "/app",
     });
-  });
-
-  test("isCelldPrepareEnabled requires OXIDE_CELLD", () => {
-    expect(isCelldPrepareEnabled({})).toBe(false);
-    expect(isCelldPrepareEnabled({ OXIDE_CELLD: "0" })).toBe(false);
-    expect(isCelldPrepareEnabled({ OXIDE_CELLD: "1" })).toBe(true);
-    expect(isCelldPrepareEnabled({ OXIDE_CELLD: "true" })).toBe(true);
-  });
-
-  test("celld plugin prepares when enabled and ssr/wrangler.json exists", () => {
-    const dist = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-celld-plugin-"));
-    const prev = process.env["OXIDE_CELLD"];
-    process.env["OXIDE_CELLD"] = "1";
-    try {
-      fs.mkdirSync(path.join(dist, "ssr"), { recursive: true });
-      fs.mkdirSync(path.join(dist, "client"), { recursive: true });
-      fs.writeFileSync(
-        path.join(dist, "ssr", "index.js"),
-        `export default {}\n`
-      );
-      fs.writeFileSync(
-        path.join(dist, "ssr", "wrangler.json"),
-        `${JSON.stringify({
-          assets: { binding: "ASSETS", directory: "../client" },
-          main: "index.js",
-          name: "kit",
-          workers_dev: true,
-        })}\n`
-      );
-      celldPlugin.afterBuild?.({
-        outDir: dist,
-        preset: "worker",
-        root: path.dirname(dist),
-      });
-      expect(fs.existsSync(path.join(dist, "wrangler.json"))).toBe(true);
-      // SAFETY: prepareCelldDeploy writes JSON.
-      const written = JSON.parse(
-        fs.readFileSync(path.join(dist, "wrangler.json"), "utf-8")
-      ) as { main?: string };
-      expect(written.main).toBe("ssr/celld-entry.js");
-    } finally {
-      if (prev === undefined) {
-        delete process.env["OXIDE_CELLD"];
-      } else {
-        process.env["OXIDE_CELLD"] = prev;
-      }
-      fs.rmSync(dist, { force: true, recursive: true });
-    }
-  });
-
-  test("celld plugin no-ops without OXIDE_CELLD even when snapshot exists", () => {
-    const dist = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-celld-skip-"));
-    const prev = process.env["OXIDE_CELLD"];
-    delete process.env["OXIDE_CELLD"];
-    try {
-      fs.mkdirSync(path.join(dist, "ssr"), { recursive: true });
-      fs.writeFileSync(
-        path.join(dist, "ssr", "wrangler.json"),
-        `${JSON.stringify({ main: "index.js", name: "kit" })}\n`
-      );
-      celldPlugin.afterBuild?.({
-        outDir: dist,
-        preset: "worker",
-        root: path.dirname(dist),
-      });
-      expect(fs.existsSync(path.join(dist, "wrangler.json"))).toBe(false);
-      expect(fs.existsSync(path.join(dist, "ssr", "celld-entry.js"))).toBe(
-        false
-      );
-    } finally {
-      if (prev === undefined) {
-        delete process.env["OXIDE_CELLD"];
-      } else {
-        process.env["OXIDE_CELLD"] = prev;
-      }
-      fs.rmSync(dist, { force: true, recursive: true });
-    }
   });
 });

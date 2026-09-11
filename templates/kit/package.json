@@ -4,11 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:celld": "OXIDE_CELLD=1 vite build && celld dev dist",
+    "dev:celld": "vite build && celld dev dist",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
-    "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist",
+    "deploy:celld": "vite build && celld deploy dist",
     "cf:login": "wrangler login",
     "celld": "celld"
   },
@@ -27,7 +27,7 @@
     "@cloudflare/workers-types": "^5.20260818.1",
     "@tailwindcss/vite": "^4.3.3",
     "daisyui": "^5.7.22",
-    "oxidejs": "^0.5.2",
+    "oxidejs": "^0.5.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
     "vite": "^8.2.2",
