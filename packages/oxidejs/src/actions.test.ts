@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 
 import {
   assetRelPath,
+  bypassesDevMiddlewareBridge,
   generateActionsClientModule,
   generateActionsModule,
   generateClientModule,
@@ -35,6 +36,7 @@ import {
   withRequestEntry,
   withRequestStore,
 } from "./context";
+import { OPENRPC_PATH } from "./openrpc";
 import { createActionHandler } from "./rpc/server";
 import { writeGeneratedActions } from "./rpc/test-harness";
 import { runActionInContext } from "./run-action";
@@ -180,6 +182,17 @@ const readStreamUntilNewline = async function readStreamUntilNewline(
     buf + decoder.decode(value, { stream: true })
   );
 };
+
+describe("bypassesDevMiddlewareBridge", () => {
+  test("skips action path but not OpenRPC discovery", () => {
+    expect(
+      bypassesDevMiddlewareBridge("/__oxide/action", "/__oxide/action")
+    ).toBe(true);
+    expect(bypassesDevMiddlewareBridge(OPENRPC_PATH, "/__oxide/action")).toBe(
+      false
+    );
+  });
+});
 
 describe("parseExportedNames", () => {
   test("finds only action-marked exports (functions, generators, consts)", () => {
@@ -472,6 +485,8 @@ ${stubSource}`
     expect(code).toContain('"test.ping": ({ args }) =>');
     expect(code).toContain("const __s = getRequestStore()");
     expect(code).toContain(".apply(null, args)");
+    expect(code).toContain("export const actionsOpenRpcEntries = [");
+    expect(code).toContain('{ name: "test.ping", meta: __meta_0_ping }');
     expect(code).not.toContain("AsyncLocalStorage");
     expect(code).not.toContain('"_action": {');
     expect(code).not.toContain("__args");
@@ -549,6 +564,33 @@ ${stubSource}`
     expect(code).not.toContain(": __nf()");
     expect(code).toContain("export * from");
     expect(code).toContain("...(user ?? {})");
+    expect(code).not.toContain("createOpenRpcResponse");
+  });
+
+  test("wrapper serves OpenRPC when actions.openrpc is enabled", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", {
+      actionOpenRpc: true,
+      preset: "fetch",
+    });
+    expect(code).toContain("createOpenRpcResponse");
+    expect(code).toContain("matchesOpenRpcPath");
+    expect(code).toContain("actionsOpenRpcEntries");
+    expect(code).not.toContain("OPENRPC_PATH");
+  });
+
+  test("wrapper runs middleware before OpenRPC discovery", () => {
+    const code = generateWorkerWrapper("/app/src/server.ts", {
+      actionOpenRpc: true,
+      middleware: ["./auth.ts"],
+      preset: "fetch",
+    });
+    const fetchIdx = code.indexOf("async fetch(request, env, ctx)");
+    const body = code.slice(fetchIdx);
+    const mwIdx = body.indexOf("for (const __mw of");
+    const openRpcIdx = body.indexOf("if (matchesOpenRpcPath");
+    expect(mwIdx).toBeGreaterThan(-1);
+    expect(openRpcIdx).toBeGreaterThan(-1);
+    expect(mwIdx).toBeLessThan(openRpcIdx);
   });
 
   test("worker wrapper SPA-falls back to / when client exists", () => {

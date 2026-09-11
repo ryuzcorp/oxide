@@ -13,9 +13,10 @@ Pass options to `oxide()` in your Vite or Rsbuild config. Start with `oxide()` �
 | [`workerEntry`](#workerentry) | `src/server.ts` | Server entry file (optional when default is missing) |
 | [`outDir`](#outdir) | `dist` | Build output folder |
 | [`clientDir`](#clientdir) | `client` | Client folder inside `outDir` |
-| [`actions`](#actions) | `"http"` | Action transport, endpoint path, and same-origin protection |
+| [`actions`](#actions) | `"http"` | Action transport, endpoint path, same-origin, OpenRPC |
 | [`actionHeaders`](#actionheaders) | - | Public static headers added by the browser action client |
-| [`middleware`](#middleware) | `[]` | Production request middleware, in order |
+| [`middleware`](#middleware) | `[]` | Request middleware, in order |
+| [`plugins`](#plugins) | `[]` | Production `beforeBuild` / `afterBuild` hooks |
 | [`imports`](#imports) | `[]` | Side-effect modules loaded at server startup |
 | [`bodyLimit`](#bodylimit) | `1048576` | Max Node request body size (413 when exceeded) |
 | [`notFound`](#notfound) | - | Custom HTML 404 body on Node |
@@ -46,7 +47,11 @@ export default defineConfig({
 });
 ```
 
-Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. Wrap Cloudflare options with `withOxide` from `oxidejs/wrangler` so scanned `workflow()` / `queue()` / `schedule()` bindings merge and the Worker uses Vite's `ssr` environment (or call `mergeDurableBindings` yourself inside `config`).
+Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. Wrap Cloudflare options with `withOxide` from `oxidejs/wrangler` so scanned `workflow()` / `queue()` / `schedule()` bindings merge and the Worker uses Vite's `ssr` environment (or call `mergeDurableBindings` yourself inside `config`). Durable bindings are not oxide options — they merge through `withOxide`.
+
+### celld
+
+When Cloudflare Vite writes `dist/ssr/wrangler.json`, every production oxide build also runs `prepareCelldDeploy`: it writes `dist/wrangler.json` with celld-safe paths (`main: "celld/entry.js"`, `assets.directory: "client"`), strips `.assetsignore` and Cloudflare-only keys (`no_bundle`, `workers_dev`, …), writes a stripped entry under `dist/celld/` (outside `ssr/`, so Cloudflare deploy does not upload a second Worker module), and merges project `.dev.vars` into `vars`. Cloudflare `wrangler deploy` still uses the Vite SSR snapshot; `celld deploy dist` uses the rewritten root config. Call `prepareCelldDeploy("dist")` yourself only outside a normal oxide build. Helpers `toCelldWrangler` / `writeCelldWrangler` live on `oxidejs/wrangler`.
 
 ## workerEntry
 
@@ -76,7 +81,7 @@ import oxide from "oxidejs/vite";
 oxide({ actions: "http" }); // default
 ```
 
-The object form also configures the URL path and same-origin protection:
+The object form also configures the URL path, same-origin protection, and OpenRPC discovery:
 
 ```ts twoslash
 import oxide from "oxidejs/vite";
@@ -86,6 +91,7 @@ oxide({
     transport: "http",
     path: "/__oxide/action",
     sameOrigin: true,
+    openrpc: true,
   },
 });
 ```
@@ -93,6 +99,7 @@ oxide({
 - `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with [`preset: "worker"`](#preset)).
 - `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
 - `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
+- `openrpc` defaults to `false`. When `true`, Oxide serves `GET /__oxide/openrpc` with an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (payload / success / error from `ACTION_META`; workflows, queues, and schedules are omitted). Ignored when `transport` is `"ws"`.
 
 With `"worker"`, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
 
@@ -140,6 +147,8 @@ export default defineConfig({
 
 Modules run in array order, before the action gate. The second argument contains the runtime's `env` and fetch `ctx`. The same handlers are loaded through the SSR graph in development, so dev and production behave identically.
 
+On WebSocket upgrades, a middleware `Response` short-circuits (auth `302` / `401` / …). Oxide ignores only `@ilha/router/ssr` document Responses so upgrades still reach `WebSocketPair` / celld. On other requests, return a `Response` to stop the chain or `undefined` to continue.
+
 Entries can also be objects that carry their own side-effect imports — modules loaded at startup before the handler runs:
 
 ```ts twoslash
@@ -173,22 +182,13 @@ import oxide from "oxidejs/vite";
 export default defineConfig({
   plugins: [
     oxide({
-      plugins: ["oxidejs/plugins/celld"],
+      plugins: ["./build-plugin.ts"],
     }),
   ],
 });
 ```
 
-`oxidejs/plugins/celld` runs `prepareCelldDeploy` after a production build when `OXIDE_CELLD=1` and `dist/ssr/wrangler.json` exists (Cloudflare Vite layout). Set the env on celld-only scripts so Cloudflare `wrangler deploy` does not upload `celld-entry.js`.
-
-```json
-{
-  "scripts": {
-    "deploy": "vite build && wrangler deploy",
-    "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist"
-  }
-}
-```
+Hooks run once per production build (not during `vite` / `vite dev`). Specifiers are dynamic-imported and must default-export an `OxidePlugin`. Celld prepare is built-in when a Cloudflare Vite snapshot exists — see [celld](#celld) — not a plugin.
 
 ## imports
 

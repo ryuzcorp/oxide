@@ -53,6 +53,17 @@ export const matchesActionPath = function matchesActionPath(
   return pathname === actionPath || pathname === `${actionPath}/`;
 };
 
+/**
+ * Vite Connect bridge skips only the action endpoint (body stream). OpenRPC
+ * stays in the bridge so middleware can reject discovery like production.
+ */
+export const bypassesDevMiddlewareBridge = function bypassesDevMiddlewareBridge(
+  pathname: string,
+  actionPath: string
+) {
+  return matchesActionPath(pathname, actionPath);
+};
+
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 /** Only `export const name = action(...)` become remote RPC actions. Everything else stays server-local. */
 const EXPORT_RE =
@@ -555,6 +566,14 @@ export const generateActionsModule = function generateActionsModule(
   }
   lines.push(
     `});`,
+    `export const actionsOpenRpcEntries = [`,
+    ...aliases.flatMap(({ i, mod }) =>
+      mod.exports.map((name) => {
+        const tag = `${mod.key}.${name}`;
+        return `  { name: ${JSON.stringify(tag)}, meta: __meta_${i}_${name} },`;
+      })
+    ),
+    `];`,
     `export default actionsGroup;`,
     `export { actionsGroup as actions };`
   );
@@ -598,6 +617,7 @@ const pipeResponse = async function pipeResponse(
 };
 
 interface WorkerWrapperOpts {
+  actionOpenRpc?: boolean;
   actionPath?: string;
   actionSameOrigin?: boolean;
   actions?: OxidejsActionTransport;
@@ -826,21 +846,44 @@ const buildActionImports = function buildActionImports(
   hasActions: boolean,
   ws: boolean,
   actionPath: string,
-  sameOrigin: boolean
+  sameOrigin: boolean,
+  openrpc: boolean
 ): string {
   if (!hasActions) {
-    return "";
+    return openrpc
+      ? `import { createOpenRpcResponse, matchesOpenRpcPath } from "oxidejs";
+const __openRpcEntries = [];
+`
+      : "";
   }
+  const openRpcImport = openrpc
+    ? `import { createOpenRpcResponse, matchesOpenRpcPath } from "oxidejs";
+import { actionsOpenRpcEntries as __openRpcEntries } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
+`
+    : "";
   if (ws) {
-    return `import { createWsHooks } from "oxidejs/rpc";
+    return `${openRpcImport}import { createWsHooks } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin} });
 `;
   }
-  return `import { createActionHandler } from "oxidejs/rpc";
+  return `${openRpcImport}import { createActionHandler } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}, createContext: (req) => req[__fetch] ?? {} });
 `;
+};
+
+const buildOpenRpcGate = function buildOpenRpcGate(
+  openrpc: boolean,
+  actionPath: string
+): string {
+  if (!openrpc) {
+    return "";
+  }
+  return `if (matchesOpenRpcPath(new URL(request.url).pathname)) {
+      return createOpenRpcResponse(__openRpcEntries, request, { actionPath: ${JSON.stringify(actionPath)} });
+    }
+    `;
 };
 
 const isIlhaSsrMiddleware = function isIlhaSsrMiddleware(
@@ -1013,6 +1056,7 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
   const clientDir = opts.clientDir ?? "client";
   const actionPath = opts.actionPath ?? ACTION_PATH;
   const sameOrigin = opts.actionSameOrigin ?? false;
+  const openrpc = opts.actionOpenRpc === true;
   const serveAssets =
     preset === "fetch" && (opts.hasClient === true || opts.hasPublic === true);
   const hasActions = opts.hasActions !== false;
@@ -1036,9 +1080,11 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
     hasActions,
     ws,
     actionPath,
-    sameOrigin
+    sameOrigin,
+    openrpc
   );
   const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
+  const openRpcGate = buildOpenRpcGate(openrpc, actionPath);
   const actionGate = buildActionGate(hasActions, ws);
   const wsUpgradeGate = buildWsUpgradeGate(hasActions, ws, opts.middleware);
   const mwEntries = normalizeMiddlewareEntries(opts.middleware ?? []);
@@ -1062,7 +1108,7 @@ ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${a
   ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
-    ${wsUpgradeGate}${middlewareGate}${actionGate}${afterAction}
+    ${wsUpgradeGate}${middlewareGate}${openRpcGate}${actionGate}${afterAction}
   }${queueBits.method}${scheduleBits.method},
 };
 ${workflowExport}export default app;

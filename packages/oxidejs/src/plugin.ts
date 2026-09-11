@@ -14,6 +14,7 @@ import {
   generateWorkerWrapper,
   isServerFileId,
   loadClientStub,
+  bypassesDevMiddlewareBridge,
   matchesActionPath,
   moduleKey,
   nodeToWebRequest,
@@ -37,6 +38,12 @@ import {
   VIRTUAL_WORKFLOWS_ID,
 } from "./actions";
 import { copyPublicDir, resolveOptions } from "./core";
+import {
+  createOpenRpcResponse,
+  matchesOpenRpcPath,
+  OPENRPC_PATH,
+} from "./openrpc";
+import type { OpenRpcActionEntry } from "./openrpc";
 import {
   resolveOxidePlugins,
   runOxidePluginHook,
@@ -70,6 +77,7 @@ import {
   parseWorkflowExports,
   scanWorkflowFiles,
 } from "./workflow-build";
+import { maybePrepareCelldDeploy } from "./wrangler";
 
 const scanDurableModules = function scanDurableModules(root: string) {
   const modules = scanServerFiles(root);
@@ -224,6 +232,40 @@ const actionMiddleware = function actionMiddleware(
   };
 };
 
+const openRpcMiddleware = function openRpcMiddleware(
+  loadRouter: () => Promise<{
+    actionsOpenRpcEntries?: OpenRpcActionEntry[];
+  }>,
+  actionPath: string,
+  bodyLimit: number
+) {
+  return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
+    if (
+      !matchesOpenRpcPath((req.url ?? "").split("?")[0] ?? "", OPENRPC_PATH)
+    ) {
+      return next();
+    }
+    void (async () => {
+      try {
+        const mod = await loadRouter();
+        const response = createOpenRpcResponse(
+          mod.actionsOpenRpcEntries ?? [],
+          await nodeToWebRequest(req, bodyLimit),
+          { actionPath }
+        );
+        await sendWebResponseFrom(req, res, response);
+      } catch {
+        if (res.headersSent) {
+          return;
+        }
+        res.statusCode = 503;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ error: "oxide openrpc handler failed" }));
+      }
+    })();
+  };
+};
+
 const attachActionUpgrade = function attachActionUpgrade(
   httpServer: HttpUpgradeServer | null | undefined,
   loadRouter: () => Promise<{ actionsHandlers: unknown; default: unknown }>,
@@ -325,6 +367,7 @@ const loadActions = function loadActions(root: string) {
       // SAFETY: generated actions.mjs exports RpcGroup default + actionsHandlers; dynamic import has no static module type.
       return (await import(pathToFileURL(file).href)) as {
         actionsHandlers: unknown;
+        actionsOpenRpcEntries?: OpenRpcActionEntry[];
         default: unknown;
       };
     } finally {
@@ -432,6 +475,7 @@ const loadVirtualWorker = function loadVirtualWorker(
     ctx.addWatchFile(mod.abs);
   }
   return generateWorkerWrapper(hasEntry ? resolved.workerEntryAbs : null, {
+    actionOpenRpc: resolved.actionOpenRpc,
     actionPath: resolved.actionPath,
     actionSameOrigin: resolved.actionSameOrigin,
     actions: resolved.actions,
@@ -577,9 +621,13 @@ const attachDevMiddlewareBridge = function attachDevMiddlewareBridge(
   const handlersPromise = loadDevMiddlewareHandlers(server, opts);
   server.middlewares.use((creq, cres, next) => {
     // Don't touch /__oxide/action — reading the body here would empty the
-    // Node stream before the action middleware runs.
+    // Node stream before the action middleware runs. OpenRPC stays in this
+    // bridge so auth middleware can reject discovery the same as production.
     if (
-      matchesActionPath((creq.url ?? "").split("?")[0] ?? "", opts.actionPath)
+      bypassesDevMiddlewareBridge(
+        (creq.url ?? "").split("?")[0] ?? "",
+        opts.actionPath
+      )
     ) {
       return next();
     }
@@ -659,6 +707,20 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       "afterBuild",
       toOxideBuildContext(resolved)
     );
+    maybePrepareCelldDeploy(resolved.outDir);
+  };
+
+  const maybePrepareOnSsrClose = function maybePrepareOnSsrClose(
+    environmentName: string | undefined
+  ) {
+    if (!resolved) {
+      return;
+    }
+    // Cloudflare Vite writes `dist/ssr/wrangler.json` when the ssr env closes.
+    // Client can finish first; do not wait for afterBuild to see the snapshot.
+    if (environmentName === "ssr" || environmentName === "server") {
+      maybePrepareCelldDeploy(resolved.outDir);
+    }
   };
 
   return {
@@ -682,6 +744,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       // SAFETY: Vite Environment API — each env closes separately; run once on last.
       const environmentName = (this as { environment?: { name?: string } })
         .environment?.name;
+      maybePrepareOnSsrClose(environmentName);
       if (!shouldRunAfterBuild(environmentName, resolved.hasClient)) {
         return;
       }
@@ -766,6 +829,11 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
               )
             );
           }
+          if (opts.actionOpenRpc) {
+            server.middlewares.use(
+              openRpcMiddleware(loadRouter, opts.actionPath, opts.bodyLimit)
+            );
+          }
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {
           if (resolved === undefined || resolved.preset === "worker") {
@@ -834,6 +902,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
           // SAFETY: virtual:oxide/actions SSR module exports RpcGroup default + actionsHandlers.
           const mod = (await server.ssrLoadModule(VIRTUAL_ACTIONS_ID)) as {
             actionsHandlers: unknown;
+            actionsOpenRpcEntries?: OpenRpcActionEntry[];
             default: unknown;
           };
           return mod;
@@ -841,7 +910,11 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
         // Lazy + clear-on-reject: never leave a rejected promise cached (sticky 503)
         // and never start a follow-up fetch nobody awaits (uncaught rejection → crash).
         let routerReady:
-          | Promise<{ actionsHandlers: unknown; default: unknown }>
+          | Promise<{
+              actionsHandlers: unknown;
+              actionsOpenRpcEntries?: OpenRpcActionEntry[];
+              default: unknown;
+            }>
           | undefined;
         const loadRouter = async () => {
           if (routerReady === undefined) {
@@ -913,6 +986,12 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
               opts
             )
           : Promise.resolve([]);
+
+        if (opts?.actionOpenRpc) {
+          server.middlewares.use(
+            openRpcMiddleware(loadRouter, opts.actionPath, opts.bodyLimit)
+          );
+        }
 
         if (opts?.actions !== "ws") {
           wireActions();

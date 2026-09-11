@@ -47,6 +47,11 @@ export {
   toWorkflowClassName,
   WORKFLOW_META,
   workflow,
+  buildOpenRpcDocument,
+  codecToJsonSchema,
+  createOpenRpcResponse,
+  matchesOpenRpcPath,
+  OPENRPC_PATH,
 } from "./context";
 export type {
   ActionMeta,
@@ -89,6 +94,8 @@ export type {
   WorkflowStartResult,
   WorkflowStep,
   WorkflowStepConfig,
+  BuildOpenRpcDocumentOptions,
+  OpenRpcActionEntry,
 } from "./context";
 export type {
   OxideBuildContext,

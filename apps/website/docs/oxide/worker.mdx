@@ -7,11 +7,11 @@ description: Workflows, queues, and cron schedules for Cloudflare Workers mode.
 
 When you use `preset: "worker"` (default when a root wrangler config exists), Oxide targets Cloudflare Workers semantics (and the same-worker runtime shape on celld).
 
-This page documents the `*.server.ts` exports that wire into Cloudflare Workflows, Queues, and Cron triggers.
+This page documents the `*.server.ts` exports that wire into Cloudflare Workflows, Queues, and Cron triggers. Merge durable bindings with `withOxide` (or `mergeDurableBindings`) from `oxidejs/wrangler` — see [`preset`](/oxide/configuration#preset).
 
 ## Workflows
 
-Durable multi-step jobs on Cloudflare Workflows. Export `workflow()` from a `*.server.ts` file:
+Durable multi-step jobs on Cloudflare Workflows / celld. Export `workflow()` from a `*.server.ts` file:
 
 ```ts twoslash src/invoice.server.ts
 import { Schema } from "effect";
@@ -34,7 +34,9 @@ export const invoice = workflow({
 });
 ```
 
-Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className`.
+Defaults: binding `INVOICE`, class `InvoiceWorkflow`. Override with `binding` / `className` (string literals — the build scanner does not evaluate variables).
+
+The second `run` argument is a context bag: `{ step, env?, signal? }`. Oxide also stamps a request store so `useEnv()` / `useCtx()` work inside `run`. Keep side effects inside `step.do` — the runtime replays `run()` from the start for deterministic recovery. Pass `{ idempotencyKey }` on `start` for a stable instance id. Retries with the same id reuse the existing instance. `status` returns `{ status: "not_found" }` when the instance does not exist yet.
 
 From the client or server:
 
@@ -59,8 +61,6 @@ import { invoice } from "./invoice.server";
 const { id } = await invoice.start({ orderId: "ord_1" });
 const status = await invoice.status(id);
 ```
-
-Keep side effects inside `step.do`. The runtime replays `run()` from the start for deterministic recovery. Pass `{ idempotencyKey }` on `start` for a stable instance id.
 
 ## Queues
 
@@ -130,6 +130,10 @@ export const nightly = schedule({
 });
 ```
 
-Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}-${scheduledTime}` `` (idempotent retries; letters/digits/`-`/`_` only).
+Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron expressions into `triggers.crons` and attaches a same-worker `scheduled` handler. Each tick starts the workflow with id `` `${name}-${scheduledTime}` `` (idempotent retries; letters/digits/`-`/`_` only — celld and Cloudflare reject `:`).
 
 `params` may be a value or `(event) => value`; payload schema comes from the workflow/queue handle.
+
+## Deploy (Cloudflare and celld)
+
+Cloudflare owns `wrangler deploy` from the Vite SSR snapshot (`dist/ssr`). The same production `vite build` also writes a celld-ready `dist/wrangler.json` when that snapshot exists — no extra plugin or env flag. See [celld](/oxide/configuration#celld).

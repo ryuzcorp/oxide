@@ -46,10 +46,7 @@ import { withOxide } from "oxidejs/wrangler";
 import oxide from "oxidejs/vite";
 
 export default defineConfig({
-  plugins: [
-    oxide({ actions: "ws", middleware: [...], plugins: ["oxidejs/plugins/celld"] }),
-    cloudflare(withOxide()),
-  ],
+  plugins: [oxide({ actions: "ws", middleware: [] }), cloudflare(withOxide())],
 });
 ```
 
@@ -343,7 +340,7 @@ export class ActionRoom {
 
 The generated worker wrapper does not create a DO — hibernation is opt-in when you own the object.
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows/queues/schedules are omitted). OpenRPC is HTTP-only and stays off when `transport` is `"ws"`. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
 ## Rsbuild
 
@@ -367,10 +364,10 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
 | `outDir` | `dist` | Output root (Node / `"fetch"`) |
 | `clientDir` | `client` | Must stay inside `outDir` |
-| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with `"worker"`); object form: `{ transport, path, sameOrigin }` (`sameOrigin: true`) |
+| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with `"worker"`); object form: `{ transport, path, sameOrigin, openrpc }` (`sameOrigin: true`, `openrpc: false`) |
 | `actionHeaders` | — | Static headers on the HTTP client |
 | `middleware` | `[]` | Fetch middleware. On WS: honor Responses (auth 302/401/…); ignore only `@ilha/router/ssr` document Responses. Otherwise Response short-circuits before actions / server entry. |
-| `plugins` | `[]` | Build plugins (`beforeBuild` / `afterBuild`). Pass objects or module IDs such as `"oxidejs/plugins/celld"`. |
+| `plugins` | `[]` | Build plugins (`beforeBuild` / `afterBuild`). Pass objects or module IDs. |
 | `imports` | `[]` | Modules imported for side effects at server startup |
 | `bodyLimit` | `1048576` | Max Node request body size; larger requests get 413 |
 | `notFound` | — | Custom HTML 404 body when no route or asset matches |
@@ -380,19 +377,17 @@ Durable bindings (`workflow` / `queue` / `schedule`) merge via `withOxide` (or `
 
 `writeCelldWrangler(path)` / `toCelldWrangler(config)` strip Cloudflare Vite snapshot keys that `celld deploy` rejects (`workers_dev`, `dev`, `jsx_*`, `no_bundle`, …). Dropping `no_bundle` matters: the Vite Worker graph is multi-chunk, and celld only stubs `node:*` / `cloudflare:*` — relative `./assets/…` imports fail at load unless celld runs esbuild.
 
-For the Cloudflare Vite layout (`dist/ssr` + `dist/client`), add `plugins: ["oxidejs/plugins/celld"]` and set `OXIDE_CELLD=1` on celld-only scripts (`dev:celld` / `deploy:celld`) so prepare does not run during `wrangler deploy` — or call `prepareCelldDeploy("dist")` yourself. That writes `dist/wrangler.json` with relocated paths (`main: "ssr/celld-entry.js"`, `assets.directory: "client"`), removes Cloudflare-only asset files celld rejects (`.assetsignore`), strips bare unused `import "node:fs"` / `import "node:path"` side-effects (celld 0.4 has no `node:fs` stub), and merges project `.dev.vars` into `vars` (celld does not load `.dev.vars` like `wrangler dev`). Keep the allowlist aligned with celld's `SUPPORTED_KEYS`.
+For the Cloudflare Vite layout (`dist/ssr` + `dist/client`), production builds automatically run `prepareCelldDeploy` when `dist/ssr/wrangler.json` exists — writing `dist/wrangler.json` with relocated paths (`main: "celld/entry.js"`, `assets.directory: "client"`), removing Cloudflare-only asset files celld rejects (`.assetsignore`), stripping bare unused `import "node:fs"` / `import "node:path"` side-effects into `dist/celld/entry.js` (outside `ssr/`, so Cloudflare deploy does not upload a second Worker module), and merging project `.dev.vars` into `vars` (celld does not load `.dev.vars` like `wrangler dev`). Keep the allowlist aligned with celld's `SUPPORTED_KEYS`. Call `prepareCelldDeploy("dist")` yourself only if you need the rewrite outside a normal oxide build. Cloudflare `wrangler deploy` still uses the Vite SSR snapshot; the extra `dist/wrangler.json` / `dist/celld/` are for celld.
 
 ### `plugins`
 
 ```ts
 oxide({
-  plugins: ["oxidejs/plugins/celld"],
+  plugins: ["./build-plugin.ts"],
 });
-// package.json
-// "deploy:celld": "OXIDE_CELLD=1 vite build && celld deploy dist"
 ```
 
-Each plugin may define `beforeBuild` and/or `afterBuild` `(ctx) => void | Promise<void>` where `ctx` is `{ root, outDir, preset }`. Hooks run once per production build (not during `vite` / `vite dev`). Specifiers are dynamic-imported (relative paths against the project root) and must default-export an `OxidePlugin`. The bundled `oxidejs/plugins/celld` plugin runs `prepareCelldDeploy` after build when `OXIDE_CELLD=1` and `dist/ssr/wrangler.json` exists.
+Each plugin may define `beforeBuild` and/or `afterBuild` `(ctx) => void | Promise<void>` where `ctx` is `{ root, outDir, preset }`. Hooks run once per production build (not during `vite` / `vite dev`). Specifiers are dynamic-imported (relative paths against the project root) and must default-export an `OxidePlugin`.
 
 ### `middleware` and `imports`
 

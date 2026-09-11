@@ -19,15 +19,16 @@ Use Oxide when you want a small typed full-stack app: a server entry, optional s
 - **One output tree** — `dist/server.js`, and a client only when you have a page (Node). Workers apps use `@cloudflare/vite-plugin` for the build layout.
 - **Server actions** — `export const x = action(...)` in `*.server.ts`. Import `x` from the browser; Oxide swaps in an Effect RPC stub. Types stay shared. Secrets and helpers that are not wrapped in `action()` never cross the wire. See [Server actions](/oxide/server-actions).
 - **Streams and live data** — `async function*` over newline-delimited JSON-RPC; `liveQuery` for topic snapshots on WebSocket.
-- **Node or Cloudflare** — default Node when no wrangler file. [`preset`](/oxide/configuration#preset) is `"worker"` when `wrangler.jsonc` / `.toml` is present (or set it yourself).
+- **Node or Cloudflare** — default Node when no wrangler file. [`preset`](/oxide/configuration#preset) is `"worker"` when `wrangler.jsonc` / `.toml` / `.json` is present (or set it yourself).
+- **Workflows, queues, schedules** — Cloudflare / celld durable work from `*.server.ts`. See [Worker](/oxide/worker).
 - **Vite and Rsbuild** — same options, same Node layout.
 
-You can ship a server-only worker (no `index.html`) or a UI that calls actions with no hand-written `/api` routes.
+You can ship a server-only worker (no `index.html`) or a UI that calls actions with no hand-written `/api` routes. Worker production builds also prepare a celld-ready `dist/wrangler.json` when Cloudflare Vite leaves an SSR snapshot.
 
 ## What it does not do
 
 - No oxide-owned workerd emulation (use `@cloudflare/vite-plugin`)
-- No automatic celld / wrangler deploy
+- No automatic `celld deploy` / `wrangler deploy` (prepare only)
 - No Node-builtin polyfills — a stray Node import fails the build
 
 ## Next steps

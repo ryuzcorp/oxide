@@ -15,7 +15,7 @@ Local and Cloudflare deploy use the same Vite path (workerd). `preset` defaults 
 - `tasks.userId` references `user.id`. Actions require a session and only read/write that user's rows (`liveQuery` topic `tasks:<userId>`).
 - `/api/auth/*` is handled in `src/server.ts` with a per-request Better Auth instance bound to `env.DB`.
 - Registration is passkey-first (`requireSession: false`): name + email → WebAuthn → user row + session. Sign-in uses `signIn.passkey()`.
-- Set `BETTER_AUTH_SECRET` (and optionally `BETTER_AUTH_URL`) via `.dev.vars` locally (`cp .dev.vars.example .dev.vars`). The `oxidejs/plugins/celld` build plugin merges those into `dist/wrangler.json` `vars` for celld. For Cloudflare, after the first deploy run `bunx wrangler secret put BETTER_AUTH_SECRET` (and usually `BETTER_AUTH_URL` to your `*.workers.dev` origin). Do not commit real secrets in `wrangler.jsonc`.
+- Set `BETTER_AUTH_SECRET` (and optionally `BETTER_AUTH_URL`) via `.dev.vars` locally (`cp .dev.vars.example .dev.vars`). Production builds merge those into `dist/wrangler.json` `vars` for celld. For Cloudflare, after the first deploy run `bunx wrangler secret put BETTER_AUTH_SECRET` (and usually `BETTER_AUTH_URL` to your `*.workers.dev` origin). Do not commit real secrets in `wrangler.jsonc`.
 - `advanced.database.validateSchema` is off: Better Auth's check uses `pragma_table_info(?)`, which D1 rejects (`SQLITE_AUTH`). ParanORM migrations are the source of truth.
 
 ## Live list
@@ -68,11 +68,11 @@ Optional: set `BETTER_AUTH_URL` to your `*.workers.dev` (or custom) origin after
 
 ```sh
 bun run build
-bun run dev:celld       # OXIDE_CELLD=1 vite build → celld dev dist
-bun run deploy:celld    # OXIDE_CELLD=1 vite build → celld deploy dist
+bun run dev:celld       # vite build → celld dev dist
+bun run deploy:celld    # vite build → celld deploy dist
 ```
 
-`@cloudflare/vite-plugin` writes `dist/ssr/wrangler.json` with CF-only keys (`no_bundle`, `workers_dev`, …), paths like `assets.directory: "../client"` (illegal for celld), `dist/client/.assetsignore`, and bare `import "node:fs"` leftovers. Enable `plugins: ["oxidejs/plugins/celld"]` and set `OXIDE_CELLD=1` on celld scripts so `vite build` runs `prepareCelldDeploy` and writes `dist/wrangler.json` with celld-safe keys/paths (`main: "ssr/celld-entry.js"`, `assets.directory: "client"`), strips `.assetsignore`, drops `no_bundle` so `celld deploy` esbuilds one module, and strips bare unused `node:fs` / `node:path` imports (celld 0.4 has no `node:fs` stub). Plain `bun run deploy` / `vite build` skip prepare so Wrangler does not upload `celld-entry.js`. Needs `esbuild` on `PATH`.
+`@cloudflare/vite-plugin` writes `dist/ssr/wrangler.json` with CF-only keys (`no_bundle`, `workers_dev`, …), paths like `assets.directory: "../client"` (illegal for celld), `dist/client/.assetsignore`, and bare `import "node:fs"` leftovers. Every production `vite build` with that snapshot also runs `prepareCelldDeploy` and writes `dist/wrangler.json` with celld-safe keys/paths (`main: "celld/entry.js"`, `assets.directory: "client"`), strips `.assetsignore`, drops `no_bundle` so `celld deploy` esbuilds one module, and writes a stripped entry under `dist/celld/` (not beside Cloudflare's `ssr/` main). Cloudflare `wrangler deploy` still uses the Vite SSR snapshot. Needs `esbuild` on `PATH`.
 
 A **running** celld node does not restart on deploy. It polls `deploy/current.json` every **30s** (`CELLD_DEPLOY_POLL_S`) and only then builds/adopts the new Worker + assets.
 

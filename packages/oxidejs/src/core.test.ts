@@ -41,6 +41,7 @@ describe("resolveOptions", () => {
     expect(resolved.actions).toBe("http");
     expect(resolved.actionPath).toBe("/__oxide/action");
     expect(resolved.actionSameOrigin).toBe(true);
+    expect(resolved.actionOpenRpc).toBe(false);
   });
 
   test("defaults to worker when wrangler.jsonc exists", () => {
@@ -82,6 +83,22 @@ describe("resolveOptions", () => {
     );
     expect(resolved.actionPath).toBe("/rpc");
     expect(resolved.actionSameOrigin).toBe(false);
+  });
+
+  test("resolves actions.openrpc", () => {
+    expect(
+      resolveOptions({ actions: { openrpc: true } }, process.cwd())
+        .actionOpenRpc
+    ).toBe(true);
+    expect(resolveOptions({ actions: "ws" }, process.cwd()).actionOpenRpc).toBe(
+      false
+    );
+    expect(
+      resolveOptions(
+        { actions: { openrpc: true, transport: "ws" } },
+        process.cwd()
+      ).actionOpenRpc
+    ).toBe(false);
   });
 
   test("rejects actions.path with a query string", () => {

@@ -7,9 +7,11 @@ import path from "node:path";
 import {
   isCelldUnsupportedKey,
   mergeDevVarsIntoConfig,
+  maybePrepareCelldDeploy,
   parseDevVars,
   prepareCelldDeploy,
   relocateCloudflareViteWrangler,
+  rewriteRelativeModuleSpecifiers,
   stripCelldBareNodeImports,
   toCelldWrangler,
   withOxide,
@@ -306,7 +308,7 @@ describe("relocateCloudflareViteWrangler", () => {
       fs.mkdirSync(path.join(dist, "client"), { recursive: true });
       fs.writeFileSync(
         path.join(dist, "ssr", "index.js"),
-        `import "node:fs";\nimport "node:path";\nimport { EventEmitter } from "node:events";\nexport default {}\n`
+        `import "node:fs";\nimport "node:path";\nimport { EventEmitter } from "node:events";\nimport "./chunk.js";\nexport { x } from "./util.js";\nexport default {}\n`
       );
       fs.writeFileSync(
         path.join(dist, "client", ".assetsignore"),
@@ -328,19 +330,24 @@ describe("relocateCloudflareViteWrangler", () => {
       ) as CelldWranglerConfig;
       expect(written).toEqual({
         assets: { binding: "ASSETS", directory: "client" },
-        main: "ssr/celld-entry.js",
+        main: "celld/entry.js",
         name: "kit",
       });
       expect(fs.existsSync(path.join(dist, "client", ".assetsignore"))).toBe(
         false
       );
+      expect(fs.existsSync(path.join(dist, "ssr", "celld-entry.js"))).toBe(
+        false
+      );
       const celldEntry = fs.readFileSync(
-        path.join(dist, "ssr", "celld-entry.js"),
+        path.join(dist, "celld", "entry.js"),
         "utf-8"
       );
       expect(celldEntry).not.toContain('import "node:fs"');
       expect(celldEntry).not.toContain('import "node:path"');
       expect(celldEntry).toContain('from "node:events"');
+      expect(celldEntry).toContain('import "../ssr/chunk.js"');
+      expect(celldEntry).toContain('from "../ssr/util.js"');
       expect(
         fs.readFileSync(path.join(dist, "ssr", "index.js"), "utf-8")
       ).toContain('import "node:fs"');
@@ -362,6 +369,48 @@ describe("relocateCloudflareViteWrangler", () => {
       fs.rmSync(dist, { force: true, recursive: true });
     }
   });
+
+  test("maybePrepareCelldDeploy no-ops without ssr snapshot", () => {
+    const dist = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-celld-maybe-"));
+    try {
+      expect(maybePrepareCelldDeploy(dist)).toBeUndefined();
+      expect(fs.existsSync(path.join(dist, "wrangler.json"))).toBe(false);
+    } finally {
+      fs.rmSync(dist, { force: true, recursive: true });
+    }
+  });
+
+  test("maybePrepareCelldDeploy prepares when snapshot exists", () => {
+    const dist = fs.mkdtempSync(
+      path.join(os.tmpdir(), "oxide-celld-maybe-ok-")
+    );
+    try {
+      fs.mkdirSync(path.join(dist, "ssr"), { recursive: true });
+      fs.mkdirSync(path.join(dist, "client"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dist, "ssr", "index.js"),
+        `export default {}\n`
+      );
+      fs.writeFileSync(
+        path.join(dist, "ssr", "wrangler.json"),
+        `${JSON.stringify({
+          assets: { binding: "ASSETS", directory: "../client" },
+          main: "index.js",
+          name: "kit",
+          workers_dev: true,
+        })}\n`
+      );
+      const written = maybePrepareCelldDeploy(dist);
+      expect(written?.["main"]).toBe("celld/entry.js");
+      expect(fs.existsSync(path.join(dist, "wrangler.json"))).toBe(true);
+      expect(fs.existsSync(path.join(dist, "celld", "entry.js"))).toBe(true);
+      expect(fs.existsSync(path.join(dist, "ssr", "celld-entry.js"))).toBe(
+        false
+      );
+    } finally {
+      fs.rmSync(dist, { force: true, recursive: true });
+    }
+  });
 });
 
 describe("stripCelldBareNodeImports", () => {
@@ -371,5 +420,58 @@ describe("stripCelldBareNodeImports", () => {
         `import "node:fs";\nimport "node:path";\nimport fs from "node:fs";\n`
       )
     ).toBe(`import fs from "node:fs";\n`);
+  });
+});
+
+describe("rewriteRelativeModuleSpecifiers", () => {
+  test("rewrites relative imports for a moved entry", () => {
+    const source = [
+      `import "node:fs";`,
+      `import "./chunk.js";`,
+      `import { x } from "./util.js";`,
+      `export { y } from "./y.js";`,
+      `export * from "./z.js";`,
+      `const m = import("./dyn.js");`,
+    ].join("\n");
+    expect(
+      rewriteRelativeModuleSpecifiers(source, "/dist/ssr", "/dist/celld")
+    ).toBe(
+      [
+        `import "node:fs";`,
+        `import "../ssr/chunk.js";`,
+        `import { x } from "../ssr/util.js";`,
+        `export { y } from "../ssr/y.js";`,
+        `export * from "../ssr/z.js";`,
+        `const m = import("../ssr/dyn.js");`,
+      ].join("\n")
+    );
+  });
+
+  test("rewrites from-specifiers with minified $ bindings", () => {
+    const source = `import { $ as a, B as array$1, z as object } from "./assets/factory.js";\n`;
+    expect(
+      rewriteRelativeModuleSpecifiers(source, "/dist/ssr", "/dist/celld")
+    ).toBe(
+      `import { $ as a, B as array$1, z as object } from "../ssr/assets/factory.js";\n`
+    );
+  });
+
+  test("leaves import-shaped text inside strings and comments alone", () => {
+    const source = [
+      `const hint = 'from "./assets/secret.js"';`,
+      `// from "./assets/comment.js"`,
+      `/* import("./assets/block.js") */`,
+      `import "./assets/real.js";`,
+    ].join("\n");
+    expect(
+      rewriteRelativeModuleSpecifiers(source, "/dist/ssr", "/dist/celld")
+    ).toBe(
+      [
+        `const hint = 'from "./assets/secret.js"';`,
+        `// from "./assets/comment.js"`,
+        `/* import("./assets/block.js") */`,
+        `import "../ssr/assets/real.js";`,
+      ].join("\n")
+    );
   });
 });

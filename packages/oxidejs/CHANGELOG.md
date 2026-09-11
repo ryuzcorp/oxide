@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.3
+
+### Added
+
+- `actions: { openrpc: true }` serves `GET /__oxide/openrpc` — OpenRPC 1.3 document for `action()` handlers (Effect Schema → JSON Schema; workflows/queues/schedules omitted)
+
+### Changed
+
+- Production builds with a Cloudflare Vite `dist/ssr/wrangler.json` snapshot always run `prepareCelldDeploy` (removed `oxidejs/plugins/celld` and the earlier `OXIDE_CELLD=1` gate)
+- `prepareCelldDeploy` writes the stripped Worker entry to `dist/celld/entry.js` (not beside Cloudflare's `ssr/` main) so `wrangler deploy` does not upload a second module
+- Celld prepare also runs when the Vite `ssr` / `server` environment closes, so it still sees the snapshot when `client` finishes first
+- Dev OpenRPC 503 responses use a generic error string (no SSR load message leak)
+- `codecToJsonSchema` no longer swallows `toJsonSchemaDocument` failures
+
+### Fixed
+
+- `rewriteRelativeModuleSpecifiers` rewrites minified `from "…"` imports that use `$` bindings (celld esbuild could not resolve `./assets/…` from `dist/celld/entry.js`)
+- OpenRPC discovery runs after middleware (production wrapper + Vite Connect bridge) so auth can reject `GET /__oxide/openrpc`
+- `actions.openrpc: true` is ignored when `transport` is `"ws"` (discovery is HTTP-only)
+- OpenRPC `components.schemas` merge throws on conflicting definitions for the same name
+- Relative celld entry rewrite skips import-shaped text inside strings and comments
+
+### Breaking
+
+- Removed the `oxidejs/plugins/celld` export — celld prepare is built into production builds when `dist/ssr/wrangler.json` exists; drop `plugins: ["oxidejs/plugins/celld"]` from your config
+
 ## 0.5.2
 
 ### Breaking
@@ -32,11 +58,11 @@
 
 ### Added
 
-- `plugins` option — `beforeBuild` / `afterBuild` once per production build; `"oxidejs/plugins/celld"` runs `prepareCelldDeploy` after build when `OXIDE_CELLD=1` and `dist/ssr/wrangler.json` exists (keeps Cloudflare deploys clean)
+- `plugins` option — `beforeBuild` / `afterBuild` once per production build
 - `oxidejs/wrangler` → `withOxide` HOF for `cloudflare(withOxide())` (defaults `viteEnvironment.name` to `"ssr"`, merges durable bindings; optional `root` when Vite root ≠ cwd), plus `mergeDurableBindings` for hand-rolled `config` customizers
 - Relative `plugins` module IDs resolve against the project root
 - `toCelldWrangler` / `writeCelldWrangler` — strip Cloudflare Vite wrangler snapshot keys that `celld deploy` rejects (including `no_bundle`, so celld esbuilds the multi-chunk Vite Worker into one module)
-- `prepareCelldDeploy` — write `dist/wrangler.json` with in-project paths for Cloudflare Vite (`ssr/` + `client/`) layouts; strip `.assetsignore`; rewrite `main` to `ssr/celld-entry.js` without bare `node:fs` / `node:path` side-effect imports (celld 0.4 has no `node:fs` stub)
+- `prepareCelldDeploy` — write `dist/wrangler.json` with in-project paths for Cloudflare Vite (`ssr/` + `client/`) layouts; strip `.assetsignore`; rewrite `main` to `celld/entry.js` without bare `node:fs` / `node:path` side-effect imports (celld 0.4 has no `node:fs` stub)
 
 ## 0.5.0
 

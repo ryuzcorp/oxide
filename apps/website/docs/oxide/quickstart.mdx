@@ -127,7 +127,7 @@ No `index.html` → only `dist/server.js`. With `index.html` → client assets i
 
 ### Cloudflare Workers
 
-Add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@cloudflare/vite-plugin`.
+Add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@cloudflare/vite-plugin`. Wrap Cloudflare options with `withOxide` so durable bindings merge.
 
 ```ts twoslash
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -140,7 +140,7 @@ export default defineConfig({
 });
 ```
 
-See [`preset`](/oxide/configuration#preset).
+Production builds that emit `dist/ssr/wrangler.json` also write a celld-ready `dist/wrangler.json`. See [`preset`](/oxide/configuration#preset) and [Worker](/oxide/worker).
 
 ### Server only
 
@@ -150,4 +150,5 @@ Leave out `index.html`. The plugin emits `dist/server.js` and does not build a c
 
 - [Server entry](/oxide/server-entry) — `src/server.ts` and fallthrough
 - [Server actions](/oxide/server-actions) — Schema, streams, live queries, WebSocket
-- [Configuration](/oxide/configuration) — `preset`, paths, actions
+- [Worker](/oxide/worker) — workflows, queues, schedules
+- [Configuration](/oxide/configuration) — `preset`, paths, actions, celld
