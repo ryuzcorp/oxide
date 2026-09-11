@@ -1,0 +1,122 @@
+# One-click kit demo: RustFS (S3) + celld + kit build/deploy.
+#
+# REQUIRED: use `make up` / `make down` (see Makefile).
+# Do not run `docker compose up` / `podman compose up` alone — there is no
+# depends_on; kit and celld will race RustFS and an empty fleet.
+#
+# Demo defaults below are localhost-only. Do not publish these ports on a LAN
+# without changing BETTER_AUTH_SECRET and RustFS keys.
+#
+# App:     http://localhost:8080
+# RustFS:  http://localhost:9001  (console) / :9000 (S3 API)
+
+name: oxide-kit
+
+# Bump together with Dockerfile ARG CELLD_VERSION / COPY --from=celld.
+x-celld-version: &celld_version "0.4.1"
+
+services:
+  rustfs:
+    image: docker.io/rustfs/rustfs:1.0.0-rc.6
+    restart: unless-stopped
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-kitaccess}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-kitsecretkitsecretkitsecret12}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    ports:
+      - "${RUSTFS_API_PORT:-9000}:9000"
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - rustfs-data:/data
+
+  # Create the fleet bucket on RustFS (S3 API). One container so creds stick.
+  rustfs-init:
+    image: docker.io/amazon/aws-cli:2.27.63
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-kitaccess}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-kitsecretkitsecretkitsecret12}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        ep=http://rustfs:9000
+        aws configure set default.s3.addressing_style path
+        i=0
+        until aws --endpoint-url "$$ep" s3api list-buckets >/dev/null 2>&1; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "rustfs did not become ready" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        aws --endpoint-url "$$ep" s3api create-bucket --bucket celld >/dev/null 2>&1 || true
+        aws --endpoint-url "$$ep" s3api head-bucket --bucket celld
+        echo "rustfs bucket ready: celld"
+    restart: "no"
+
+  # One-shot: vite build → celld deploy (S3 only). Started by `make up`.
+  kit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CELLD_VERSION: *celld_version
+    image: oxide-kit:local
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-kitaccess}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-kitsecretkitsecretkitsecret12}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      S3_ENDPOINT: http://rustfs:9000
+      CELLD_BUCKET: ${CELLD_BUCKET:-s3://celld}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-only-change-me-to-a-long-random-string}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8080}
+    restart: "no"
+
+  # Same pinned celld as the kit image (COPY --from=celld). Started by `make up` after deploy.
+  celld:
+    image: ghcr.io/denoland/celld:0.4.1
+    restart: unless-stopped
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-kitaccess}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-kitsecretkitsecretkitsecret12}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      S3_ENDPOINT: http://rustfs:9000
+      CELLD_BUCKET: ${CELLD_BUCKET:-s3://celld}
+      CELLD_WATCH: /var/lib/celld/state
+      CELLD_DURABILITY: bucket
+      CELLD_DEPLOY_POLL_S: ${CELLD_DEPLOY_POLL_S:-5}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        bucket="$${CELLD_BUCKET:-s3://celld}"
+        endpoint="$${S3_ENDPOINT:-http://rustfs:9000}"
+        region="$${AWS_REGION:-us-east-1}"
+        while true; do
+          echo "celld: starting ($$bucket)"
+          /usr/local/bin/celld \
+            --bucket "$$bucket" \
+            --endpoint "$$endpoint" \
+            --region "$$region" \
+            --listen 0.0.0.0:8080 \
+            --internal-listen 0.0.0.0:8081 \
+            --advertise celld:8081 && break
+          echo "celld: waiting for deploy/current.json (retry in 2s)"
+          sleep 2
+        done
+    ports:
+      - "${KIT_PORT:-8080}:8080"
+    volumes:
+      - celld-state:/var/lib/celld
+
+volumes:
+  rustfs-data:
+  celld-state:

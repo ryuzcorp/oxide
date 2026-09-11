@@ -64,6 +64,31 @@ Output layout: Worker + snapshot config in `dist/ssr/`, client assets in `dist/c
 
 Optional: set `BETTER_AUTH_URL` to your `*.workers.dev` (or custom) origin after the first deploy if passkeys need a stable RP ID.
 
+## Docker / Podman (one-click celld demo)
+
+Runs [RustFS](https://docs.rustfs.com/en/installation/container/docker) (S3) + [celld](https://github.com/denoland/celld) + a one-shot kit build/deploy. Fully-qualified images (`docker.io/…`, `ghcr.io/…`) so Podman works without a short-name registry config.
+
+**`make up` is required.** Plain `docker compose up` / `podman compose up` has no `depends_on` and will race RustFS / an empty fleet (`deploy/current.json` missing). The Makefile sequences: RustFS → bucket → kit deploy → celld.
+
+```sh
+cp .env.example .env   # optional — change secrets before any non-localhost bind
+make up                # detached; prints the app URL when ready
+make logs              # optional: follow celld + rustfs
+make down
+```
+
+| Service        | URL                   |
+| -------------- | --------------------- |
+| Kit (celld)    | http://localhost:8080 |
+| RustFS S3      | http://localhost:9000 |
+| RustFS console | http://localhost:9001 |
+
+Defaults ship with demo RustFS keys and `BETTER_AUTH_SECRET` and publish **8080/9000/9001**. Treat that as localhost-only.
+
+The kit image installs registry `oxidejs` (see `bun.lock`); it does **not** use `packages/oxidejs` from this monorepo. Release oxidejs, bump the kit dep/lockfile, then rebuild the image. Deploy CLI and the `celld` service both use pinned `ghcr.io/denoland/celld:0.4.1` (binary copied into the kit image).
+
+Passkeys need a secure context — `http://localhost:8080` is fine. Set `BETTER_AUTH_URL` if you publish on another host.
+
 ## Run / deploy (celld)
 
 ```sh
