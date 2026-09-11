@@ -17,6 +17,10 @@
 ### Fixed
 
 - `rewriteRelativeModuleSpecifiers` rewrites minified `from "…"` imports that use `$` bindings (celld esbuild could not resolve `./assets/…` from `dist/celld/entry.js`)
+- OpenRPC discovery runs after middleware (production wrapper + Vite Connect bridge) so auth can reject `GET /__oxide/openrpc`
+- `actions.openrpc: true` is ignored when `transport` is `"ws"` (discovery is HTTP-only)
+- OpenRPC `components.schemas` merge throws on conflicting definitions for the same name
+- Relative celld entry rewrite skips import-shaped text inside strings and comments
 
 ### Breaking
 

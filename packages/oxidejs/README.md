@@ -46,10 +46,7 @@ import { withOxide } from "oxidejs/wrangler";
 import oxide from "oxidejs/vite";
 
 export default defineConfig({
-  plugins: [
-    oxide({ actions: "ws", middleware: [...] }),
-    cloudflare(withOxide()),
-  ],
+  plugins: [oxide({ actions: "ws", middleware: [] }), cloudflare(withOxide())],
 });
 ```
 
@@ -343,7 +340,7 @@ export class ActionRoom {
 
 The generated worker wrapper does not create a DO — hibernation is opt-in when you own the object.
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows/queues/schedules are omitted). `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows/queues/schedules are omitted). OpenRPC is HTTP-only and stays off when `transport` is `"ws"`. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
 
 ## Rsbuild
 

@@ -350,12 +350,129 @@ export const stripCelldBareNodeImports = function stripCelldBareNodeImports(
   return out;
 };
 
+const relocateRelativeSpecifier = function relocateRelativeSpecifier(
+  spec: string,
+  fromDir: string,
+  toDir: string
+) {
+  const absolute = path.resolve(fromDir, spec);
+  let relocated = path.relative(toDir, absolute).split(path.sep).join("/");
+  if (!(relocated.startsWith("./") || relocated.startsWith("../"))) {
+    relocated = `./${relocated}`;
+  }
+  return relocated;
+};
+
+const skipLineComment = function skipLineComment(
+  source: string,
+  start: number
+) {
+  let i = start + 2;
+  while (i < source.length && source[i] !== "\n") {
+    i += 1;
+  }
+  return i;
+};
+
+const skipBlockComment = function skipBlockComment(
+  source: string,
+  start: number
+) {
+  let i = start + 2;
+  while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+    i += 1;
+  }
+  return Math.min(i + 2, source.length);
+};
+
+const skipStringLiteral = function skipStringLiteral(
+  source: string,
+  start: number
+) {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    if (source[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (source[i] === quote) {
+      return i + 1;
+    }
+    if (quote === "`" && source[i] === "$" && source[i + 1] === "{") {
+      i += 2;
+      let depth = 1;
+      while (i < source.length && depth > 0) {
+        if (source[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (source[i] === "{") {
+          depth += 1;
+        } else if (source[i] === "}") {
+          depth -= 1;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return i;
+};
+
+const FROM_SPEC_RE = /^from\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/u;
+const IMPORT_CALL_SPEC_RE =
+  /^import\s*\(\s*(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/u;
+const IMPORT_SIDE_SPEC_RE =
+  /^import\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/u;
+
+const tryRewriteModuleSpecifierAt = function tryRewriteModuleSpecifierAt(
+  source: string,
+  index: number,
+  fromDir: string,
+  toDir: string
+): { length: number; text: string } | undefined {
+  if (index > 0 && /[\w$]/u.test(source[index - 1] ?? "")) {
+    return;
+  }
+  const rest = source.slice(index);
+  const fromMatch = FROM_SPEC_RE.exec(rest);
+  if (fromMatch?.groups) {
+    const quote = fromMatch.groups["quote"] ?? '"';
+    const spec = fromMatch.groups["spec"] ?? "";
+    return {
+      length: fromMatch[0].length,
+      text: `from ${quote}${relocateRelativeSpecifier(spec, fromDir, toDir)}${quote}`,
+    };
+  }
+  const callMatch = IMPORT_CALL_SPEC_RE.exec(rest);
+  if (callMatch?.groups) {
+    const quote = callMatch.groups["quote"] ?? '"';
+    const spec = callMatch.groups["spec"] ?? "";
+    return {
+      length: callMatch[0].length,
+      text: `import(${quote}${relocateRelativeSpecifier(spec, fromDir, toDir)}${quote}`,
+    };
+  }
+  const sideMatch = IMPORT_SIDE_SPEC_RE.exec(rest);
+  if (sideMatch?.groups) {
+    const quote = sideMatch.groups["quote"] ?? '"';
+    const spec = sideMatch.groups["spec"] ?? "";
+    return {
+      length: sideMatch[0].length,
+      text: `import ${quote}${relocateRelativeSpecifier(spec, fromDir, toDir)}${quote}`,
+    };
+  }
+};
+
 /**
  * Rewrite relative `import` / `export` specifiers so a file moved to `toDir`
  * still resolves modules that lived next to the original under `fromDir`.
  *
- * Matches `from "…"`, `import("…")`, and side-effect `import "…"` only —
- * do not parse binding lists (minified names use `$`, digits, …).
+ * Only rewrites real module dependency string literals (`from "…"`,
+ * `import("…")`, side-effect `import "…"`). Strings and comments are skipped
+ * so import-shaped text inside a string literal stays unchanged.
  */
 export const rewriteRelativeModuleSpecifiers =
   function rewriteRelativeModuleSpecifiers(
@@ -368,33 +485,44 @@ export const rewriteRelativeModuleSpecifiers =
     if (fromResolved === toResolved) {
       return source;
     }
-    const relocate = function relocate(spec: string) {
-      const absolute = path.resolve(fromResolved, spec);
-      let relocated = path
-        .relative(toResolved, absolute)
-        .split(path.sep)
-        .join("/");
-      if (!(relocated.startsWith("./") || relocated.startsWith("../"))) {
-        relocated = `./${relocated}`;
+    let result = "";
+    let i = 0;
+    while (i < source.length) {
+      const c0 = source[i];
+      const c1 = source[i + 1];
+      if (c0 === "/" && c1 === "/") {
+        const end = skipLineComment(source, i);
+        result += source.slice(i, end);
+        i = end;
+        continue;
       }
-      return relocated;
-    };
-    let out = source.replaceAll(
-      /\bfrom\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
-      (_full, quote: string, spec: string) =>
-        `from ${quote}${relocate(spec)}${quote}`
-    );
-    out = out.replaceAll(
-      /\bimport\s*\(\s*(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
-      (_full, quote: string, spec: string) =>
-        `import(${quote}${relocate(spec)}${quote}`
-    );
-    out = out.replaceAll(
-      /\bimport\s+(?<quote>["'])(?<spec>\.[^"']+)\k<quote>/gu,
-      (_full, quote: string, spec: string) =>
-        `import ${quote}${relocate(spec)}${quote}`
-    );
-    return out;
+      if (c0 === "/" && c1 === "*") {
+        const end = skipBlockComment(source, i);
+        result += source.slice(i, end);
+        i = end;
+        continue;
+      }
+      const rewritten = tryRewriteModuleSpecifierAt(
+        source,
+        i,
+        fromResolved,
+        toResolved
+      );
+      if (rewritten) {
+        result += rewritten.text;
+        i += rewritten.length;
+        continue;
+      }
+      if (c0 === '"' || c0 === "'" || c0 === "`") {
+        const end = skipStringLiteral(source, i);
+        result += source.slice(i, end);
+        i = end;
+        continue;
+      }
+      result += c0;
+      i += 1;
+    }
+    return result;
   };
 
 /**

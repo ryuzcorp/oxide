@@ -99,7 +99,7 @@ oxide({
 - `transport` is `"http"` by default. `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with [`preset: "worker"`](#preset)).
 - `path` defaults to `/__oxide/action`. It must start with `/` and cannot contain a query string.
 - `sameOrigin` defaults to `true` for HTTP and WebSocket. This blocks browser calls from another site, including sibling subdomains.
-- `openrpc` defaults to `false`. When `true`, Oxide serves `GET /__oxide/openrpc` with an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (payload / success / error from `ACTION_META`; workflows, queues, and schedules are omitted).
+- `openrpc` defaults to `false`. When `true`, Oxide serves `GET /__oxide/openrpc` with an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (payload / success / error from `ACTION_META`; workflows, queues, and schedules are omitted). Ignored when `transport` is `"ws"`.
 
 With `"worker"`, the generated Worker calls `server.accept()` for upgrades. Durable Object apps that need hibernation can pass a custom `accept` into `createWsHooks` (for example `ctx.acceptWebSocket(ws)`). The generated wrapper does not create a DO for you.
 

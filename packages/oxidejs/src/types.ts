@@ -22,7 +22,8 @@ export type OxidejsActions =
       sameOrigin?: boolean;
       /**
        * Serve `GET /__oxide/openrpc` with an OpenRPC 1.3 document for
-       * `action()` handlers only. Default: false.
+       * `action()` handlers only. Ignored when `transport` is `"ws"` (discovery
+       * is HTTP). Default: false.
        */
       openrpc?: boolean;
     };

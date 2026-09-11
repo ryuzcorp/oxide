@@ -53,6 +53,17 @@ export const matchesActionPath = function matchesActionPath(
   return pathname === actionPath || pathname === `${actionPath}/`;
 };
 
+/**
+ * Vite Connect bridge skips only the action endpoint (body stream). OpenRPC
+ * stays in the bridge so middleware can reject discovery like production.
+ */
+export const bypassesDevMiddlewareBridge = function bypassesDevMiddlewareBridge(
+  pathname: string,
+  actionPath: string
+) {
+  return matchesActionPath(pathname, actionPath);
+};
+
 const IGNORE_DIRS = new Set(["node_modules", "dist", ".git", ".wrangler"]);
 /** Only `export const name = action(...)` become remote RPC actions. Everything else stays server-local. */
 const EXPORT_RE =
@@ -1097,7 +1108,7 @@ ${middlewareImports}${actionImports}${hasActions ? `${actionMatchFn}\n` : ""}${a
   ...(user ?? {}),
   async fetch(request, env, ctx) {
     request[__fetch] = { env, fetchCtx: ctx };
-    ${wsUpgradeGate}${openRpcGate}${middlewareGate}${actionGate}${afterAction}
+    ${wsUpgradeGate}${middlewareGate}${openRpcGate}${actionGate}${afterAction}
   }${queueBits.method}${scheduleBits.method},
 };
 ${workflowExport}export default app;

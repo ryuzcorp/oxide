@@ -172,7 +172,7 @@ const resolveActions = function resolveActions(
     );
   }
   return {
-    openrpc: raw.openrpc === true,
+    openrpc: transport !== "ws" && raw.openrpc === true,
     path: actionsPath,
     sameOrigin: raw.sameOrigin ?? true,
     transport,

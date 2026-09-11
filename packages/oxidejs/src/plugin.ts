@@ -14,6 +14,7 @@ import {
   generateWorkerWrapper,
   isServerFileId,
   loadClientStub,
+  bypassesDevMiddlewareBridge,
   matchesActionPath,
   moduleKey,
   nodeToWebRequest,
@@ -620,13 +621,13 @@ const attachDevMiddlewareBridge = function attachDevMiddlewareBridge(
   const handlersPromise = loadDevMiddlewareHandlers(server, opts);
   server.middlewares.use((creq, cres, next) => {
     // Don't touch /__oxide/action — reading the body here would empty the
-    // Node stream before the action middleware runs.
+    // Node stream before the action middleware runs. OpenRPC stays in this
+    // bridge so auth middleware can reject discovery the same as production.
     if (
-      matchesActionPath(
+      bypassesDevMiddlewareBridge(
         (creq.url ?? "").split("?")[0] ?? "",
         opts.actionPath
-      ) ||
-      matchesOpenRpcPath((creq.url ?? "").split("?")[0] ?? "", OPENRPC_PATH)
+      )
     ) {
       return next();
     }

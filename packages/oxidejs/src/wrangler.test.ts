@@ -455,4 +455,23 @@ describe("rewriteRelativeModuleSpecifiers", () => {
       `import { $ as a, B as array$1, z as object } from "../ssr/assets/factory.js";\n`
     );
   });
+
+  test("leaves import-shaped text inside strings and comments alone", () => {
+    const source = [
+      `const hint = 'from "./assets/secret.js"';`,
+      `// from "./assets/comment.js"`,
+      `/* import("./assets/block.js") */`,
+      `import "./assets/real.js";`,
+    ].join("\n");
+    expect(
+      rewriteRelativeModuleSpecifiers(source, "/dist/ssr", "/dist/celld")
+    ).toBe(
+      [
+        `const hint = 'from "./assets/secret.js"';`,
+        `// from "./assets/comment.js"`,
+        `/* import("./assets/block.js") */`,
+        `import "../ssr/assets/real.js";`,
+      ].join("\n")
+    );
+  });
 });

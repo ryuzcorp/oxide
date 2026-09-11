@@ -409,6 +409,6 @@ oxide({
 });
 ```
 
-Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows, queues, and schedules are omitted). See [`actions`](/oxide/configuration#actions).
+Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows, queues, and schedules are omitted). OpenRPC is HTTP-only and stays off when `transport` is `"ws"`. See [`actions`](/oxide/configuration#actions).
 
 Set `sameOrigin: false` only when you accept another origin and own CORS, CSRF, and authentication. For static client headers, see [`actionHeaders`](/oxide/configuration#actionheaders) — never put a private secret there.

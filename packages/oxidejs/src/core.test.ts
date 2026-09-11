@@ -93,6 +93,12 @@ describe("resolveOptions", () => {
     expect(resolveOptions({ actions: "ws" }, process.cwd()).actionOpenRpc).toBe(
       false
     );
+    expect(
+      resolveOptions(
+        { actions: { openrpc: true, transport: "ws" } },
+        process.cwd()
+      ).actionOpenRpc
+    ).toBe(false);
   });
 
   test("rejects actions.path with a query string", () => {

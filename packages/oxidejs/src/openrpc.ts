@@ -83,7 +83,16 @@ const mergeDefinitions = function mergeDefinitions(
   source: { [key: string]: JsonSchemaObject }
 ) {
   for (const [name, schema] of Object.entries(source)) {
-    target[name] ??= schema;
+    const existing = target[name];
+    if (existing === undefined) {
+      target[name] = schema;
+      continue;
+    }
+    if (JSON.stringify(existing) !== JSON.stringify(schema)) {
+      throw new Error(
+        `oxidejs: OpenRPC components.schemas[${JSON.stringify(name)}] conflict — codecs produced different definitions for the same name`
+      );
+    }
   }
 };
 

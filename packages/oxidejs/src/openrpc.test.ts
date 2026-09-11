@@ -1,3 +1,4 @@
+/* eslint-disable max-classes-per-file -- Schema.TaggedError fixtures per test */
 import { describe, expect, test } from "bun:test";
 
 import * as Schema from "effect/Schema";
@@ -73,5 +74,32 @@ describe("openrpc", () => {
       { actionPath: "/__oxide/action" }
     );
     expect(response.status).toBe(405);
+  });
+
+  test("buildOpenRpcDocument throws on conflicting component schemas", () => {
+    // Same TaggedError tag → same Encoded def name; different fields → conflict.
+    // eslint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError factory
+    class ConflictA extends Schema.TaggedError<ConflictA>()("Conflict", {
+      a: Schema.String,
+    }) {}
+    // eslint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError factory
+    class ConflictB extends Schema.TaggedError<ConflictB>()("Conflict", {
+      b: Schema.Number,
+    }) {}
+    expect(() =>
+      buildOpenRpcDocument(
+        [
+          {
+            meta: { error: ConflictA, success: Schema.String },
+            name: "a.run",
+          },
+          {
+            meta: { error: ConflictB, success: Schema.String },
+            name: "b.run",
+          },
+        ],
+        { actionUrl: "http://localhost/__oxide/action" }
+      )
+    ).toThrow(/components\.schemas\[/u);
   });
 });
