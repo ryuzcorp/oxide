@@ -434,7 +434,7 @@ const tryRewriteModuleSpecifierAt = function tryRewriteModuleSpecifierAt(
   toDir: string
 ): { length: number; text: string } | undefined {
   if (index > 0 && /[\w$]/u.test(source[index - 1] ?? "")) {
-    return;
+    return undefined;
   }
   const rest = source.slice(index);
   const fromMatch = FROM_SPEC_RE.exec(rest);
@@ -464,6 +464,7 @@ const tryRewriteModuleSpecifierAt = function tryRewriteModuleSpecifierAt(
       text: `import ${quote}${relocateRelativeSpecifier(spec, fromDir, toDir)}${quote}`,
     };
   }
+  return undefined;
 };
 
 /**
