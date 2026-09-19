@@ -37,6 +37,8 @@ import {
   VIRTUAL_WORKER_ID,
   VIRTUAL_WORKFLOWS_ID,
 } from "./actions";
+import { stampRequestContext } from "./context";
+import type { ExecutionContext } from "./context";
 import { copyPublicDir, resolveOptions } from "./core";
 import {
   createOpenRpcResponse,
@@ -65,7 +67,12 @@ import {
   resolveScheduleRefs,
   scanScheduleFiles,
 } from "./schedule-build";
-import type { OxidejsOptions, OxidePlugin, ResolvedOptions } from "./types";
+import type {
+  OxidejsJson,
+  OxidejsOptions,
+  OxidePlugin,
+  ResolvedOptions,
+} from "./types";
 import {
   applyRsbuildEnvironments,
   applyViteEnvironments,
@@ -325,6 +332,119 @@ const previewMiddleware = function previewMiddleware(file: string) {
           await mod.default.fetch(await nodeToWebRequest(req))
         );
       } catch (error) {
+        return next(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+  };
+};
+
+interface DevUserFetchModule {
+  default?: {
+    fetch?: (
+      request: Request,
+      env: { [key: string]: OxidejsJson },
+      ctx?: ExecutionContext
+    ) => Response | undefined | Promise<Response | undefined>;
+  };
+}
+
+/** Call the user entry fetch; `undefined` falls through to the dev server. */
+const callDevUserFetch = async function callDevUserFetch(
+  mod: DevUserFetchModule | null,
+  req: ConnectReq,
+  res: ConnectRes,
+  next: ConnectNext,
+  opts: ResolvedOptions
+) {
+  const fetchFn = mod?.default?.fetch;
+  if (!fetchFn) {
+    return next();
+  }
+  const request = await nodeToWebRequest(req, opts.bodyLimit);
+  // Stamp env like the production wrapper so the entry sees the same bag.
+  stampRequestContext(request, { env: opts.env ?? {} });
+  const hit = await fetchFn.call(mod?.default, request, opts.env ?? {});
+  if (!hit) {
+    return next();
+  }
+  await sendWebResponseFrom(req, res, hit);
+};
+
+/** Skip paths already owned by earlier dev middleware (same order as production). */
+const isDevHandledPath = function isDevHandledPath(
+  url: string | undefined,
+  opts: ResolvedOptions
+): boolean {
+  const pathname = (url ?? "").split("?")[0] ?? "";
+  if (matchesActionPath(pathname, opts.actionPath)) {
+    return true;
+  }
+  return opts.actionOpenRpc && matchesOpenRpcPath(pathname, OPENRPC_PATH);
+};
+
+/** Vite dev: run `src/server.ts` fetch after actions, before Vite static/SPA. */
+const devUserFetchMiddleware = function devUserFetchMiddleware(
+  server: DevSsrServer,
+  opts: ResolvedOptions
+) {
+  return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
+    if (isDevHandledPath(req.url, opts)) {
+      return next();
+    }
+    void (async () => {
+      try {
+        if (!fs.existsSync(opts.workerEntryAbs)) {
+          return next();
+        }
+        // SAFETY: user server entry default-exports `{ fetch }`; shape checked in callDevUserFetch.
+        const mod = (await server.ssrLoadModule(
+          opts.workerEntryAbs
+        )) as DevUserFetchModule;
+        await callDevUserFetch(mod, req, res, next, opts);
+      } catch (error) {
+        if (res.headersSent) {
+          return;
+        }
+        server.config.logger.error(
+          `oxidejs: dev server fetch failed: ${String(error)}`
+        );
+        return next(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+  };
+};
+
+/** Rsbuild dev: best-effort Node import of the server entry (no SSR transform). */
+const rsbuildUserFetchMiddleware = function rsbuildUserFetchMiddleware(
+  opts: ResolvedOptions
+) {
+  return (req: ConnectReq, res: ConnectRes, next: ConnectNext) => {
+    if (isDevHandledPath(req.url, opts)) {
+      return next();
+    }
+    void (async () => {
+      let mod: DevUserFetchModule | null = null;
+      try {
+        if (!fs.existsSync(opts.workerEntryAbs)) {
+          return next();
+        }
+        // Bust Node's import cache so edits apply without a restart.
+        // ponytail: mtime query leaks one module per edit; Vite HMR owns the real fix.
+        const href = `${pathToFileURL(opts.workerEntryAbs).href}?t=${fs.statSync(opts.workerEntryAbs).mtimeMs}`;
+        // SAFETY: same `{ fetch }` shape check as Vite dev; unimportable entries fall through below.
+        mod = (await import(
+          /* @vite-ignore */
+          href
+        )) as DevUserFetchModule;
+      } catch {
+        return next();
+      }
+      try {
+        await callDevUserFetch(mod, req, res, next, opts);
+      } catch (error) {
+        if (res.headersSent) {
+          return;
+        }
         return next(error instanceof Error ? error : new Error(String(error)));
       }
     })();
@@ -834,6 +954,8 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
               openRpcMiddleware(loadRouter, opts.actionPath, opts.bodyLimit)
             );
           }
+          // Run src/server.ts fetch in dev (undefined falls through).
+          server.middlewares.use(rsbuildUserFetchMiddleware(opts));
         });
         api.onBeforeStartPreviewServer?.(({ server }) => {
           if (resolved === undefined || resolved.preset === "worker") {
@@ -995,6 +1117,15 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
 
         if (opts?.actions !== "ws") {
           wireActions();
+        }
+
+        // Run src/server.ts fetch in dev after actions (same fallthrough
+        // contract as production: undefined continues to Vite static/SPA).
+        if (opts) {
+          server.middlewares.use(
+            // SAFETY: ViteDevServer exposes ssrLoadModule, logger, and Connect middlewares.
+            devUserFetchMiddleware(server as never, opts)
+          );
         }
 
         // Prewarm the SSR action router (and production middleware imports)

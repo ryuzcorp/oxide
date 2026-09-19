@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { RESOLVED_VIRTUAL_ACTIONS_ID, VIRTUAL_WORKER_ID } from "./actions";
 import { resolveOptions } from "./core";
@@ -226,7 +227,7 @@ describe("factory shape", () => {
       const configureServer: ConfigureServerHook = plugin.vite
         .configureServer as never;
       const post = configureServer(server);
-      expect(handlers).toHaveLength(2);
+      expect(handlers).toHaveLength(3);
       expect(post).toBeInstanceOf(Function);
       // Downstream framework middleware.
       handlers.push((_req, _res, next) => {
@@ -314,6 +315,105 @@ describe("factory shape", () => {
       await post();
       expect(errors).toEqual([]);
       expect(loads).toBe(2);
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("vite dev runs src/server.ts fetch with fallthrough", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-user-fetch-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src/server.ts"),
+        `export default {\n  fetch(request: Request) {\n    if (new URL(request.url).pathname === "/search") {\n      return Response.json({ ok: true });\n    }\n    return undefined;\n  },\n};\n`
+      );
+      const plugin = vitePlugin();
+      if (!plugin.vite) {
+        throw new Error("expected vite hooks");
+      }
+      // SAFETY: vite.config accepts a partial UserConfig in this harness.
+      (plugin.vite.config as ViteConfigHook)({ root }, { command: "serve" });
+
+      const handlers: ConnectHandler[] = [];
+      const server = {
+        config: { logger: { error() {} } },
+        environments: {},
+        middlewares: {
+          use: (handler: ConnectHandler) => {
+            handlers.push(handler);
+          },
+        },
+        ssrLoadModule: (id: string) => {
+          if (id === "virtual:oxide/actions" || id === "oxidejs/rpc") {
+            return Promise.resolve({ actionsHandlers: {}, default: {} });
+          }
+          // SAFETY: Bun test runtime imports the on-disk server entry directly.
+          return import(pathToFileURL(id).href) as Promise<unknown>;
+        },
+        watcher: { on() {} },
+      };
+
+      // SAFETY: configureServer is invoked with a ViteDevServer-shaped mock.
+      const configureServer: ConfigureServerHook = plugin.vite
+        .configureServer as never;
+      // SAFETY: mock exposes ssrLoadModule, logger, middlewares, and watcher only.
+      configureServer(server as never);
+      // No middleware option means no bridge; actions + user fetch only.
+      expect(handlers).toHaveLength(2);
+      const [, userFetch] = handlers;
+      if (!userFetch) {
+        throw new Error("expected user fetch handler");
+      }
+
+      const runUserFetch = async (url: string) => {
+        const { EventEmitter } = await import("node:events");
+        // oxlint-disable-next-line unicorn/prefer-event-target -- Connect req uses EventEmitter
+        const reqBase = Object.assign(new EventEmitter(), {
+          headers: { host: "localhost" },
+          method: "GET",
+          url,
+        });
+        const chunks: Uint8Array[] = [];
+        let nextCalled = false;
+        let status = 0;
+        const done = Promise.withResolvers<null>();
+        const res = {
+          end() {
+            status = this.statusCode;
+            done.resolve(null);
+          },
+          headersSent: false,
+          setHeader() {},
+          statusCode: 0,
+          write(chunk: Uint8Array) {
+            chunks.push(chunk);
+          },
+        };
+        const next = () => {
+          nextCalled = true;
+          done.resolve(null);
+        };
+        // SAFETY: EventEmitter + method/url/headers matches the Connect request shape.
+        userFetch(reqBase as NodeReq, res as never, next as never);
+        await done.promise;
+        return {
+          body: Buffer.concat(chunks).toString(),
+          nextCalled,
+          status,
+        };
+      };
+
+      const hit = await runUserFetch("/search?q=x");
+      expect(hit.nextCalled).toBe(false);
+      expect(hit.status).toBe(200);
+      expect(JSON.parse(hit.body)).toEqual({ ok: true });
+
+      const miss = await runUserFetch("/other");
+      expect(miss.nextCalled).toBe(true);
+
+      const action = await runUserFetch("/__oxide/action");
+      expect(action.nextCalled).toBe(true);
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }
