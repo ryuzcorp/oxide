@@ -36,7 +36,7 @@ vite build
 node dist/server.js
 ```
 
-Default is Node when no wrangler config is present. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` when present (`undefined` continues) → static file → `index.html` for navigations. Missing the default `src/server.ts` is fine — actions and static assets still run. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`.
+Default is Node when no wrangler config is present. No `index.html` → only `dist/server.js`. With `index.html` → client to `dist/client/`, then `/__oxide/action` (if you have a `*.server.{ts,tsx,js,jsx}` file) → `src/server.ts` when present (`undefined` continues) → static file → `index.html` for navigations. Missing the default `src/server.ts` is fine — actions and static assets still run. `vite dev` and `rsbuild dev` run the same `src/server.ts` fetch — return `undefined` to fall through to dev static/SPA handling. `public/` is copied next to the client. Hashed assets get `Cache-Control: immutable`.
 
 Workers apps add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@cloudflare/vite-plugin` — oxide stays companion-only:
 
