@@ -348,6 +348,9 @@ interface DevUserFetchModule {
   };
 }
 
+/** Dev-only cache: the bridge consumes the Node stream, so later dev middleware reuses this. */
+const devWebRequests = new WeakMap<object, Request>();
+
 /** Call the user entry fetch; `undefined` falls through to the dev server. */
 const callDevUserFetch = async function callDevUserFetch(
   mod: DevUserFetchModule | null,
@@ -360,7 +363,11 @@ const callDevUserFetch = async function callDevUserFetch(
   if (!fetchFn) {
     return next();
   }
-  const request = await nodeToWebRequest(req, opts.bodyLimit);
+  // Prefer the bridge's preserved clone: the Node stream is already consumed
+  // when production middleware is configured. Falls back to a fresh convert
+  // (Rsbuild has no bridge, so its path is unchanged).
+  const request =
+    devWebRequests.get(req) ?? (await nodeToWebRequest(req, opts.bodyLimit));
   // Stamp env like the production wrapper so the entry sees the same bag.
   stampRequestContext(request, { env: opts.env ?? {} });
   const hit = await fetchFn.call(mod?.default, request, opts.env ?? {});
@@ -758,6 +765,9 @@ const attachDevMiddlewareBridge = function attachDevMiddlewareBridge(
           return next();
         }
         const request = await nodeToWebRequest(creq, opts.bodyLimit);
+        // The Node stream is consumed above and cannot be re-read: stash a
+        // clone for downstream dev middleware (user fetch) before handlers run.
+        devWebRequests.set(creq, request.clone());
         const context: MiddlewareContext = {
           ctx: undefined,
           env: opts.env,

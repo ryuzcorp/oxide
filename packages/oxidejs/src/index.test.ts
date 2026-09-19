@@ -419,6 +419,116 @@ describe("factory shape", () => {
     }
   });
 
+  test("vite dev preserves POST body from bridge to src/server.ts", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-user-fetch-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src/server.ts"),
+        `export default {\n  async fetch(request: Request) {\n    if (new URL(request.url).pathname === "/echo") {\n      return Response.json({ body: await request.text() });\n    }\n    return undefined;\n  },\n};\n`
+      );
+      const plugin = vitePlugin({ middleware: ["./echo-mw"] });
+      if (!plugin.vite) {
+        throw new Error("expected vite hooks");
+      }
+      // SAFETY: vite.config accepts a partial UserConfig in this harness.
+      (plugin.vite.config as ViteConfigHook)({ root }, { command: "serve" });
+
+      const handlers: ConnectHandler[] = [];
+      const server = {
+        config: { logger: { error() {} } },
+        environments: {},
+        middlewares: {
+          use: (handler: ConnectHandler) => {
+            handlers.push(handler);
+          },
+        },
+        ssrLoadModule: (id: string) => {
+          // Middleware specs resolve to absolute paths against the root.
+          if (id.endsWith(`${path.sep}echo-mw`)) {
+            return Promise.resolve({ default: () => {} });
+          }
+          if (id === "virtual:oxide/actions" || id === "oxidejs/rpc") {
+            return Promise.resolve({ actionsHandlers: {}, default: {} });
+          }
+          // SAFETY: Bun test runtime imports the on-disk server entry directly.
+          return import(pathToFileURL(id).href) as Promise<unknown>;
+        },
+        watcher: { on() {} },
+      };
+
+      // SAFETY: configureServer is invoked with a ViteDevServer-shaped mock.
+      const configureServer: ConfigureServerHook = plugin.vite
+        .configureServer as never;
+      // SAFETY: mock exposes ssrLoadModule, logger, middlewares, and watcher only.
+      configureServer(server as never);
+      // Bridge + actions + user fetch.
+      expect(handlers).toHaveLength(3);
+      const [bridge, , userFetch] = handlers;
+      if (!bridge || !userFetch) {
+        throw new Error("expected bridge and user fetch handlers");
+      }
+
+      const { EventEmitter } = await import("node:events");
+      // Single-use body like a real Node stream: re-reads come back empty.
+      let consumed = false;
+      // oxlint-disable-next-line unicorn/prefer-event-target -- Connect req uses EventEmitter
+      const reqBase = Object.assign(new EventEmitter(), {
+        headers: { host: "localhost" },
+        method: "POST",
+        url: "/echo",
+        async *[Symbol.asyncIterator]() {
+          if (consumed) {
+            return;
+          }
+          consumed = true;
+          yield Buffer.from("hello");
+        },
+      });
+      // SAFETY: EventEmitter + method/url/headers/body matches the Connect request shape.
+      const req = reqBase as NodeReq;
+      const bridgeDone = Promise.withResolvers<null>();
+      let bridged = false;
+      bridge(req, {}, () => {
+        bridged = true;
+        bridgeDone.resolve(null);
+      });
+      await bridgeDone.promise;
+      expect(bridged).toBe(true);
+
+      const chunks: Uint8Array[] = [];
+      let nextCalled = false;
+      let status = 0;
+      const done = Promise.withResolvers<null>();
+      const res = {
+        end() {
+          status = this.statusCode;
+          done.resolve(null);
+        },
+        headersSent: false,
+        setHeader() {},
+        statusCode: 0,
+        write(chunk: Uint8Array) {
+          chunks.push(chunk);
+        },
+      };
+      const next = () => {
+        nextCalled = true;
+        done.resolve(null);
+      };
+      // SAFETY: capture res only reads statusCode/setHeader/write/end like Connect.
+      userFetch(req, res as never, next as never);
+      await done.promise;
+      expect(nextCalled).toBe(false);
+      expect(status).toBe(200);
+      expect(JSON.parse(Buffer.concat(chunks).toString())).toEqual({
+        body: "hello",
+      });
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   test("client load stubs *.server.tsx and blocks virtual actions", () => {
     const plugin = vitePlugin();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-load-"));
