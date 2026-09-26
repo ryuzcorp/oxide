@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4
+
+### Added
+
+- `batch()` batches action calls into one JSON-RPC 2.0 request: `batch(one("a"), two)` / `batch([one("a"), two])` post a single array body to `/__oxide/action` and resolve results in call order. Stream actions, the `ws` transport, and per-call `{ signal }` / `{ idempotencyKey }` are unchanged
+
 ## 0.5.3
 
 ### Added

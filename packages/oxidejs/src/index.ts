@@ -17,6 +17,7 @@ export {
   withRequestStore,
   liveQuery,
   publish,
+  batch,
   readActionMeta,
   writeActionMeta,
   actionResultToStream,
@@ -56,6 +57,8 @@ export {
 export type {
   ActionMeta,
   ActionOptions,
+  BatchItem,
+  BatchResult,
   CallOptions,
   ActionContext,
   ActionContextValue,

@@ -1,5 +1,7 @@
 export { createClient } from "./client";
 export type { RpcClientOptions } from "./client";
+export { batch } from "./batch";
+export type { BatchFlusher, BatchItem, BatchResult } from "./batch";
 export { createActionHandler, disposeActionHandler } from "./server";
 export type { ActionHandlerOptions } from "./server";
 export {

@@ -95,6 +95,18 @@ Unary actions return a Promise and expose helpers for UI wiring:
 | `ping.bind(...args)` / `ping.with(...args)` | Return an event handler that invokes the action |
 | `ping.result` | Read the last `AsyncResult` from the client atom |
 
+`batch()` sends calls made in the same tick as one JSON-RPC 2.0 batch (single POST, one round trip). Items are pending calls, thunks that start one, or bare zero-arg handles; results resolve in call order and a failing call rejects the promise:
+
+```ts
+import { batch } from "oxidejs";
+import { ping, task } from "./tasks.server";
+
+const [pong, first] = await batch(ping, task("a"));
+const [alsoPong, alsoFirst] = await batch([ping, () => task("a")]);
+```
+
+Per-call `{ idempotencyKey }` rides as a JSON-RPC frame header; an aborted `{ signal }` call is dropped from the batch. HTTP only (with `transport: "ws"` each call still sends its own message), streams cannot be batched, and on the server/SSR the same calls run locally in parallel.
+
 Validate a single payload with Effect Schema via `withSchema` or `action(fn, { payload })` (keep `action()` as the outer call):
 
 ```ts

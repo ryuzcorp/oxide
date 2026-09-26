@@ -1,14 +1,22 @@
-import { Effect, Layer, Scope, Stream } from "effect";
+import { Cause, Effect, Layer, Scope, Stream } from "effect";
 import {
   FetchHttpClient,
+  HttpBody,
   HttpClient,
   HttpClientRequest,
 } from "effect/unstable/http";
-import type { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { RpcClient, RpcSchema, RpcSerialization } from "effect/unstable/rpc";
+import type { Rpc, RpcGroup, RpcMessage } from "effect/unstable/rpc";
+import {
+  RpcClient,
+  RpcClientError,
+  RpcSchema,
+  RpcSerialization,
+} from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
 
 import type { OxidejsActionHeaders } from "../types";
+import { registerBatchFlusher, scheduleBatchFlush } from "./batch";
+import { NDJSON_CONTENT } from "./scrub";
 import { streamToAsyncGen } from "./stream";
 
 export interface RpcClientOptions {
@@ -52,7 +60,8 @@ type RpcCaller = (
 
 type FlatClient = Record<string, RpcCaller>;
 
-type NestedClient = Record<
+/** Client surface exposed by {@link createClient}: one callable per RPC tag. */
+export type NestedClient = Record<
   string,
   Record<
     string,
@@ -124,32 +133,221 @@ const cacheKey = function cacheKey(
   return `${groupId}|${options.transport ?? "http"}|${options.url}|${headerKey}`;
 };
 
-const httpLayer = function httpLayer(options: RpcClientOptions) {
-  const { headers } = options;
-  if (!headers) {
-    return RpcClient.layerProtocolHttp({
-      url: options.url,
-    }).pipe(
-      Layer.provide(RpcSerialization.layerNdJsonRpc()),
-      Layer.provide(FetchHttpClient.layer)
-    );
-  }
+interface QueuedRequest {
+  clientId: number;
+  request: RpcMessage.FromClientEncoded & { _tag: "Request" };
+}
 
-  const headerMap = normalizeActionHeaders(headers);
-  return RpcClient.layerProtocolHttp({
-    transformClient: <E, R>(client: HttpClient.HttpClient.With<E, R>) =>
-      HttpClient.mapRequest(client, (req) => {
-        let next = req;
-        for (const [key, value] of Object.entries(headerMap)) {
-          next = HttpClientRequest.setHeader(next, key, value);
+const rpcClientError = function rpcClientError(
+  message: string,
+  cause: unknown
+): RpcClientError.RpcClientError {
+  return new RpcClientError.RpcClientError({
+    reason: new RpcClientError.RpcClientDefect({ cause, message }),
+  });
+};
+
+const isStreamTag = function isStreamTag(group: ActionGroup, tag: string) {
+  // SAFETY: Effect request map values expose optional successSchema used by isStreamSchema.
+  const rpc = group.requests.get(tag) as RpcRequestMeta | undefined;
+  if (!rpc?.successSchema) {
+    return false;
+  }
+  // SAFETY: isStreamSchema accepts Effect schema values; successSchema is that schema object.
+  return RpcSchema.isStreamSchema(rpc.successSchema as never);
+};
+
+/**
+ * Encode one JSON-RPC request — or a JSON-RPC 2.0 batch array — as a POST body.
+ */
+const batchBody = function batchBody(
+  requests: RpcMessage.RequestEncoded[]
+): string {
+  const encoder = RpcSerialization.jsonRpc().makeUnsafe();
+  const single = requests.length === 1 ? requests[0] : undefined;
+  // SAFETY: the jsonRpc codec always encodes requests to JSON text; the shared
+  // `encode` signature also covers binary serializations.
+  const encoded = (
+    single === undefined ? encoder.encode(requests) : encoder.encode(single)
+  ) as string | undefined;
+  return encoded ?? "";
+};
+
+/**
+ * HTTP transport that queues unary requests and posts them as one JSON-RPC 2.0
+ * batch. Stream requests bypass the queue: they need incremental framing and
+ * fetch abort on interrupt.
+ */
+const makeBatchProtocol = function makeBatchProtocol(
+  group: ActionGroup,
+  options: RpcClientOptions
+) {
+  return RpcClient.Protocol.make(
+    Effect.fnUntraced(function* makeBatchProtocolGen(writeResponse) {
+      const scope = yield* Effect.scope;
+      const http = yield* HttpClient.HttpClient;
+      const headerMap = options.headers
+        ? normalizeActionHeaders(options.headers)
+        : undefined;
+      const queued: QueuedRequest[] = [];
+
+      const failQueued = function failQueued(
+        entries: QueuedRequest[],
+        message: string,
+        cause?: unknown
+      ) {
+        const error = rpcClientError(message, cause);
+        return Effect.forEach(
+          entries,
+          (entry) =>
+            writeResponse(entry.clientId, {
+              _tag: "ClientProtocolError",
+              error,
+            }),
+          { discard: true }
+        );
+      };
+
+      const post = function post(entries: QueuedRequest[]) {
+        return Effect.gen(function* postGen() {
+          // One parser per request: its line buffer must not mix with other POSTs.
+          const parser = RpcSerialization.ndJsonRpc().makeUnsafe();
+          const requests = entries.map((entry) => entry.request);
+          const body = batchBody(requests);
+
+          let request = HttpClientRequest.post(options.url, {
+            body: HttpBody.text(body, NDJSON_CONTENT),
+          });
+          for (const [key, value] of Object.entries(headerMap ?? {})) {
+            request = HttpClientRequest.setHeader(request, key, value);
+          }
+
+          const clientByRequestId = new Map(
+            entries.map((entry) => [String(entry.request.id), entry.clientId])
+          );
+          const unsettled = new Set(clientByRequestId.keys());
+          const settle = function settle(
+            requestId: string
+          ): number | undefined {
+            const clientId = clientByRequestId.get(requestId);
+            if (clientId !== undefined) {
+              unsettled.delete(requestId);
+            }
+            return clientId;
+          };
+
+          const executed = yield* Effect.exit(http.execute(request));
+          if (executed._tag === "Failure") {
+            return yield* failQueued(
+              entries,
+              "RPC request failed",
+              Cause.squash(executed.cause)
+            );
+          }
+
+          const read = yield* Effect.exit(
+            Stream.runForEachArray(executed.value.stream, (chunks) => {
+              // SAFETY: parser.decode yields transport-decoded RPC messages.
+              const messages = chunks.flatMap((chunk) =>
+                parser.decode(chunk)
+              ) as RpcMessage.FromServerEncoded[];
+              return Effect.forEach(
+                messages,
+                (message) => {
+                  if (message._tag === "Defect") {
+                    unsettled.clear();
+                    return Effect.forEach(
+                      entries,
+                      (entry) => writeResponse(entry.clientId, message),
+                      { discard: true }
+                    );
+                  }
+                  if (!("requestId" in message)) {
+                    return Effect.void;
+                  }
+                  const requestId = String(message.requestId);
+                  const clientId = settle(requestId);
+                  if (clientId === undefined) {
+                    return Effect.void;
+                  }
+                  return writeResponse(clientId, message);
+                },
+                { discard: true }
+              );
+            })
+          );
+
+          const unfinished = entries.filter((entry) =>
+            unsettled.has(String(entry.request.id))
+          );
+          if (unfinished.length === 0) {
+            return;
+          }
+          if (read._tag === "Failure") {
+            return yield* failQueued(
+              unfinished,
+              "Error reading RPC response",
+              Cause.squash(read.cause)
+            );
+          }
+          yield* failQueued(
+            unfinished,
+            "HTTP response ended before RPC request completed"
+          );
+        });
+      };
+
+      const flush = async function flush(): Promise<void> {
+        if (queued.length === 0) {
+          return;
         }
-        return next;
-      }),
-    url: options.url,
-  }).pipe(
-    Layer.provide(RpcSerialization.layerNdJsonRpc()),
-    Layer.provide(FetchHttpClient.layer)
+        const entries = queued.splice(0);
+        await Effect.runPromise(post(entries));
+      };
+
+      const unregister = registerBatchFlusher({
+        flush,
+        queued: () => queued.length,
+      });
+      yield* Scope.addFinalizer(scope, Effect.sync(unregister));
+
+      return {
+        codecFor: RpcSerialization.ndJsonRpc().codecFor,
+        send(clientId, request) {
+          if (request._tag === "Interrupt") {
+            // Aborted before it was posted — never put it on the wire.
+            const index = queued.findIndex(
+              (entry) => entry.request.id === request.requestId
+            );
+            if (index !== -1) {
+              queued.splice(index, 1);
+            }
+            return Effect.void;
+          }
+          if (request._tag !== "Request") {
+            return Effect.void;
+          }
+          if (isStreamTag(group, request.tag)) {
+            return post([{ clientId, request }]);
+          }
+          queued.push({ clientId, request });
+          scheduleBatchFlush();
+          return Effect.void;
+        },
+        supportsAck: false,
+        supportsTransferables: false,
+      };
+    })
   );
+};
+
+const httpLayer = function httpLayer(
+  group: ActionGroup,
+  options: RpcClientOptions
+) {
+  return Layer.effect(RpcClient.Protocol)(
+    makeBatchProtocol(group, options)
+  ).pipe(Layer.provide(FetchHttpClient.layer));
 };
 
 const wsLayer = function wsLayer(url: string) {
@@ -167,8 +365,13 @@ const wsLayer = function wsLayer(url: string) {
   );
 };
 
-const clientLayer = function clientLayer(options: RpcClientOptions) {
-  return options.transport === "ws" ? wsLayer(options.url) : httpLayer(options);
+const clientLayer = function clientLayer(
+  group: ActionGroup,
+  options: RpcClientOptions
+) {
+  return options.transport === "ws"
+    ? wsLayer(options.url)
+    : httpLayer(group, options);
 };
 
 const loadClient = function loadClient(
@@ -182,7 +385,7 @@ const loadClient = function loadClient(
     // `RpcClient.make` returns — killing the socket protocol's forked read loop
     // before it ever dials, so every WS action call hangs forever.
     const context = yield* Scope.provide(scope)(
-      Layer.build(clientLayer(options))
+      Layer.build(clientLayer(group, options))
     );
     return yield* Scope.provide(scope)(
       RpcClient.make(group).pipe(Effect.provide(context))
@@ -196,16 +399,6 @@ const isStreamResult = function isStreamResult(
     | Stream.Stream<ActionCallResult>
 ): value is Stream.Stream<ActionCallResult> {
   return Stream.isStream(value);
-};
-
-const isStreamTag = function isStreamTag(group: ActionGroup, tag: string) {
-  // SAFETY: Effect request map values expose optional successSchema used by isStreamSchema.
-  const rpc = group.requests.get(tag) as RpcRequestMeta | undefined;
-  if (!rpc?.successSchema) {
-    return false;
-  }
-  // SAFETY: isStreamSchema accepts Effect schema values; successSchema is that schema object.
-  return RpcSchema.isStreamSchema(rpc.successSchema as never);
 };
 
 const streamToAsyncGenerator = function streamToAsyncGenerator<T>(

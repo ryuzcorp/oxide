@@ -30,6 +30,34 @@ const JSON_RPC_FORBIDDEN = {
   jsonrpc: "2.0",
 } as const;
 
+const idempotencyFromHeaders = function idempotencyFromHeaders(
+  headers: [string, string][] | { [key: string]: string }
+) {
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (
+        Array.isArray(entry) &&
+        String(entry[0]).toLowerCase() === IDEMPOTENCY_HEADER
+      ) {
+        return String(entry[1]);
+      }
+    }
+    // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === IDEMPOTENCY_HEADER) {
+      return value;
+    }
+  }
+  // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
+  return undefined;
+};
+
+interface IdempotencyFrame {
+  headers?: [string, string][] | { [key: string]: string };
+}
+
 const extractIdempotencyKey = function extractIdempotencyKey(
   rawBody: Uint8Array,
   headers: Headers
@@ -45,30 +73,24 @@ const extractIdempotencyKey = function extractIdempotencyKey(
     return undefined;
   }
   try {
-    // SAFETY: JSON-RPC frames are JSON objects; headers are Effect's tuple list or a map.
-    const msg = JSON.parse(line) as {
-      headers?: [string, string][] | { [key: string]: string };
-    };
-    if (!msg.headers) {
-      return;
-    }
-    if (Array.isArray(msg.headers)) {
-      for (const entry of msg.headers) {
-        if (
-          Array.isArray(entry) &&
-          String(entry[0]).toLowerCase() === IDEMPOTENCY_HEADER
-        ) {
-          return String(entry[1]);
+    // SAFETY: JSON-RPC frames are JSON objects; a batch body is an array of them.
+    const msg = JSON.parse(line) as IdempotencyFrame | IdempotencyFrame[];
+    if (Array.isArray(msg)) {
+      for (const frame of msg) {
+        const key = frame.headers
+          ? idempotencyFromHeaders(frame.headers)
+          : undefined;
+        if (key) {
+          return key;
         }
       }
       // oxlint-disable-next-line unicorn/no-useless-undefined -- required by noImplicitReturns
       return undefined;
     }
-    for (const [key, value] of Object.entries(msg.headers)) {
-      if (key.toLowerCase() === IDEMPOTENCY_HEADER) {
-        return value;
-      }
+    if (!msg.headers) {
+      return;
     }
+    return idempotencyFromHeaders(msg.headers);
   } catch {
     // Body is not JSON yet — Effect will surface the parse error.
   }

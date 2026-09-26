@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 
 import type { ActionContext } from "../context";
+import { batch } from "./batch";
+import type { NestedClient } from "./client";
 import { createClient } from "./client";
 import { waitUntil, writeGeneratedActions } from "./test-harness";
 import { createWsHooks } from "./ws";
@@ -43,9 +45,20 @@ const openWebSocket = function openWebSocket(url: string) {
   return promise;
 };
 
-test("createClient over ws transport resolves calls through a real socket", async () => {
-  // Regression: loadClient used to build the protocol layer in a transient
-  // scope, killing the socket read loop before it dialed — every call hung.
+/** `batch()` items must be pending calls, not the proxy's unary-or-stream union. */
+const unary = function unary<A>(
+  value: Promise<A> | AsyncGenerator<A>
+): Promise<A> {
+  if (value instanceof Promise) {
+    return value;
+  }
+  throw new TypeError("expected a unary action");
+};
+
+/** ws-transport client over a real crossws socket, torn down after `run`. */
+const withWsClient = async function withWsClient(
+  run: (client: NestedClient) => Promise<void>
+) {
   const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-ws-client-"));
   const ctx = JSON.stringify(path.join(import.meta.dir, "../context.ts"));
   fs.writeFileSync(
@@ -77,26 +90,53 @@ export const hello = action(async (name: string) => \`hi \${name}\`)
     url: `ws://127.0.0.1:${port}/__oxide/action`,
   });
   try {
-    const helloMod = client["hello"];
-    const helloFn = helloMod?.["hello"];
-    if (helloFn === undefined) {
-      throw new Error("hello.hello action missing from client");
-    }
+    await run(client);
+  } finally {
+    server.close();
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+};
+
+const helloCall = function helloCall(client: NestedClient) {
+  const call = client["hello"]?.["hello"];
+  if (call === undefined) {
+    throw new Error("hello.hello action missing from client");
+  }
+  return call;
+};
+
+test("createClient over ws transport resolves calls through a real socket", async () => {
+  // Regression: loadClient used to build the protocol layer in a transient
+  // scope, killing the socket read loop before it dialed — every call hung.
+  await withWsClient(async (client) => {
+    const helloFn = helloCall(client);
     const { promise: timeout, reject: rejectTimeout } =
       Promise.withResolvers<never>();
     const timer = setTimeout(() => {
       rejectTimeout(new Error("ws client call timed out"));
     }, 5000);
     try {
-      const result = await Promise.race([helloFn("Regression"), timeout]);
+      const result = await Promise.race([
+        unary(helloFn("Regression")),
+        timeout,
+      ]);
       expect(result).toBe("hi Regression");
     } finally {
       clearTimeout(timer);
     }
-  } finally {
-    server.close();
-    fs.rmSync(root, { force: true, recursive: true });
-  }
+  });
+});
+
+test("batch() over ws transport resolves every call", async () => {
+  await withWsClient(async (client) => {
+    const helloFn = helloCall(client);
+    const [first, second] = await batch(
+      unary(helloFn("First")),
+      unary(helloFn("Second"))
+    );
+    expect(first).toBe("hi First");
+    expect(second).toBe("hi Second");
+  });
 });
 
 test("createWsHooks works end-to-end over a real crossws WebSocket", async () => {

@@ -34,7 +34,7 @@ import { greet } from "./greet.server";
 const { message } = await greet("Ryuz");
 ```
 
-By default the stub POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The method name is `<file>.<export>` — here `greet.greet`.
+By default the stub POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The method name is `<file>.<export>` — here `greet.greet`. A [`batch()`](#batch-calls) call posts one JSON-RPC 2.0 batch array instead.
 
 ## Only `action()` is public
 
@@ -84,6 +84,38 @@ document.querySelector("button")!.onclick = toggle.bind("task-1");
 ```
 
 Stream actions do not support `bind` / `with`. On the client they resolve to an async generator — `await` first, then `for await`.
+
+## Batch calls
+
+`batch()` collects calls made in the same tick and sends them as one JSON-RPC 2.0 batch — a single POST, one round trip:
+
+```ts twoslash src/batch.ts
+// @filename: tasks.server.ts
+import { action } from "oxidejs";
+export const ping = action(async () => "pong");
+export const task = action(async (id: string) => ({ id }));
+// ---cut---
+// @filename: batch.ts
+import { batch } from "oxidejs";
+import { ping, task } from "./tasks.server";
+
+const [pong, first] = await batch(ping, task("a"));
+```
+
+Items are pending calls (`task("a")`), thunks that start one (`() => task(id)`), or a bare handle for a zero-arg action (`ping`). `batch([ping, task("a")])` is the same call. Types flow per item, so `first` is `{ id: string }`.
+
+| Detail | Behavior |
+| --- | --- |
+| Wire | one POST to `/__oxide/action` with a JSON-RPC 2.0 batch array |
+| Result | values in call order; a failing call rejects the promise |
+| Same tick | calls must be created in the `batch()` tick — an earlier call already went out |
+| Transport | HTTP only: `transport: "ws"` still sends one message per call |
+| Server / SSR | the same calls run locally, in parallel |
+| Stream actions | not batchable — iterate `ticks()` directly |
+| `{ signal }` | an aborted call is dropped from the batch; the rest still post |
+| `{ idempotencyKey }` | carried as a per-frame header, so `useIdempotencyKey()` works |
+
+JSON-RPC 2.0 answers a batch as one response set, so the slowest call in a batch sets the latency for all of them. Batch calls that belong together instead of pushing an unbounded list through one request.
 
 ## Validate input with Effect Schema
 
