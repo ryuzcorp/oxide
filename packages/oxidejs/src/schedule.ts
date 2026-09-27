@@ -388,8 +388,12 @@ export const dispatchSchedule = async function dispatchSchedule(
               },
               { id, params }
             );
-          } catch {
+          } catch (error) {
             // Enqueue already succeeded — do not fail the schedule tick.
+            console.warn(
+              `oxidejs: schedule "${meta.name}" producer-side workflow start failed; the queue consumer will start it`,
+              error
+            );
           }
         }
       }

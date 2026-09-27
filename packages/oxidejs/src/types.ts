@@ -11,7 +11,7 @@ export type OxidejsJson =
 
 export type OxidejsActionTransport = "http" | "ws";
 
-/** `actions` config: transport string, or an object with `transport`, `path`, `sameOrigin`, `openrpc`. */
+/** `actions` config: transport string, or an object with `transport`, `path`, `sameOrigin`, `openrpc`, `timeout`. */
 export type OxidejsActions =
   | OxidejsActionTransport
   | {
@@ -26,6 +26,12 @@ export type OxidejsActions =
        * is HTTP). Default: false.
        */
       openrpc?: boolean;
+      /**
+       * Milliseconds an action may run before it answers with a JSON-RPC
+       * error and is interrupted. A stream counts as answered at its first
+       * frame. Default: no limit.
+       */
+      timeout?: number;
     };
 
 /** Static headers inlined into the shared action client. Functions cannot ship to the browser. */
@@ -129,6 +135,8 @@ export interface ResolvedOptions {
   actionPath: string;
   /** Reject cross-origin action requests (CSRF defense). Default: true. */
   actionSameOrigin: boolean;
+  /** Per-action response deadline in milliseconds, or `undefined` for none. */
+  actionTimeout: number | undefined;
   /** Serve OpenRPC discovery for `action()` handlers at `/__oxide/openrpc`. */
   actionOpenRpc: boolean;
   actionHeaders: OxidejsActionHeaders | undefined;

@@ -21,9 +21,40 @@ import { streamToAsyncGen } from "./stream";
 
 export interface RpcClientOptions {
   headers?: OxidejsActionHeaders;
+  /**
+   * WebSocket reconnect attempts for a stream action before it fails.
+   * Default: 8.
+   */
+  maxReconnects?: number;
+  /**
+   * Retries for an HTTP POST that failed in transit (network error, 502,
+   * 503, 504). Only a POST whose every call carries an `idempotencyKey` is
+   * retried, because the server may have run the others. Default: 2.
+   */
+  retries?: number;
+  /**
+   * Reject a unary call that has not answered in this many milliseconds.
+   * Default: no limit.
+   */
+  timeout?: number;
   transport?: "http" | "ws";
   url: string;
 }
+
+const IDEMPOTENCY_HEADER = "x-oxide-idempotency-key";
+const DEFAULT_RETRIES = 2;
+const DEFAULT_MAX_RECONNECTS = 8;
+const RETRY_BASE_MS = 100;
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+/** True when the request carries an idempotency key, so a resend is safe. */
+const isIdempotentRequest = function isIdempotentRequest(
+  request: RpcMessage.RequestEncoded
+): boolean {
+  return request.headers.some(
+    ([key]) => key.toLowerCase() === IDEMPOTENCY_HEADER
+  );
+};
 
 interface CallOptions {
   idempotencyKey?: string;
@@ -130,7 +161,8 @@ const cacheKey = function cacheKey(
     groupId = nextGroupId;
     stamped.__oxideClientId = groupId;
   }
-  return `${groupId}|${options.transport ?? "http"}|${options.url}|${headerKey}`;
+  const resilience = `${options.timeout ?? ""},${options.retries ?? ""},${options.maxReconnects ?? ""}`;
+  return `${groupId}|${options.transport ?? "http"}|${options.url}|${headerKey}|${resilience}`;
 };
 
 interface QueuedRequest {
@@ -236,7 +268,24 @@ const makeBatchProtocol = function makeBatchProtocol(
             return clientId;
           };
 
-          const executed = yield* Effect.exit(http.execute(request));
+          // Resend only when every call is idempotent: a POST that failed in
+          // transit may still have run on the server.
+          const retries = entries.every((entry) =>
+            isIdempotentRequest(entry.request)
+          )
+            ? (options.retries ?? DEFAULT_RETRIES)
+            : 0;
+          let executed = yield* Effect.exit(http.execute(request));
+          for (let attempt = 0; attempt < retries; attempt += 1) {
+            const transient =
+              executed._tag === "Failure" ||
+              RETRYABLE_STATUS.has(executed.value.status);
+            if (!transient) {
+              break;
+            }
+            yield* Effect.sleep(`${RETRY_BASE_MS * 2 ** attempt} millis`);
+            executed = yield* Effect.exit(http.execute(request));
+          }
           if (executed._tag === "Failure") {
             return yield* failQueued(
               entries,
@@ -470,13 +519,12 @@ const sleep = function sleep(ms: number) {
   return Effect.runPromise(Effect.sleep(`${ms} millis`));
 };
 
-const IDEMPOTENCY_HEADER = "x-oxide-idempotency-key";
-
 const callFlat = function callFlat(
   client: FlatClient,
   tag: string,
   args: ActionCallArg[],
-  callOpts?: CallOptions
+  callOpts?: CallOptions,
+  timeoutMs?: number
 ) {
   const caller = client[tag];
   if (!caller) {
@@ -491,16 +539,26 @@ const callFlat = function callFlat(
     return streamToAsyncGenerator(result, callOpts?.signal);
   }
   // SAFETY: non-stream RpcCaller results are Effects runnable via Effect.runPromise.
-  return Effect.runPromise(result as Effect.Effect<ActionCallResult>, {
-    signal: callOpts?.signal,
-  });
+  const unary = result as Effect.Effect<ActionCallResult, Error>;
+  const bounded =
+    timeoutMs === undefined
+      ? unary
+      : Effect.timeoutOrElse(unary, {
+          duration: `${timeoutMs} millis`,
+          orElse: () =>
+            Effect.fail(
+              new Error(`Action ${tag} timed out after ${timeoutMs}ms`)
+            ),
+        });
+  return Effect.runPromise(bounded, { signal: callOpts?.signal });
 };
 
 const callFlatStreamResilient = function callFlatStreamResilient(
   client: FlatClient,
   tag: string,
   args: ActionCallArg[],
-  callOpts?: CallOptions
+  callOpts: CallOptions | undefined,
+  maxReconnects: number
 ) {
   return (async function* resilientStream(): AsyncGenerator<ActionCallResult> {
     let attempt = 0;
@@ -519,7 +577,11 @@ const callFlatStreamResilient = function callFlatStreamResilient(
         return;
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
-        if (isAbortError(err, callOpts?.signal) || !isTransientWsClose(err)) {
+        if (
+          isAbortError(err, callOpts?.signal) ||
+          !isTransientWsClose(err) ||
+          attempt >= maxReconnects
+        ) {
           throw error;
         }
         attempt += 1;
@@ -563,7 +625,12 @@ const isCallOptions = function isCallOptions(
   return "signal" in bag || "idempotencyKey" in bag;
 };
 
-const nestClient = function nestClient(group: ActionGroup, flat: FlatClient) {
+const nestClient = function nestClient(
+  group: ActionGroup,
+  flat: FlatClient,
+  options: RpcClientOptions
+) {
+  const maxReconnects = options.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
   const nested: NestedClient = {};
   for (const tag of group.requests.keys()) {
     const dot = tag.indexOf(".");
@@ -579,9 +646,15 @@ const nestClient = function nestClient(group: ActionGroup, flat: FlatClient) {
       const params = hasSignal ? args.slice(0, -1) : args;
       const callOpts = hasSignal ? opts : undefined;
       if (isStreamTag(group, tag)) {
-        return callFlatStreamResilient(flat, tag, params, callOpts);
+        return callFlatStreamResilient(
+          flat,
+          tag,
+          params,
+          callOpts,
+          maxReconnects
+        );
       }
-      return callFlat(flat, tag, params, callOpts);
+      return callFlat(flat, tag, params, callOpts, options.timeout);
     };
   }
   return nested;
@@ -598,7 +671,7 @@ export const createClient = function createClient(
       try {
         const flat = await Effect.runPromise(loadClient(group, options));
         // SAFETY: RpcClient.make yields a tag-keyed service; never bridges Effect's generated client to FlatClient.
-        return nestClient(group, flat as never);
+        return nestClient(group, flat as never, options);
       } catch (error) {
         clientCache.delete(key);
         throw error;

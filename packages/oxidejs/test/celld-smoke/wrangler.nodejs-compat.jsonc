@@ -1,0 +1,7 @@
+// Same smoke app with `nodejs_compat` (see wrangler.jsonc).
+{
+  "name": "oxide-celld-smoke",
+  "main": ".build/index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+}

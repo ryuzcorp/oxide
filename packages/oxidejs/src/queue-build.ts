@@ -317,7 +317,7 @@ export const generateQueueHandlerModule = function generateQueueHandlerModule(
     return `export async function handleQueue() {\n  throw new Error("oxidejs: no queues registered");\n}\n`;
   }
   const lines = [
-    `import { dispatchQueueBatch, readQueueMeta } from "oxidejs";`,
+    `import { dispatchQueueBatch, readQueueMeta, withRequestStore } from "oxidejs";`,
   ];
   const entries: string[] = [];
   for (const [i, mod] of modules.entries()) {
@@ -343,7 +343,12 @@ export const generateQueueHandlerModule = function generateQueueHandlerModule(
     `  if (!meta) {`,
     `    throw new Error("oxidejs: no queue handler for " + batch.queue);`,
     `  }`,
-    `  return dispatchQueueBatch(meta, batch, env, ctx);`,
+    // A request store like workflow run(): useEnv() and queue/workflow
+    // handles work in a consumer (and the default dispatch).
+    `  return withRequestStore(`,
+    `    { env, fetchCtx: ctx, req: new Request("https://oxide.local/queue") },`,
+    `    () => dispatchQueueBatch(meta, batch, env, ctx)`,
+    `  );`,
     `}`
   );
   return `${lines.join("\n")}\n`;

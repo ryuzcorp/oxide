@@ -198,6 +198,7 @@ const actionMiddleware = function actionMiddleware(
   loadRpc: () => Promise<RpcDevModule>,
   actionPath: string,
   sameOrigin: boolean,
+  timeoutMs: number | undefined,
   bodyLimit: number,
   onError?: (error: Error) => void
 ) {
@@ -215,6 +216,7 @@ const actionMiddleware = function actionMiddleware(
           {
             path: actionPath,
             sameOrigin,
+            timeoutMs,
           }
         );
         const response = await handler(await nodeToWebRequest(req, bodyLimit));
@@ -278,7 +280,8 @@ const attachActionUpgrade = function attachActionUpgrade(
   loadRouter: () => Promise<{ actionsHandlers: unknown; default: unknown }>,
   loadRpc: () => Promise<RpcDevModule>,
   actionPath: string,
-  sameOrigin: boolean
+  sameOrigin: boolean,
+  timeoutMs: number | undefined
 ) {
   if (!httpServer) {
     return;
@@ -303,6 +306,7 @@ const attachActionUpgrade = function attachActionUpgrade(
             {
               path: actionPath,
               sameOrigin,
+              timeoutMs,
             }
           );
           // SAFETY: Node upgrade socket is a Duplex; crossws handleUpgrade accepts the broader net.Socket shape.
@@ -511,7 +515,8 @@ const loadVirtualClient = function loadVirtualClient(
   return generateClientModule(
     transport,
     resolved?.actionHeaders ?? options?.actionHeaders,
-    resolved?.actionPath
+    resolved?.actionPath,
+    resolved?.actionTimeout
   );
 };
 
@@ -605,6 +610,7 @@ const loadVirtualWorker = function loadVirtualWorker(
     actionOpenRpc: resolved.actionOpenRpc,
     actionPath: resolved.actionPath,
     actionSameOrigin: resolved.actionSameOrigin,
+    actionTimeout: resolved.actionTimeout,
     actions: resolved.actions,
     bodyLimit: resolved.bodyLimit,
     clientDir: resolved.clientDir,
@@ -946,7 +952,8 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
               loadRouter,
               loadRpcModule,
               opts.actionPath,
-              opts.actionSameOrigin
+              opts.actionSameOrigin,
+              opts.actionTimeout
             );
           } else {
             server.middlewares.use(
@@ -955,6 +962,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
                 loadRpcModule,
                 opts.actionPath,
                 opts.actionSameOrigin,
+                opts.actionTimeout,
                 opts.bodyLimit
               )
             );
@@ -1090,6 +1098,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
               loadRpc,
               opts.actionPath,
               opts.actionSameOrigin,
+              opts.actionTimeout,
               opts.bodyLimit,
               logActionError
             )
@@ -1102,7 +1111,8 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
             loadRouter,
             loadRpc,
             opts.actionPath,
-            opts.actionSameOrigin
+            opts.actionSameOrigin,
+            opts.actionTimeout
           );
         }
 

@@ -15,6 +15,8 @@ interface JsonObject {
 }
 
 const INTERNAL: JsonRpcErrorBody = { code: -32_603, message: "Internal error" };
+/** Cap on one logged defect, so a huge cause tree cannot flood the log. */
+const MAX_LOGGED_DEFECT_CHARS = 4000;
 const NDJSON_CONTENT = "application/json-rpc";
 /** Application error code for Schema-tagged Fail values (not JSON-RPC parse/params). */
 const APPLICATION_ERROR = -32_000;
@@ -276,6 +278,14 @@ export const scrubRpcMessage = function scrubRpcMessage(
   }
 
   const scrubbedError = scrubError(msg["error"]);
+  if (scrubbedError.code === INTERNAL.code) {
+    // The client only sees "Internal error"; keep the cause in the server log,
+    // or a Worker-side defect leaves no trace at all.
+    console.error(
+      "oxidejs: action failed with an internal error:",
+      JSON.stringify(msg["error"]).slice(0, MAX_LOGGED_DEFECT_CHARS)
+    );
+  }
   let { id } = msg;
   if (id === -32_603) {
     const next = state.remaining.values().next();

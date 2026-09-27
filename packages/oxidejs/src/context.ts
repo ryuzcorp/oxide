@@ -12,6 +12,8 @@ export {
   __setNeedsSyncRequestStoreForTests,
   getRequestStore,
   inWebcontainer,
+  isWebcontainerVersions,
+  nextRequestScopedId,
   needsSyncRequestStore,
   peekRequestStore,
   runWithRequest,

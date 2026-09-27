@@ -86,4 +86,36 @@ describe("liveQuery", () => {
     }
     expect(values).toEqual([4]);
   });
+
+  test("a mutation whose predecessor never releases still runs after mutateWaitMs", async () => {
+    const q = liveQuery<number>({
+      mutateWaitMs: 50,
+      topic: `orphan-${crypto.randomUUID()}`,
+    });
+    // A mutation that never settles, like one whose request the host dropped.
+    void q.mutate(() => Effect.runPromise(Effect.never));
+    const started = Date.now();
+    const value = await q.mutate(() => Promise.resolve(7));
+    expect(value).toBe(7);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("close() ends open streams and frees the topic", async () => {
+    const topic = `close-${crypto.randomUUID()}`;
+    const q = liveQuery<number>({ topic });
+    const collected = Effect.runPromise(
+      Stream.runCollect(q.stream().pipe(Stream.take(5)))
+    );
+    q.publish(1);
+    await Bun.sleep(5);
+    q.close();
+    const values = await collected;
+    expect([...values].length).toBeLessThanOrEqual(1);
+    // A new handle on the same topic gets a fresh hub.
+    const again = liveQuery<number>({ topic });
+    again.publish(2);
+    const iter = again.values()[Symbol.asyncIterator]();
+    expect(await iter.next()).toEqual({ done: false, value: 2 });
+    await iter.return?.();
+  });
 });

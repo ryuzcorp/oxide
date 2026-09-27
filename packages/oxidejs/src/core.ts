@@ -134,6 +134,7 @@ interface ResolvedActions {
   openrpc: boolean;
   path: string;
   sameOrigin: boolean;
+  timeout: number | undefined;
   transport: OxidejsActionTransport;
 }
 
@@ -145,6 +146,7 @@ const resolveActions = function resolveActions(
       openrpc: false,
       path: ACTION_PATH,
       sameOrigin: true,
+      timeout: undefined,
       transport: "http",
     };
   }
@@ -153,6 +155,7 @@ const resolveActions = function resolveActions(
       openrpc: false,
       path: ACTION_PATH,
       sameOrigin: true,
+      timeout: undefined,
       transport: raw,
     };
   }
@@ -171,10 +174,17 @@ const resolveActions = function resolveActions(
       `oxidejs: actions.path must start with "/" and contain no query string (got "${actionsPath}")`
     );
   }
+  const { timeout } = raw;
+  if (timeout !== undefined && !(Number.isFinite(timeout) && timeout > 0)) {
+    throw new Error(
+      `oxidejs: actions.timeout must be a positive number of milliseconds (got ${String(timeout)})`
+    );
+  }
   return {
     openrpc: transport !== "ws" && raw.openrpc === true,
     path: actionsPath,
     sameOrigin: raw.sameOrigin ?? true,
+    timeout,
     transport,
   };
 };
@@ -270,6 +280,7 @@ export const resolveOptions = function resolveOptions(
     path: actionPath,
     sameOrigin: actionSameOrigin,
     openrpc: actionOpenRpc,
+    timeout: actionTimeout,
   } = resolveActions(raw?.actions);
   const hasClient = hasHtmlEntry(rootAbs, config);
   const hasPublic = fs.existsSync(path.join(rootAbs, "public"));
@@ -280,6 +291,7 @@ export const resolveOptions = function resolveOptions(
     actionOpenRpc,
     actionPath,
     actionSameOrigin,
+    actionTimeout,
     actions,
     bodyLimit: raw?.bodyLimit ?? 1_048_576,
     clientDir,

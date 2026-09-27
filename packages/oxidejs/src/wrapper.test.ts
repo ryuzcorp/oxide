@@ -10,6 +10,20 @@ const BASE = {
 };
 
 describe("generateWorkerWrapper", () => {
+  test("passes actions.timeout to the action handler", () => {
+    const out = generateWorkerWrapper("/x/server.ts", {
+      ...BASE,
+      actionTimeout: 15_000,
+      hasActions: true,
+    });
+    expect(out).toContain("timeoutMs: 15000");
+    // The body limit reaches the Worker action handler, not only Node.
+    expect(out).toContain("maxBodyBytes: 1048576");
+    expect(
+      generateWorkerWrapper("/x/server.ts", { ...BASE, hasActions: true })
+    ).not.toContain("timeoutMs");
+  });
+
   test("middleware handlers run before the action gate", () => {
     const out = generateWorkerWrapper("/x/server.ts", {
       ...BASE,

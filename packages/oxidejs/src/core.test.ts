@@ -85,6 +85,17 @@ describe("resolveOptions", () => {
     expect(resolved.actionSameOrigin).toBe(false);
   });
 
+  test("resolves actions.timeout and rejects a non-positive one", () => {
+    expect(
+      resolveOptions({ actions: { timeout: 15_000 } }, process.cwd())
+        .actionTimeout
+    ).toBe(15_000);
+    expect(resolveOptions({}, process.cwd()).actionTimeout).toBeUndefined();
+    expect(() =>
+      resolveOptions({ actions: { timeout: 0 } }, process.cwd())
+    ).toThrow("actions.timeout must be a positive number");
+  });
+
   test("resolves actions.openrpc", () => {
     expect(
       resolveOptions({ actions: { openrpc: true } }, process.cwd())

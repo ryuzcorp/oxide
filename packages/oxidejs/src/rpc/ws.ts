@@ -35,6 +35,8 @@ export interface WsHooksOptions {
   maxMessageSize?: number;
   path?: string;
   sameOrigin?: boolean;
+  /** Per-message action deadline in milliseconds. See `ActionHandlerOptions.timeoutMs`. */
+  timeoutMs?: number | undefined;
 }
 
 /** Hostname without port; brackets stripped for IPv6. */
@@ -290,6 +292,7 @@ export const createWsHooks = function createWsHooks(
   const baseOptions: ActionHandlerOptions = {
     path,
     sameOrigin,
+    timeoutMs: options.timeoutMs,
     // Synthetic POST into createActionHandler — NDJSON over HTTP framing, not Effect's WS protocol.
     transport: "http",
   };

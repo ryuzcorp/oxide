@@ -1,6 +1,37 @@
 # Changelog
 
-## 0.5.4
+## Unreleased
+
+### Security
+
+- Concurrent actions could read another request's context. The Effect RPC runtime was built once and cached, and its server fibers kept the request context of the request that started them, so under concurrency `useRequest()` / `useEnv()` / `getRequestStore()` inside an action could return a different request (its headers, cookies, env) — measured 29 of 30 concurrent requests on Bun. Every action call now runs in its own runtime on every host
+
+### Added
+
+- `actions.timeout` (milliseconds): an action that has not answered in time is interrupted and answers with a JSON-RPC `-32603` error. Each call of a batch has its own deadline, so one slow call no longer fails the others. A stream counts as answered at its first frame. `createActionHandler` / `createWsHooks` take it as `timeoutMs`
+- The generated client rejects a call 5 s after the server deadline (`actions.timeout`), for a hung network or proxy. `createClient` takes `timeout`, `retries` (default 2) and `maxReconnects` (default 8): an HTTP POST that failed in transit (network error, 502, 503, 504) is resent only when every call in it carries an `idempotencyKey`, and a WebSocket stream stops reconnecting after `maxReconnects`
+- `createActionHandler({ maxBodyBytes })` refuses a larger body with HTTP 413; the worker preset passes `bodyLimit`, which before only applied to Node and dev
+- `liveQuery({ mutateWaitMs })` (default 10000) and `liveQuery(...).close()`
+- `bun run smoke:celld` (and a CI job) boots a celld node on the action server built from source and checks concurrency, request context, batch timeouts and recovery
+
+### Changed
+
+- A batch answers each call as soon as it ends instead of after the slowest one
+- `disposeActionHandler` is a no-op: nothing is cached to dispose
+- The sync request-store fallback (a module-global slot) is used on WebContainer only. Workers and celld keep the store in AsyncLocalStorage across `await`; the slot could hand one request's context to a concurrent one
+- A queue consumer retries only the messages whose workflow failed to start and acks the rest, instead of retrying the whole batch
+- Failed producer-side workflow starts (`producerStart`) are logged instead of swallowed
+
+### Fixed
+
+- celld: concurrent actions hung forever and then wedged the isolate until restart. celld's `node:process` answers every unknown `versions` key with a stub function, so `process.versions.webcontainer` read as truthy and every action queued behind one cross-request gate; a request the host cancelled never released it. WebContainer detection now requires a version string
+- Worker hosts (Cloudflare Workers, celld) stalled on the cached runtime: the host drops a finished request's pending work
+- `withRequestEntry` no longer chains Worker requests behind each other; only WebContainer serializes entry
+- Two `queue.send()` calls, a `sendBatch()`, or a `workflow.start()` in one action with an idempotency key all reused that key as their id, so every message after the first was taken for the first and its workflow never started. Ids are now `key`, `key:1`, `key:2`, … per call (stable across retries of the same RPC call)
+- Queue consumers and cron handlers run inside a request store, like workflow `run()`: `useEnv()`, `queue.send()` and `workflow.start()` no longer throw `request context is unavailable` there
+- A `liveQuery` mutation waits at most `mutateWaitMs` for the previous one on its topic; a mutation whose request the host dropped no longer blocks the topic for good
+
+## 0.5.5
 
 ### Added
 

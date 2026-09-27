@@ -270,16 +270,25 @@ export const assetRelPath = function assetRelPath(
 
 interface ClientModuleOpts {
   headers?: OxidejsActionHeaders;
+  timeout?: number;
   transport?: "ws";
   url: string;
 }
 
+/** Client grace over the server deadline: the server's own timeout error
+ * should win; the client bound catches a hung network or proxy. */
+const CLIENT_TIMEOUT_GRACE_MS = 5000;
+
 export const generateClientModule = function generateClientModule(
   transport: OxidejsActionTransport = "http",
   headers?: OxidejsActionHeaders,
-  actionPath: string = ACTION_PATH
+  actionPath: string = ACTION_PATH,
+  serverTimeout?: number
 ): string {
   const opts: ClientModuleOpts = { url: actionPath };
+  if (serverTimeout !== undefined) {
+    opts.timeout = serverTimeout + CLIENT_TIMEOUT_GRACE_MS;
+  }
   if (transport === "ws") {
     opts.transport = "ws";
   }
@@ -620,6 +629,7 @@ interface WorkerWrapperOpts {
   actionOpenRpc?: boolean;
   actionPath?: string;
   actionSameOrigin?: boolean;
+  actionTimeout?: number | undefined;
   actions?: OxidejsActionTransport;
   bodyLimit?: number;
   /** Worker preset (`preset: "worker"`). */
@@ -847,7 +857,9 @@ const buildActionImports = function buildActionImports(
   ws: boolean,
   actionPath: string,
   sameOrigin: boolean,
-  openrpc: boolean
+  openrpc: boolean,
+  timeout: number | undefined,
+  bodyLimit: number
 ): string {
   if (!hasActions) {
     return openrpc
@@ -861,15 +873,17 @@ const __openRpcEntries = [];
 import { actionsOpenRpcEntries as __openRpcEntries } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
 `
     : "";
+  const timeoutOpt =
+    timeout === undefined ? "" : `, timeoutMs: ${JSON.stringify(timeout)}`;
   if (ws) {
     return `${openRpcImport}import { createWsHooks } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin} });
+const __ws = createWsHooks(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}${timeoutOpt} });
 `;
   }
   return `${openRpcImport}import { createActionHandler } from "oxidejs/rpc";
 import { actionsGroup, actionsHandlers } from ${JSON.stringify(VIRTUAL_ACTIONS_ID)};
-const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}, createContext: (req) => req[__fetch] ?? {} });
+const __rpc = createActionHandler(actionsGroup, actionsHandlers, { path: ${JSON.stringify(actionPath)}, sameOrigin: ${sameOrigin}${timeoutOpt}, maxBodyBytes: ${JSON.stringify(bodyLimit)}, createContext: (req) => req[__fetch] ?? {} });
 `;
 };
 
@@ -1081,7 +1095,9 @@ export const generateWorkerWrapper = function generateWorkerWrapper(
     ws,
     actionPath,
     sameOrigin,
-    openrpc
+    openrpc,
+    opts.actionTimeout,
+    bodyLimit
   );
   const actionMatchFn = `const __actionMatch = (p) => p === ${JSON.stringify(actionPath)} || p === ${JSON.stringify(`${actionPath}/`)};`;
   const openRpcGate = buildOpenRpcGate(openrpc, actionPath);

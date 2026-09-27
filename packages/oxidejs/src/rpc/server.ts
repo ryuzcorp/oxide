@@ -6,6 +6,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { ACTION_PATH, matchesActionPath } from "../actions";
 import type { ActionContext } from "../context";
 import { runWithRequest, withRequestEntry } from "../context";
+import type { OxidejsJson } from "../types";
 import { isSameOrigin } from "./same-origin";
 import {
   ensureNdjsonBody,
@@ -14,6 +15,7 @@ import {
   scrubNdjsonTransform,
   scrubRpcJson,
 } from "./scrub";
+import type { JsonRpcId } from "./scrub";
 
 export const IDEMPOTENCY_HEADER = "x-oxide-idempotency-key";
 
@@ -21,6 +23,18 @@ export interface ActionHandlerOptions {
   createContext?: (req: Request) => ActionContext | Promise<ActionContext>;
   path?: string;
   sameOrigin?: boolean;
+  /**
+   * Reject a request body larger than this many bytes with HTTP 413 before
+   * any action runs. Default: no limit (the host's own limit applies).
+   */
+  maxBodyBytes?: number | undefined;
+  /**
+   * Answer with a JSON-RPC error when an action has not produced its response
+   * within this many milliseconds, and interrupt it. Each call of a batch has
+   * its own deadline. A stream counts as answered at its first frame.
+   * Default: no limit.
+   */
+  timeoutMs?: number | undefined;
   transport?: "http" | "ws";
 }
 
@@ -105,25 +119,7 @@ interface HandlerBundle {
 
 type ActionGroup = RpcGroup.RpcGroup<Rpc.Any>;
 
-const bundles = new Map<string, HandlerBundle>();
-const groupIds = new WeakMap<ActionGroup, number>();
-let nextGroupId = 0;
-
 const serialization = RpcSerialization.layerNdJsonRpc();
-
-const bundleKey = function bundleKey(
-  group: ActionGroup,
-  path: string,
-  transport: "http" | "ws"
-) {
-  let id = groupIds.get(group);
-  if (id === undefined) {
-    id = nextGroupId;
-    nextGroupId += 1;
-    groupIds.set(group, id);
-  }
-  return `${id}:${path}:${transport}`;
-};
 
 const forbidden = function forbidden(): Response {
   return Response.json(JSON_RPC_FORBIDDEN, {
@@ -139,6 +135,27 @@ const methodNotAllowed = function methodNotAllowed(): Response {
   });
 };
 
+const payloadTooLarge = function payloadTooLarge(maxBytes: number): Response {
+  return Response.json(
+    {
+      error: {
+        code: -32_600,
+        message: `Payload too large (limit ${maxBytes} bytes)`,
+      },
+      id: null,
+      jsonrpc: "2.0",
+    },
+    { status: 413 }
+  );
+};
+
+/**
+ * One Effect RPC runtime per call. A runtime shared across requests is unsafe
+ * on every host: its server fibers keep the request context of the request
+ * that started them, so a concurrent action could read another request's
+ * `useRequest()` / `useEnv()`. On Worker hosts (Cloudflare Workers, celld) it
+ * also stalls, because the host drops a finished request's pending work.
+ */
 const buildBundle = function buildBundle(
   group: ActionGroup,
   handlers: Layer.Layer<unknown, unknown, unknown>,
@@ -158,25 +175,9 @@ const buildBundle = function buildBundle(
   }) as HandlerBundle;
 };
 
-const bundleFor = function bundleFor(
-  group: ActionGroup,
-  handlers: Layer.Layer<unknown, unknown, unknown>,
-  path: string,
-  transport: "http" | "ws"
-) {
-  const key = bundleKey(group, path, transport);
-  const cached = bundles.get(key);
-  if (cached) {
-    return cached;
-  }
-  const built = buildBundle(group, handlers, path, transport);
-  bundles.set(key, built);
-  return built;
-};
-
 const scrubJsonResponse = function scrubJsonResponse(
   response: Response,
-  requestIds: ReturnType<typeof extractJsonRpcRequestIds>
+  requestIds: JsonRpcId[]
 ): Response {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) {
@@ -206,7 +207,7 @@ const scrubJsonResponse = function scrubJsonResponse(
 
 const scrubBufferedJson = async function scrubBufferedJson(
   response: Response,
-  requestIds: ReturnType<typeof extractJsonRpcRequestIds>
+  requestIds: JsonRpcId[]
 ): Promise<Response> {
   const text = await response.text();
   const headers = new Headers(response.headers);
@@ -218,6 +219,200 @@ const scrubBufferedJson = async function scrubBufferedJson(
   });
 };
 
+const INTERNAL_ERROR_CODE = -32_603;
+
+/** One JSON-RPC error line per request id, in the NDJSON the client reads. */
+const errorLines = function errorLines(
+  requestIds: JsonRpcId[],
+  message: string
+): string {
+  const ids = requestIds.length > 0 ? requestIds : [null];
+  return ids
+    .map(
+      (id) =>
+        `${JSON.stringify({
+          error: { code: INTERNAL_ERROR_CODE, message },
+          id,
+          jsonrpc: "2.0",
+        })}\n`
+    )
+    .join("");
+};
+
+const timeoutMessage = function timeoutMessage(timeoutMs: number): string {
+  return `Action timed out after ${timeoutMs}ms`;
+};
+
+const TIMED_OUT = Symbol("oxidejs.actionTimeout");
+
+/** Race `run` against `timeoutMs`; the timer is cleared either way. */
+const withTimeout = async function withTimeout<T>(
+  run: Promise<T>,
+  timeoutMs: number | undefined
+): Promise<T | typeof TIMED_OUT> {
+  if (timeoutMs === undefined) {
+    return await run;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // oxlint-disable-next-line promise/avoid-new -- a timer-backed race needs its own Promise
+  const expired = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+  });
+  try {
+    return await Promise.race([run, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/** Tear a runtime down; a failed teardown has nobody left to tell. */
+const disposeQuietly = async function disposeQuietly(
+  dispose: () => Promise<void>
+): Promise<void> {
+  try {
+    await dispose();
+  } catch {
+    // The response is already decided; a failed teardown changes nothing.
+  }
+};
+
+/** Dispose a per-call runtime once the response body is done (or dropped). */
+const disposeAfterBody = function disposeAfterBody(
+  response: Response,
+  dispose: () => Promise<void>
+): Response {
+  const release = () => disposeQuietly(dispose);
+  if (!response.body) {
+    void release();
+    return response;
+  }
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    cancel: async (reason) => {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        await release();
+      }
+    },
+    pull: async (controller) => {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          await release();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+        await release();
+      }
+    },
+  });
+  return new Response(body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+};
+
+/** One JSON-RPC call of a request body: its NDJSON frame and its ids. */
+interface ActionCall {
+  body: Uint8Array<ArrayBuffer>;
+  ids: JsonRpcId[];
+}
+
+const encoder = new TextEncoder();
+
+/**
+ * Split a body into its calls: a JSON array (batch) or several NDJSON lines
+ * become one call each. Anything that does not parse stays one call, so
+ * Effect answers it with its own parse error.
+ */
+const splitCalls = function splitCalls(
+  rawBody: Uint8Array<ArrayBuffer>
+): ActionCall[] {
+  const whole = [{ body: rawBody, ids: extractJsonRpcRequestIds(rawBody) }];
+  const text = new TextDecoder().decode(rawBody).replace(/^\uFEFF/u, "");
+  const frames: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+    let parsed: OxidejsJson;
+    try {
+      // SAFETY: JSON.parse yields JSON values; OxidejsJson is the JSON value union.
+      parsed = JSON.parse(line) as OxidejsJson;
+    } catch {
+      return whole;
+    }
+    if (!Array.isArray(parsed)) {
+      frames.push(line);
+      continue;
+    }
+    if (parsed.length === 0) {
+      return whole;
+    }
+    for (const frame of parsed) {
+      frames.push(JSON.stringify(frame));
+    }
+  }
+  if (frames.length <= 1) {
+    return whole;
+  }
+  return frames.map((frame) => ({
+    body: encoder.encode(`${frame}\n`),
+    ids: extractJsonRpcRequestIds(frame),
+  }));
+};
+
+/** An AbortController that also aborts when `parent` does. */
+const linkedAbort = function linkedAbort(parent: AbortSignal): AbortController {
+  const abort = new AbortController();
+  if (parent.aborted) {
+    abort.abort(parent.reason);
+  } else {
+    parent.addEventListener("abort", () => abort.abort(parent.reason), {
+      once: true,
+    });
+  }
+  return abort;
+};
+
+/** Stream each call's NDJSON lines to the client as soon as that call ends. */
+const mergeCallResponses = function mergeCallResponses(
+  calls: ActionCall[],
+  pending: Promise<Response>[]
+): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      await Promise.all(
+        pending.map(async (response, index) => {
+          let text: string;
+          try {
+            const settled = await response;
+            text = await settled.text();
+          } catch {
+            text = errorLines(calls[index]?.ids ?? [], "Internal error");
+          }
+          if (text === "") {
+            return;
+          }
+          controller.enqueue(
+            encoder.encode(text.endsWith("\n") ? text : `${text}\n`)
+          );
+        })
+      );
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    headers: { "content-type": NDJSON_CONTENT },
+    status: 200,
+  });
+};
+
 export const createActionHandler = function createActionHandler(
   group: ActionGroup,
   handlers: Layer.Layer<unknown, unknown, unknown>,
@@ -226,6 +421,90 @@ export const createActionHandler = function createActionHandler(
   const path = options.path ?? ACTION_PATH;
   const transport = options.transport ?? "http";
   const sameOrigin = options.sameOrigin ?? true;
+  const { maxBodyBytes, timeoutMs } = options;
+
+  /** Run one call in its own runtime, bounded by `timeoutMs`. */
+  const runCall = async function runCall(
+    request: Request,
+    call: ActionCall,
+    extra: Partial<ActionContext>
+  ): Promise<Response> {
+    const headers = new Headers(request.headers);
+    // Body is always NDJSON (trailing newline). Match the serialization layer.
+    headers.set("content-type", NDJSON_CONTENT);
+    headers.delete("content-length");
+    // Aborts when the client goes away or the call times out.
+    const abort = linkedAbort(request.signal);
+    const forwarded = new Request(request.url, {
+      body: call.body,
+      headers,
+      method: request.method,
+      signal: abort.signal,
+    });
+    const idempotencyKey =
+      extra.idempotencyKey ?? extractIdempotencyKey(call.body, request.headers);
+    const callExtra: Partial<ActionContext> = { ...extra };
+    if (idempotencyKey) {
+      callExtra.idempotencyKey = idempotencyKey;
+    }
+
+    let bundle: HandlerBundle | undefined;
+    let outcome: Response | typeof TIMED_OUT | undefined;
+    try {
+      // Build the runtime inside this call's request context: its server
+      // fibers are forked during the build, and on celld they only see the
+      // store they were created under (without `nodejs_compat`, a runtime
+      // built outside it answers every action with "request context is
+      // unavailable").
+      outcome = await withTimeout(
+        runWithRequest(
+          forwarded,
+          () => {
+            const built = buildBundle(group, handlers, path, transport);
+            bundle = built;
+            return built.handler(forwarded);
+          },
+          callExtra
+        ),
+        timeoutMs
+      );
+    } finally {
+      // A thrown handler leaves nothing to stream; release its runtime now.
+      if (outcome === undefined) {
+        await bundle?.dispose();
+      }
+    }
+
+    if (outcome === TIMED_OUT) {
+      abort.abort(new Error("oxidejs: action timed out"));
+      // Do not await: the runtime we are tearing down is the one that hung.
+      if (bundle) {
+        void disposeQuietly(bundle.dispose);
+      }
+      return new Response(
+        errorLines(call.ids, timeoutMessage(timeoutMs ?? 0)),
+        {
+          headers: { "content-type": NDJSON_CONTENT },
+          status: 200,
+        }
+      );
+    }
+
+    const dispose = bundle?.dispose ?? (() => Promise.resolve());
+    const contentType = outcome.headers.get("content-type") ?? "";
+    if (
+      contentType.includes(NDJSON_CONTENT) ||
+      contentType.includes("ndjson")
+    ) {
+      return disposeAfterBody(scrubJsonResponse(outcome, call.ids), dispose);
+    }
+    if (contentType.includes("json")) {
+      const buffered = await scrubBufferedJson(outcome, call.ids);
+      await dispose();
+      return buffered;
+    }
+    return disposeAfterBody(outcome, dispose);
+  };
 
   return async function handleActionRequest(
     request: Request
@@ -239,57 +518,50 @@ export const createActionHandler = function createActionHandler(
     if (sameOrigin && !isSameOrigin(request)) {
       return forbidden();
     }
+    if (maxBodyBytes !== undefined) {
+      const declared = Number(request.headers.get("content-length") ?? "0");
+      if (declared > maxBodyBytes) {
+        return payloadTooLarge(maxBodyBytes);
+      }
+    }
 
     return await withRequestEntry(async () => {
-      const rawBody = ensureNdjsonBody(await request.arrayBuffer());
-      const requestIds = extractJsonRpcRequestIds(rawBody);
-      const headers = new Headers(request.headers);
-      // Body is always NDJSON (trailing newline). Match the serialization layer.
-      headers.set("content-type", NDJSON_CONTENT);
-
-      const forwarded = new Request(request.url, {
-        body: rawBody,
-        headers,
-        method: request.method,
-        signal: request.signal,
-      });
-
-      // Host stamps env on the inbound Request; `forwarded` is a clone without it.
+      const buffer = await request.arrayBuffer();
+      if (maxBodyBytes !== undefined && buffer.byteLength > maxBodyBytes) {
+        return payloadTooLarge(maxBodyBytes);
+      }
+      const rawBody = ensureNdjsonBody(buffer);
+      // Host stamps env on the inbound Request; the per-call clones lack it.
       const hostExtra = (await options.createContext?.(request)) ?? {};
-      const idempotencyKey = extractIdempotencyKey(rawBody, request.headers);
+      const headerKey = request.headers.get(IDEMPOTENCY_HEADER);
       const extra: Partial<ActionContext> = { ...hostExtra };
-      if (idempotencyKey) {
-        extra.idempotencyKey = idempotencyKey;
+      if (headerKey) {
+        extra.idempotencyKey = headerKey;
       }
-      const { handler } = bundleFor(group, handlers, path, transport);
-      const response = await runWithRequest(
-        forwarded,
-        () => handler(forwarded),
-        extra
-      );
 
-      const contentType = response.headers.get("content-type") ?? "";
-      if (
-        contentType.includes(NDJSON_CONTENT) ||
-        contentType.includes("ndjson")
-      ) {
-        return scrubJsonResponse(response, requestIds);
+      const calls = splitCalls(rawBody);
+      const [only] = calls;
+      if (calls.length === 1 && only) {
+        return await runCall(request, only, extra);
       }
-      if (contentType.includes("json")) {
-        return scrubBufferedJson(response, requestIds);
-      }
-      return response;
+      // A batch: every call gets its own runtime and deadline, and its result
+      // goes out as soon as it is ready instead of waiting for the slowest.
+      return mergeCallResponses(
+        calls,
+        calls.map((call) => runCall(request, call, extra))
+      );
     });
   };
 };
 
+/**
+ * @deprecated Action runtimes are built per request and disposed with their
+ * response, so there is nothing cached to dispose. Kept for compatibility.
+ */
 export const disposeActionHandler = function disposeActionHandler(
-  group: ActionGroup,
-  path: string = ACTION_PATH,
-  transport: "http" | "ws" = "http"
+  _group?: ActionGroup,
+  _path: string = ACTION_PATH,
+  _transport: "http" | "ws" = "http"
 ) {
-  const key = bundleKey(group, path, transport);
-  const bundle = bundles.get(key);
-  bundles.delete(key);
-  return bundle?.dispose() ?? Promise.resolve();
+  return Promise.resolve();
 };
