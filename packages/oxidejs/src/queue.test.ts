@@ -27,7 +27,7 @@ import {
   resolveQueueWorkflowRefs,
   scanQueueFiles,
 } from "./queue-build";
-import { withRequestStore } from "./request-store";
+import { deriveKeyedId, withRequestStore } from "./request-store";
 import { workflow } from "./workflow";
 import type { WorkflowModule } from "./workflow-build";
 import { parseWorkflowExports } from "./workflow-build";
@@ -771,9 +771,9 @@ export const demos = queue({ name: "demos", workflow: demo, maxBatchSize: 10 })\
         return [first.id, second.id, ...batch.ids, started.id];
       }
     );
-    expect(ids).toEqual(["rpc-1", "rpc-1:1", "rpc-1:2", "rpc-1:3", "rpc-1:4"]);
+    expect(ids).toEqual(["rpc-1", "rpc-1-1", "rpc-1-2", "rpc-1-3", "rpc-1-4"]);
     expect(new Set(sent.map((body) => body.id)).size).toBe(4);
-    expect(created).toEqual(["rpc-1:4"]);
+    expect(created).toEqual(["rpc-1-4"]);
   });
 
   test("a keyed sendBatch derives one id per message", async () => {
@@ -792,7 +792,17 @@ export const demos = queue({ name: "demos", workflow: demo, maxBatchSize: 10 })\
           idempotencyKey: "job",
         })
     );
-    expect(ids).toEqual(["job", "job:1", "job:2"]);
+    expect(ids).toEqual(["job", "job-1", "job-2"]);
+  });
+
+  test("derived ids stay valid Workflows instance ids within 100 chars", () => {
+    const long = "k".repeat(100);
+    const derived = deriveKeyedId(long, 12);
+    expect(derived).toHaveLength(100);
+    expect(derived.endsWith("-12")).toBe(true);
+    expect(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/u.test(deriveKeyedId("job", 3))).toBe(
+      true
+    );
   });
 
   test("dispatchQueueBatch acks started messages and retries only the failed one", async () => {

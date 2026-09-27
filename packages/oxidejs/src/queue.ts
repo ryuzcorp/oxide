@@ -3,7 +3,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
-import { nextRequestScopedId, useEnv } from "./request-store";
+import { deriveKeyedId, nextRequestScopedId, useEnv } from "./request-store";
 import { SchemaDecodeError } from "./with-schema";
 import {
   createWorkflowInstance,
@@ -333,7 +333,7 @@ export const makeQueueEnvelope = function makeQueueEnvelope<P>(
 };
 
 /**
- * Message id: the per-message key, else the call's key (`key`, `key:1`, … by
+ * Message id: the per-message key, else the call's key (`key`, `key-1`, … by
  * position in a batch), else a distinct id derived from the RPC request's
  * key, else a random UUID. Ids become workflow instance ids, so two messages
  * must never share one — the second would be taken for the first and dropped.
@@ -348,7 +348,7 @@ const nextMessageId = function nextMessageId(
   }
   const callKey = options?.idempotencyKey;
   if (callKey !== undefined) {
-    return position === 0 ? callKey : `${callKey}:${position}`;
+    return deriveKeyedId(callKey, position);
   }
   return nextRequestScopedId() ?? crypto.randomUUID();
 };

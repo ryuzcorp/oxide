@@ -385,7 +385,13 @@ const mergeCallResponses = function mergeCallResponses(
   calls: ActionCall[],
   pending: Promise<Response>[]
 ): Response {
+  // Set when the client cancels the body: later results have nowhere to go,
+  // and enqueue on a cancelled stream throws.
+  let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
+    cancel: () => {
+      cancelled = true;
+    },
     start: async (controller) => {
       await Promise.all(
         pending.map(async (response, index) => {
@@ -396,15 +402,22 @@ const mergeCallResponses = function mergeCallResponses(
           } catch {
             text = errorLines(calls[index]?.ids ?? [], "Internal error");
           }
-          if (text === "") {
+          if (text === "" || cancelled) {
             return;
           }
-          controller.enqueue(
-            encoder.encode(text.endsWith("\n") ? text : `${text}\n`)
-          );
+          try {
+            controller.enqueue(
+              encoder.encode(text.endsWith("\n") ? text : `${text}\n`)
+            );
+          } catch {
+            // The stream went away between the check and the enqueue.
+            cancelled = true;
+          }
         })
       );
-      controller.close();
+      if (!cancelled) {
+        controller.close();
+      }
     },
   });
   return new Response(body, {

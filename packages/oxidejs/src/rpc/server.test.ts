@@ -183,6 +183,24 @@ test("a batch streams each result as soon as its call ends", async () => {
   expect(frames(text).map((f) => f.id)).toEqual([2, 1]);
 });
 
+test("cancelling a batch body mid-stream does not break the remaining calls", async () => {
+  const handle = handlerFor(makeProbe(), {}, "100 millis");
+  const res = await handle(
+    post(`[${call("ping", 1)},${call("slow", 2)},${call("slow", 3)}]`)
+  );
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("expected a streamed body");
+  }
+  await reader.read();
+  await reader.cancel();
+  // The slow calls finish after the cancel; their results must be dropped
+  // quietly, and the handler keeps serving.
+  await Bun.sleep(200);
+  const after = await handle(post(call("ping", 4)));
+  expect(frames(await after.text())[0]?.result).toBe("pong");
+});
+
 test("a body over maxBodyBytes is refused with 413 before any action runs", async () => {
   const probe = makeProbe();
   const handle = handlerFor(probe, { maxBodyBytes: 16 });

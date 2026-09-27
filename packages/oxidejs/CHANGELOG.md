@@ -27,9 +27,9 @@
 - celld: concurrent actions hung forever and then wedged the isolate until restart. celld's `node:process` answers every unknown `versions` key with a stub function, so `process.versions.webcontainer` read as truthy and every action queued behind one cross-request gate; a request the host cancelled never released it. WebContainer detection now requires a version string
 - Worker hosts (Cloudflare Workers, celld) stalled on the cached runtime: the host drops a finished request's pending work
 - `withRequestEntry` no longer chains Worker requests behind each other; only WebContainer serializes entry
-- Two `queue.send()` calls, a `sendBatch()`, or a `workflow.start()` in one action with an idempotency key all reused that key as their id, so every message after the first was taken for the first and its workflow never started. Ids are now `key`, `key:1`, `key:2`, … per call (stable across retries of the same RPC call)
+- Two `queue.send()` calls, a `sendBatch()`, or a `workflow.start()` in one action with an idempotency key all reused that key as their id, so every message after the first was taken for the first and its workflow never started. Ids are now `key`, `key-1`, `key-2`, … per call (stable across retries of the same RPC call), valid Workflows instance ids trimmed to 100 chars
 - Queue consumers and cron handlers run inside a request store, like workflow `run()`: `useEnv()`, `queue.send()` and `workflow.start()` no longer throw `request context is unavailable` there
-- A `liveQuery` mutation waits at most `mutateWaitMs` for the previous one on its topic; a mutation whose request the host dropped no longer blocks the topic for good
+- A `liveQuery` mutation waits at most `mutateWaitMs` for the previous one on its topic; a mutation whose request the host dropped no longer blocks the topic for good. A mutation that a newer one overtook during that wait does not publish its older snapshot, and a mutation that finishes after `close()` fails with `LiveQueryClosedError` instead of reporting success
 
 ## 0.5.5
 

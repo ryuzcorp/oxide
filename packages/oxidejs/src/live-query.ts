@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { deferred } from "./deferred";
@@ -7,6 +8,33 @@ import { deferred } from "./deferred";
 const DEFAULT_MUTATE_WAIT_MS = 10_000;
 const HUBS_KEY = Symbol.for("oxidejs.liveQuery.hubs");
 const GATES_KEY = Symbol.for("oxidejs.liveQuery.gates");
+const ORDER_KEY = Symbol.for("oxidejs.liveQuery.order");
+
+/** A mutation finished after `close()` shut its topic down: nobody got its snapshot. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError factory
+export class LiveQueryClosedError extends Schema.TaggedError<LiveQueryClosedError>()(
+  "LiveQueryClosedError",
+  { message: Schema.String, topic: Schema.String }
+) {}
+
+/** Per topic: the last ticket handed to a mutation and the newest one published. */
+interface TopicOrder {
+  issued: number;
+  published: number;
+}
+
+interface OrderBag {
+  [topic: string]: TopicOrder;
+}
+
+const orderFor = function orderFor(topic: string): TopicOrder {
+  // SAFETY: isolate-global topic → mutation order; Symbol.for is oxide-owned.
+  const g = globalThis as typeof globalThis & { [ORDER_KEY]?: OrderBag };
+  g[ORDER_KEY] ??= {};
+  const bag = g[ORDER_KEY];
+  bag[topic] ??= { issued: 0, published: 0 };
+  return bag[topic];
+};
 
 interface HubBag {
   [topic: string]: PubSub.PubSub<unknown>;
@@ -114,7 +142,7 @@ export interface LiveQuery<T> {
    */
   mutateEffect: <E, R>(
     fn: () => Effect.Effect<T, E, R>
-  ) => Effect.Effect<T, E, R>;
+  ) => Effect.Effect<T, E | LiveQueryClosedError, R>;
   /** Serialize Promise work that produces a snapshot, then publish it. */
   mutate: (fn: () => Promise<T>) => Promise<T>;
   publish: (value: T) => void;
@@ -153,18 +181,43 @@ export const liveQuery = function liveQuery<T>(
     Effect.runSync(PubSub.publish(hub, value));
   };
 
+  /**
+   * Each mutation takes a ticket in gate order. The bounded gate can let a
+   * later mutation run while an earlier one is still working, so a mutation
+   * publishes only if no newer ticket has published yet: an older snapshot
+   * never overwrites a newer one. A mutation whose topic was closed fails
+   * with {@link LiveQueryClosedError} instead of reporting success.
+   */
   const mutateEffect = function mutateEffect<E, R>(
     fn: () => Effect.Effect<T, E, R>
-  ): Effect.Effect<T, E, R> {
-    return withTopicGate(
-      topic,
-      mutateWaitMs,
-      Effect.gen(function* mutateEffectGen() {
-        const value = yield* fn();
-        publishValue(value);
-        return value;
-      })
-    );
+  ): Effect.Effect<T, E | LiveQueryClosedError, R> {
+    return Effect.suspend(() => {
+      const order = orderFor(topic);
+      order.issued += 1;
+      const ticket = order.issued;
+      return withTopicGate(
+        topic,
+        mutateWaitMs,
+        Effect.gen(function* mutateEffectGen() {
+          const value = yield* fn();
+          if (ticket < order.published) {
+            // Superseded: a newer mutation already published its snapshot.
+            return value;
+          }
+          const published = Effect.runSync(PubSub.publish(hub, value));
+          if (!published) {
+            return yield* Effect.fail(
+              new LiveQueryClosedError({
+                message: `liveQuery topic "${topic}" was closed before its snapshot was published`,
+                topic,
+              })
+            );
+          }
+          order.published = ticket;
+          return value;
+        })
+      );
+    });
   };
 
   const mutate = async function mutate(fn: () => Promise<T>) {

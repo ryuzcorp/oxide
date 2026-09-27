@@ -160,7 +160,7 @@ Stream actions do not support `bind` / `with`. Breaking the `for await` loop or 
 
 ### Live queries
 
-Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — a publish reaches subscribers in the same isolate only, not other Worker isolates or celld nodes — and D1 (or your DB) stays the source of truth. Mutations on one topic run one at a time; one waits at most `mutateWaitMs` (default 10000) for the previous. `close()` shuts a topic's hub down. Prefer Effect `Stream` + `mutateEffect`:
+Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — a publish reaches subscribers in the same isolate only, not other Worker isolates or celld nodes — and D1 (or your DB) stays the source of truth. Mutations on one topic run one at a time; one waits at most `mutateWaitMs` (default 10000) for the previous, and a mutation overtaken during that wait does not publish its older snapshot. `close()` shuts a topic's hub down; a mutation that finishes after it fails with `LiveQueryClosedError`. Prefer Effect `Stream` + `mutateEffect`:
 
 ```ts
 import { Effect, Stream } from "effect";
@@ -258,7 +258,7 @@ await invoices.send({ orderId: "…" });
 await invoices.sendBatch([{ body: { orderId: "…" } }]);
 ```
 
-Oxide merges `queues.producers` / `queues.consumers` via `mergeDurableBindings` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`. Every message gets its own id: with a key, the first send in a request uses it and later sends (and each message of a `sendBatch`) use `key:1`, `key:2`, …, so a retried request reproduces the same ids. The consumer acks the messages it started and retries only the ones that failed. Queue consumers and cron handlers run inside a request store, so `useEnv()`, `queue.send()` and `workflow.start()` work there.
+Oxide merges `queues.producers` / `queues.consumers` via `mergeDurableBindings` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`. Every message gets its own id: with a key, the first send in a request uses it and later sends (and each message of a `sendBatch`) use `key-1`, `key-2`, … (valid Workflows instance ids, trimmed to 100 chars), so a retried request reproduces the same ids. The consumer acks the messages it started and retries only the ones that failed. Queue consumers and cron handlers run inside a request store, so `useEnv()`, `queue.send()` and `workflow.start()` work there.
 
 ```ts
 const { id } = await invoices.send({ orderId: "…" });

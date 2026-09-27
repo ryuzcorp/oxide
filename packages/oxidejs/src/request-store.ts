@@ -310,10 +310,29 @@ export const useFetchCtx = function useFetchCtx():
 
 const derivedIdCounts = new WeakMap<ActionContext, number>();
 
+/** Cloudflare Workflows instance ids: at most 100 chars of `[A-Za-z0-9_-]`. */
+const MAX_INSTANCE_ID_LENGTH = 100;
+
+/**
+ * The id at `position` derived from `key`: the key itself first, then
+ * `key-1`, `key-2`, … A hyphen keeps a valid key a valid Workflows instance
+ * id, and the key is trimmed so the suffixed id stays within 100 chars.
+ */
+export const deriveKeyedId = function deriveKeyedId(
+  key: string,
+  position: number
+): string {
+  if (position === 0) {
+    return key;
+  }
+  const suffix = `-${position}`;
+  return `${key.slice(0, MAX_INSTANCE_ID_LENGTH - suffix.length)}${suffix}`;
+};
+
 /**
  * A distinct, deterministic id for the next queue message or workflow start
  * of the current keyed request, or `undefined` outside a request or without a
- * key. The first call keeps the key; later calls get `key:1`, `key:2`, … So a
+ * key. The first call keeps the key; later calls get `key-1`, `key-2`, … So a
  * retried RPC call (same key, same code path) reproduces the same ids, while
  * two sends in one action no longer share one id and collapse into one
  * workflow instance.
@@ -328,7 +347,7 @@ export const nextRequestScopedId = function nextRequestScopedId():
   }
   const count = derivedIdCounts.get(current) ?? 0;
   derivedIdCounts.set(current, count + 1);
-  return count === 0 ? key : `${key}:${count}`;
+  return deriveKeyedId(key, count);
 };
 
 /** Idempotency key from the client `CallOptions` / RPC headers, if present. */

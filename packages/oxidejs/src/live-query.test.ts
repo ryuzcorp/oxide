@@ -118,4 +118,41 @@ describe("liveQuery", () => {
     expect(await iter.next()).toEqual({ done: false, value: 2 });
     await iter.return?.();
   });
+
+  test("a mutation superseded during the bounded wait does not publish its older snapshot", async () => {
+    const q = liveQuery<string>({
+      mutateWaitMs: 20,
+      topic: `order-${crypto.randomUUID()}`,
+    });
+    const seen: string[] = [];
+    const collected = Effect.runPromise(
+      Stream.runForEach(q.stream().pipe(Stream.take(1)), (value) =>
+        Effect.sync(() => seen.push(value))
+      )
+    );
+    // The older mutation outlives the wait; the newer one runs and publishes first.
+    const older = q.mutate(async () => {
+      await Bun.sleep(80);
+      return "older";
+    });
+    await q.mutate(() => Promise.resolve("newer"));
+    expect(await older).toBe("older");
+    await collected;
+    expect(seen).toEqual(["newer"]);
+    const iter = q.values()[Symbol.asyncIterator]();
+    expect(await iter.next()).toEqual({ done: false, value: "newer" });
+    await iter.return?.();
+  });
+
+  test("a mutation that finishes after close() fails instead of reporting success", async () => {
+    const q = liveQuery<number>({ topic: `closed-${crypto.randomUUID()}` });
+    const pending = q.mutate(async () => {
+      await Bun.sleep(20);
+      return 7;
+    });
+    q.close();
+    await expect(pending).rejects.toMatchObject({
+      _tag: "LiveQueryClosedError",
+    });
+  });
 });
