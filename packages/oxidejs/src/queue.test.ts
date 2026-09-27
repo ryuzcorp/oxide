@@ -27,7 +27,7 @@ import {
   resolveQueueWorkflowRefs,
   scanQueueFiles,
 } from "./queue-build";
-import { withRequestStore } from "./request-store";
+import { deriveKeyedId, withRequestStore } from "./request-store";
 import { workflow } from "./workflow";
 import type { WorkflowModule } from "./workflow-build";
 import { parseWorkflowExports } from "./workflow-build";
@@ -725,5 +725,142 @@ export const demos = queue({ name: "demos", workflow: demo, maxBatchSize: 10 })\
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  test("every send and workflow start in one keyed request gets its own id", async () => {
+    const sent: { id: string }[] = [];
+    const created: string[] = [];
+    const env = {
+      DEMO: {
+        create: (opts?: { id?: string }) => {
+          created.push(opts?.id ?? "");
+          return Promise.resolve({ id: opts?.id ?? "" });
+        },
+        get: (id: string) => Promise.resolve({ id }),
+      },
+      DEMOS: {
+        send: (body: { id: string }) => {
+          sent.push(body);
+          return Promise.resolve();
+        },
+        sendBatch: (messages: Iterable<{ body: { id: string } }>) => {
+          for (const message of messages) {
+            sent.push(message.body);
+          }
+          return Promise.resolve();
+        },
+      },
+    };
+    const demo = workflow({ name: "demo", run: () => Promise.resolve() });
+    const demos = queue({ name: "demos", workflow: demo });
+    const ids = await withRequestStore(
+      {
+        // SAFETY: test fixture stubs Queue / Workflow binding methods.
+        env: env as never,
+        idempotencyKey: "rpc-1",
+        req: new Request("http://localhost/"),
+      },
+      async () => {
+        const first = await demos.send({ n: 1 });
+        const second = await demos.send({ n: 2 });
+        const batch = await demos.sendBatch([
+          { body: { n: 3 } },
+          { body: { n: 4 } },
+        ]);
+        const started = await demo.start({});
+        return [first.id, second.id, ...batch.ids, started.id];
+      }
+    );
+    expect(ids).toEqual(["rpc-1", "rpc-1-1", "rpc-1-2", "rpc-1-3", "rpc-1-4"]);
+    expect(new Set(sent.map((body) => body.id)).size).toBe(4);
+    expect(created).toEqual(["rpc-1-4"]);
+  });
+
+  test("a keyed sendBatch derives one id per message", async () => {
+    const env = {
+      DEMOS: {
+        send: () => Promise.resolve(),
+        sendBatch: () => Promise.resolve(),
+      },
+    };
+    const demos = queue({ name: "demos", workflow: "demo" });
+    const { ids } = await withRequestStore(
+      // SAFETY: test fixture stubs Queue binding methods.
+      { env: env as never, req: new Request("http://localhost/") },
+      () =>
+        demos.sendBatch([{ body: 1 }, { body: 2 }, { body: 3 }], {
+          idempotencyKey: "job",
+        })
+    );
+    expect(ids).toEqual(["job", "job-1", "job-2"]);
+  });
+
+  test("derived ids stay valid Workflows instance ids within 100 chars", () => {
+    const long = "k".repeat(100);
+    const derived = deriveKeyedId(long, 12);
+    expect(derived).toHaveLength(100);
+    expect(derived.endsWith("-12")).toBe(true);
+    expect(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/u.test(deriveKeyedId("job", 3))).toBe(
+      true
+    );
+  });
+
+  test("dispatchQueueBatch acks started messages and retries only the failed one", async () => {
+    const outcome: string[] = [];
+    const env = {
+      DEMO: {
+        create: (opts?: { id?: string }) =>
+          opts?.id === "bad"
+            ? Promise.reject(new Error("boom"))
+            : Promise.resolve({ id: opts?.id ?? "" }),
+        get: (id: string) => Promise.resolve({ id }),
+      },
+    };
+    const message = (id: string) => ({
+      ack: () => outcome.push(`ack:${id}`),
+      body: { id, oxide: "oxidejs.queue", payload: {} },
+      id,
+      retry: () => outcome.push(`retry:${id}`),
+      timestamp: new Date(),
+    });
+    await dispatchQueueBatch(
+      {
+        binding: "DEMOS",
+        name: "demos",
+        workflowBinding: "DEMO",
+        workflowName: "demo",
+      },
+      {
+        ackAll: () => outcome.push("ackAll"),
+        messages: [message("a"), message("bad"), message("c")],
+        queue: "demos",
+        retryAll: () => outcome.push("retryAll"),
+      },
+      env,
+      {}
+    );
+    expect(outcome).toEqual(["ack:a", "retry:bad", "ack:c"]);
+  });
+
+  test("queue handler module runs dispatch inside a request store", () => {
+    // SAFETY: a minimal scanned-module fixture; the generator reads abs, key and exports only.
+    const code = generateQueueHandlerModule([
+      {
+        abs: "/app/src/jobs.server.ts",
+        exports: [
+          {
+            binding: "DEMOS",
+            exportName: "demos",
+            name: "demos",
+            workflowBinding: "DEMO",
+            workflowName: "demo",
+            workflowRef: "demo",
+          },
+        ],
+        key: "jobs",
+      },
+    ] as never);
+    expect(code).toContain("withRequestStore(");
+    expect(code).toContain("fetchCtx: ctx");
   });
 });

@@ -3,9 +3,10 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
-import { useEnv, useIdempotencyKey } from "./request-store";
+import { deriveKeyedId, nextRequestScopedId, useEnv } from "./request-store";
 import { SchemaDecodeError } from "./with-schema";
 import {
+  createWorkflowInstance,
   createWorkflowInstanceBatch,
   toWorkflowBinding,
   WORKFLOW_META,
@@ -331,16 +332,25 @@ export const makeQueueEnvelope = function makeQueueEnvelope<P>(
   return { id, oxide: OXIDE_QUEUE_ENVELOPE, payload };
 };
 
+/**
+ * Message id: the per-message key, else the call's key (`key`, `key-1`, … by
+ * position in a batch), else a distinct id derived from the RPC request's
+ * key, else a random UUID. Ids become workflow instance ids, so two messages
+ * must never share one — the second would be taken for the first and dropped.
+ */
 const nextMessageId = function nextMessageId(
   options: (CallOptions & QueueSendOptions) | undefined,
+  position: number,
   perMessage?: string
 ): string {
-  return (
-    perMessage ??
-    options?.idempotencyKey ??
-    useIdempotencyKey() ??
-    crypto.randomUUID()
-  );
+  if (perMessage !== undefined) {
+    return perMessage;
+  }
+  const callKey = options?.idempotencyKey;
+  if (callKey !== undefined) {
+    return deriveKeyedId(callKey, position);
+  }
+  return nextRequestScopedId() ?? crypto.randomUUID();
 };
 
 interface WorkflowEnvBinding {
@@ -456,7 +466,7 @@ export const queue = function queue<P>(
     // SAFETY: send always receives body as first arg after peel.
     const raw = args[0] as P;
     const decoded = decodePayload(meta.payload, raw);
-    const id = nextMessageId(options);
+    const id = nextMessageId(options, 0);
     const q = requireBinding(binding);
     const sendOpts = { contentType: "json", ...sendOptsFrom(options) };
     await q.send(makeQueueEnvelope(id, decoded), sendOpts);
@@ -467,8 +477,13 @@ export const queue = function queue<P>(
           [{ id, params: decoded }],
           sendOpts.delaySeconds
         );
-      } catch {
-        // Enqueue already succeeded — do not fail the client / cause a resend.
+      } catch (error) {
+        // Enqueue already succeeded — do not fail the client / cause a
+        // resend. The queue consumer still starts the workflow.
+        console.warn(
+          `oxidejs: queue "${meta.name}" producer-side workflow start failed; the consumer will start it`,
+          error
+        );
       }
     }
     return { id };
@@ -491,7 +506,7 @@ export const queue = function queue<P>(
       anyDelay = true;
     }
     for (const message of messages) {
-      const id = nextMessageId(options, message.idempotencyKey);
+      const id = nextMessageId(options, ids.length, message.idempotencyKey);
       ids.push(id);
       const payload = decodePayload(meta.payload, message.body);
       const entry: QueueMessageSendRequest = {
@@ -512,8 +527,13 @@ export const queue = function queue<P>(
     if (meta.producerStart) {
       try {
         await startWorkflowFromProducer(meta, starts, anyDelay ? 1 : undefined);
-      } catch {
-        // Enqueue already succeeded — do not fail the client / cause a resend.
+      } catch (error) {
+        // Enqueue already succeeded — do not fail the client / cause a
+        // resend. The queue consumer still starts the workflow.
+        console.warn(
+          `oxidejs: queue "${meta.name}" producer-side workflow start failed; the consumer will start it`,
+          error
+        );
       }
     }
     return { ids };
@@ -562,11 +582,37 @@ export const dispatchQueueBatch = async function dispatchQueueBatch(
       `oxidejs: workflow binding "${meta.workflowBinding}" is missing for queue "${meta.name}"`
     );
   }
-  const starts: WorkflowCreateOptions[] = batch.messages.map((message) => {
+  const starts = batch.messages.map((message) => {
     const { id, payload } = readQueueEnvelope(message.body, message.id);
-    return { id, params: payload };
+    return { message, start: { id, params: payload } };
   });
-  // Pass the binding through — extracting methods drops `this` on celld/workerd.
-  // SAFETY: create/get narrowed above; keep the host binding as receiver.
-  await createWorkflowInstanceBatch(workflow as WorkflowBinding, starts);
+  try {
+    // SAFETY: create/get narrowed above; keep the host binding as receiver.
+    await createWorkflowInstanceBatch(
+      workflow as WorkflowBinding,
+      starts.map(({ start }) => start)
+    );
+    return;
+  } catch (error) {
+    console.warn(
+      `oxidejs: queue "${meta.name}" batch start failed; retrying per message`,
+      error
+    );
+  }
+  // Per message, so one bad message does not send the whole batch back:
+  // started ones are acked, only the failures are retried.
+  for (const { message, start } of starts) {
+    try {
+      // SAFETY: create/get narrowed above; keep the host binding as receiver.
+      // oxlint-disable-next-line eslint/no-await-in-loop -- sequential starts keep message order
+      await createWorkflowInstance(workflow as WorkflowBinding, start);
+      message.ack();
+    } catch (error) {
+      console.warn(
+        `oxidejs: queue "${meta.name}" message ${start.id} failed to start its workflow; retrying`,
+        error
+      );
+      message.retry();
+    }
+  }
 };

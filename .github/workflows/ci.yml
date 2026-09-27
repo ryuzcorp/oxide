@@ -23,11 +23,33 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun run typecheck
-      - run: bun run lint
+      - run: bun run check
       - run: bun run build
       - run: bun test
       - run: bun run docs:build
       - run: bunx pkg-pr-new publish './packages/*'
+
+  # Bun's test runner cannot reproduce celld's request lifecycle (a finished
+  # or aborted request's pending work is dropped), which is where shared
+  # runtimes and cross-request gates hang. Boot a real celld node on the
+  # action server built from source.
+  celld-smoke:
+    runs-on: ubuntu-latest
+    env:
+      CELLD_VERSION: v0.6.0
+      ESBUILD_VERSION: 0.25.10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - name: Install celld and esbuild
+        run: |
+          curl -fsSL https://celld.dev/install.sh | sh
+          npm install --global "esbuild@${ESBUILD_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: bun run smoke:celld
 
   docs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

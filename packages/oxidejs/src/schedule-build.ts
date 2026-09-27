@@ -312,7 +312,7 @@ export const generateScheduleHandlerModule =
       return `export async function handleSchedule() {\n  throw new Error("oxidejs: no schedules registered");\n}\n`;
     }
     const lines = [
-      `import { dispatchSchedule, readScheduleMeta } from "oxidejs";`,
+      `import { dispatchSchedule, readScheduleMeta, withRequestStore } from "oxidejs";`,
     ];
     const metaVars: string[] = [];
     for (const [i, mod] of modules.entries()) {
@@ -334,7 +334,12 @@ export const generateScheduleHandlerModule =
     lines.push(
       `const __metas = [${metaVars.join(", ")}];`,
       `export async function handleSchedule(controller, env, ctx) {`,
-      `  return dispatchSchedule(__metas, controller, env, ctx);`,
+      // A request store like workflow run(): useEnv() and queue/workflow
+      // handles work in a schedule handler (and the default dispatch).
+      `  return withRequestStore(`,
+      `    { env, fetchCtx: ctx, req: new Request("https://oxide.local/schedule") },`,
+      `    () => dispatchSchedule(__metas, controller, env, ctx)`,
+      `  );`,
       `}`
     );
     return `${lines.join("\n")}\n`;

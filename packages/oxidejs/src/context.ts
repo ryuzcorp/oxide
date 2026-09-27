@@ -12,6 +12,8 @@ export {
   __setNeedsSyncRequestStoreForTests,
   getRequestStore,
   inWebcontainer,
+  isWebcontainerVersions,
+  nextRequestScopedId,
   needsSyncRequestStore,
   peekRequestStore,
   runWithRequest,
@@ -104,7 +106,7 @@ export type {
   ServerActionHandle,
   StreamActionHandle,
 } from "./action";
-export { liveQuery, publish } from "./live-query";
+export { LiveQueryClosedError, liveQuery, publish } from "./live-query";
 export type { LiveQuery, LiveQueryOptions } from "./live-query";
 export { batch } from "./rpc/batch";
 export type { BatchItem, BatchResult } from "./rpc/batch";

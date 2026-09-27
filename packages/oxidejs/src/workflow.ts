@@ -3,7 +3,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
-import { useEnv, useIdempotencyKey } from "./request-store";
+import { nextRequestScopedId, useEnv } from "./request-store";
 import type { OxidejsJson } from "./types";
 import { SchemaDecodeError } from "./with-schema";
 
@@ -413,8 +413,9 @@ export const workflow = function workflow<P, R = unknown>(
     const raw = args[0] as P;
     const decoded = decodePayload(def.payload, raw);
     const wf = requireBinding(binding);
+    // Derived per start, so two starts in one keyed request stay distinct.
     const id =
-      options?.idempotencyKey ?? useIdempotencyKey() ?? crypto.randomUUID();
+      options?.idempotencyKey ?? nextRequestScopedId() ?? crypto.randomUUID();
     const instance = await createWorkflowInstance(wf, { id, params: decoded });
     return { id: instance.id };
   };

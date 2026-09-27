@@ -37,6 +37,24 @@ let webcontainerOverride: boolean | null = null;
 /** Override for tests. `null` uses runtime detection. */
 let syncRequestStoreOverride: boolean | null = null;
 
+/** `process.versions` as a host may shape it: a real WebContainer sets a string. */
+export interface WebcontainerVersions {
+  readonly [key: string]: string | (() => void) | undefined;
+}
+
+/**
+ * True only for a real WebContainer version string. celld's `node:process`
+ * answers every unknown `versions` key with a stub function, so a truthiness
+ * check reads celld as a WebContainer and serializes every action behind one
+ * cross-request gate.
+ */
+export const isWebcontainerVersions = function isWebcontainerVersions(
+  versions: WebcontainerVersions
+): boolean {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- host probe: celld answers unknown keys with a function
+  return typeof versions["webcontainer"] === "string";
+};
+
 /** StackBlitz WebContainers lose AsyncLocalStorage across `async/await`. */
 export const inWebcontainer = function inWebcontainer(): boolean {
   if (webcontainerOverride !== null) {
@@ -45,31 +63,39 @@ export const inWebcontainer = function inWebcontainer(): boolean {
   if (process === undefined) {
     return false;
   }
-  // SAFETY: Node's process.versions is a string bag; WebContainer adds an optional key.
-  const versions = process.versions as NodeJS.ProcessVersions & {
-    webcontainer?: string;
-  };
-  return Boolean(versions.webcontainer);
+  return isWebcontainerVersions(process.versions);
 };
 
 /**
  * Runtimes where request context must survive on a sync fallback because
- * AsyncLocalStorage does not keep the store across `await` (WebContainer,
- * Cloudflare Workers).
+ * AsyncLocalStorage does not keep the store across `await`: WebContainer
+ * only. Workers and celld need `nodejs_compat` (or `nodejs_als`) to import
+ * `node:async_hooks` at all, and there AsyncLocalStorage keeps the store
+ * across `await` (measured on celld 0.6.0). A module-global fallback on those
+ * hosts would hand one request's context to a concurrent request whenever
+ * the ALS store is empty.
  */
 export const needsSyncRequestStore = function needsSyncRequestStore(): boolean {
   if (syncRequestStoreOverride !== null) {
     return syncRequestStoreOverride;
   }
-  if (inWebcontainer()) {
-    return true;
-  }
-  // Cloudflare Workers expose WebSocketPair; Node and Bun do not.
-  // SAFETY: Workers add WebSocketPair on globalThis; missing means a non-Worker host.
-  const workerApi = globalThis as typeof globalThis & {
-    WebSocketPair?: object;
-  };
-  return workerApi.WebSocketPair !== undefined;
+  return inWebcontainer();
+};
+
+/** Module fallback when ALS does not survive awaits (WebContainer). */
+let syncStore: ActionContext | null = null;
+
+/** Serialize handler *entry* on WebContainer so syncStore is not stomped. */
+let entryTail: Promise<null> = Promise.resolve(null);
+
+/**
+ * A test that switches the host mode starts from an empty fallback: an
+ * earlier test's action that never settled (an open stream) would otherwise
+ * leave its context in the module slot.
+ */
+const resetSyncFallbackForTests = function resetSyncFallbackForTests(): void {
+  syncStore = null;
+  entryTail = Promise.resolve(null);
 };
 
 /** Test-only: force or clear the WebContainer detection path. */
@@ -77,19 +103,15 @@ export const __setInWebcontainerForTests = function __setInWebcontainerForTests(
   value: boolean | null
 ): void {
   webcontainerOverride = value;
+  resetSyncFallbackForTests();
 };
 
 /** Test-only: force or clear the sync request-store fallback path. */
 export const __setNeedsSyncRequestStoreForTests =
   function __setNeedsSyncRequestStoreForTests(value: boolean | null): void {
     syncRequestStoreOverride = value;
+    resetSyncFallbackForTests();
   };
-
-/** Module fallback when ALS does not survive awaits (WebContainer). */
-let syncStore: ActionContext | null = null;
-
-/** Serialize handler *entry* on WebContainer so syncStore is not stomped. */
-let entryTail: Promise<null> = Promise.resolve(null);
 
 const als = function als(): AsyncLocalStorage<ActionContext> {
   // SAFETY: ALS_KEY is oxide-owned; the slot is only ever AsyncLocalStorage<ActionContext>.
@@ -137,7 +159,12 @@ export const enterRequestStore = function enterRequestStore(
   ctx: ActionContext
 ): ActionContext | null {
   const previous = syncStore;
-  syncStore = ctx;
+  // Only where ALS cannot carry the store: a module-global slot elsewhere
+  // could hand this context to a concurrent request, and an interrupted
+  // action that never reaches its exit would leave it set for good.
+  if (needsSyncRequestStore()) {
+    syncStore = ctx;
+  }
   return previous;
 };
 
@@ -151,6 +178,11 @@ export const exitRequestStore = function exitRequestStore(
   }
 };
 
+/** The sync fallback store, only on hosts that need it. */
+const syncFallback = function syncFallback(): ActionContext | null {
+  return needsSyncRequestStore() ? syncStore : null;
+};
+
 /** Run `fn` under ALS for `ctx` (does not touch the sync fallback). */
 export const runWithAls = function runWithAls<T>(
   ctx: ActionContext,
@@ -161,7 +193,7 @@ export const runWithAls = function runWithAls<T>(
 
 /** Current request context: ALS first, then the WebContainer sync fallback. */
 export const getRequestStore = function getRequestStore(): ActionContext {
-  const current = als().getStore() ?? syncStore;
+  const current = als().getStore() ?? syncFallback();
   if (!current) {
     throw new Error("oxidejs: request context is unavailable");
   }
@@ -172,7 +204,7 @@ export const getRequestStore = function getRequestStore(): ActionContext {
 export const peekRequestStore = function peekRequestStore():
   | ActionContext
   | undefined {
-  return als().getStore() ?? syncStore ?? undefined;
+  return als().getStore() ?? syncFallback() ?? undefined;
 };
 
 const store = function store(): ActionContext {
@@ -190,6 +222,9 @@ export const withRequestStore = function withRequestStore<T>(
   ctx: ActionContext,
   fn: () => T
 ): T {
+  if (!needsSyncRequestStore()) {
+    return als().run(ctx, fn);
+  }
   const previous = syncStore;
   syncStore = ctx;
   let deferRestore = false;
@@ -221,24 +256,23 @@ export const withRequestStore = function withRequestStore<T>(
 };
 
 /**
- * Serialize request entry when the sync fallback is required.
- * WebContainer: hold the gate until `fn` settles.
- * Workers / celld: only serialize starts so long-lived streams do not block other actions.
+ * Serialize request entry on WebContainer: hold the gate until `fn` settles so
+ * the sync store is not stomped. Every other host runs `fn` directly. On a
+ * Worker host the gate would chain each request to the one before it, and a
+ * request the host cancels mid-wait (celld drops a finished or aborted
+ * request's pending work) never releases its link, which stalls every action
+ * after it.
  */
 export const withRequestEntry = async function withRequestEntry<T>(
   fn: () => Promise<T>
 ): Promise<T> {
-  if (!needsSyncRequestStore()) {
+  if (!inWebcontainer()) {
     return fn();
   }
   const { promise: gate, resolve: release } = deferred<null>();
   const previous = entryTail;
   entryTail = gate;
   await previous;
-  if (!inWebcontainer()) {
-    release(null);
-    return await fn();
-  }
   try {
     return await fn();
   } finally {
@@ -272,6 +306,48 @@ export const useFetchCtx = function useFetchCtx():
   | ExecutionContext
   | undefined {
   return store().fetchCtx;
+};
+
+const derivedIdCounts = new WeakMap<ActionContext, number>();
+
+/** Cloudflare Workflows instance ids: at most 100 chars of `[A-Za-z0-9_-]`. */
+const MAX_INSTANCE_ID_LENGTH = 100;
+
+/**
+ * The id at `position` derived from `key`: the key itself first, then
+ * `key-1`, `key-2`, … A hyphen keeps a valid key a valid Workflows instance
+ * id, and the key is trimmed so the suffixed id stays within 100 chars.
+ */
+export const deriveKeyedId = function deriveKeyedId(
+  key: string,
+  position: number
+): string {
+  if (position === 0) {
+    return key;
+  }
+  const suffix = `-${position}`;
+  return `${key.slice(0, MAX_INSTANCE_ID_LENGTH - suffix.length)}${suffix}`;
+};
+
+/**
+ * A distinct, deterministic id for the next queue message or workflow start
+ * of the current keyed request, or `undefined` outside a request or without a
+ * key. The first call keeps the key; later calls get `key-1`, `key-2`, … So a
+ * retried RPC call (same key, same code path) reproduces the same ids, while
+ * two sends in one action no longer share one id and collapse into one
+ * workflow instance.
+ */
+export const nextRequestScopedId = function nextRequestScopedId():
+  | string
+  | undefined {
+  const current = peekRequestStore();
+  const key = current?.idempotencyKey;
+  if (!(current && key)) {
+    return undefined;
+  }
+  const count = derivedIdCounts.get(current) ?? 0;
+  derivedIdCounts.set(current, count + 1);
+  return deriveKeyedId(key, count);
 };
 
 /** Idempotency key from the client `CallOptions` / RPC headers, if present. */

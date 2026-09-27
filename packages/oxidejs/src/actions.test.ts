@@ -371,6 +371,10 @@ describe("codegen", () => {
       generateClientModule("http", { authorization: "Bearer x" })
     ).toContain('"authorization":"Bearer x"');
     expect(generateClientModule("ws")).toContain('"transport":"ws"');
+    // The client deadline trails the server's by a grace period.
+    expect(
+      generateClientModule("http", undefined, "/__oxide/action", 15_000)
+    ).toContain('"timeout":20000');
   });
 
   test("client stub peels { signal } and keeps other last args", async () => {

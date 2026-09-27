@@ -1,0 +1,10 @@
+// celld smoke app: `scripts/celld-smoke.ts` generates the Worker wrapper and
+// actions module for smoke.server.ts and bundles them into .build/.
+// No compatibility flags: the stricter case, and how apps such as Noite
+// deploy. wrangler.nodejs-compat.jsonc covers the flagged runtime.
+{
+  "name": "oxide-celld-smoke",
+  "main": ".build/index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": [],
+}

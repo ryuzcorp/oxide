@@ -160,7 +160,7 @@ Stream actions do not support `bind` / `with`. Breaking the `for await` loop or 
 
 ### Live queries
 
-Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — D1 (or your DB) stays the source of truth. Prefer Effect `Stream` + `mutateEffect`:
+Use `liveQuery` / `publish` for snapshot streams (query = subscription, mutation = publish). Hubs are isolate-local Effect PubSub — a publish reaches subscribers in the same isolate only, not other Worker isolates or celld nodes — and D1 (or your DB) stays the source of truth. Mutations on one topic run one at a time; one waits at most `mutateWaitMs` (default 10000) for the previous, and a mutation overtaken during that wait does not publish its older snapshot. `close()` shuts a topic's hub down; a mutation that finishes after it fails with `LiveQueryClosedError`. Prefer Effect `Stream` + `mutateEffect`:
 
 ```ts
 import { Effect, Stream } from "effect";
@@ -258,7 +258,7 @@ await invoices.send({ orderId: "…" });
 await invoices.sendBatch([{ body: { orderId: "…" } }]);
 ```
 
-Oxide merges `queues.producers` / `queues.consumers` via `mergeDurableBindings` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`.
+Oxide merges `queues.producers` / `queues.consumers` via `mergeDurableBindings` and attaches a same-worker `queue` handler that starts the workflow from each message (via `createBatch` when available, otherwise duplicate-aware `create`/`get`). Cloudflare does not return message ids from `send`, so oxide wraps bodies in an envelope with a client-chosen id (`{ idempotencyKey }` / request header / UUID) and returns `{ id }` from `send` (and `{ ids }` from `sendBatch`) for `workflow.status` polling. Queue transport options (`contentType` / `delaySeconds`) travel in the RPC payload; `signal` / `idempotencyKey` stay on `CallOptions`. Every message gets its own id: with a key, the first send in a request uses it and later sends (and each message of a `sendBatch`) use `key-1`, `key-2`, … (valid Workflows instance ids, trimmed to 100 chars), so a retried request reproduces the same ids. The consumer acks the messages it started and retries only the ones that failed. Queue consumers and cron handlers run inside a request store, so `useEnv()`, `queue.send()` and `workflow.start()` work there.
 
 ```ts
 const { id } = await invoices.send({ orderId: "…" });
@@ -352,7 +352,7 @@ export class ActionRoom {
 
 The generated worker wrapper does not create a DO — hibernation is opt-in when you own the object.
 
-`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows/queues/schedules are omitted). OpenRPC is HTTP-only and stays off when `transport` is `"ws"`. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions.
+`vite dev` and `rsbuild dev` serve the endpoint via middleware. `actions: "http"` (default) serves `/__oxide/action`; `actions: "ws"` uses a WebSocket instead (`crossws` on Node/`fetch`, `WebSocketPair` on `preset: "worker"`). `actions.sameOrigin` defaults to `true` for both transports; set it to `false` only when you intentionally accept cross-origin requests. Set `actions.path` to move the endpoint. Set `actions.openrpc: true` to serve `GET /__oxide/openrpc` — an [OpenRPC](https://spec.open-rpc.org/) 1.3 document for `action()` handlers only (Effect Schema → JSON Schema; workflows/queues/schedules are omitted). OpenRPC is HTTP-only and stays off when `transport` is `"ws"`. `actionHeaders` are static headers on the shared HTTP client and are ignored for WebSocket actions. Set `actions.timeout` (milliseconds) to bound every action: an action that has not answered in time is interrupted, and the client gets a JSON-RPC `-32603` error instead of a request that never ends. Each call of a batch has its own deadline, and a batch answers each call as soon as it ends. A stream counts as answered at its first frame. The generated client gives up 5 s after the server deadline. `bodyLimit` also bounds action request bodies on the worker preset (HTTP 413).
 
 ## Rsbuild
 
@@ -376,7 +376,7 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 | `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
 | `outDir` | `dist` | Output root (Node / `"fetch"`) |
 | `clientDir` | `client` | Must stay inside `outDir` |
-| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with `"worker"`); object form: `{ transport, path, sameOrigin, openrpc }` (`sameOrigin: true`, `openrpc: false`) |
+| `actions` | `"http"` | `"ws"` uses WebSocket (`crossws` on Node, `WebSocketPair` with `"worker"`); object form: `{ transport, path, sameOrigin, openrpc, timeout }` (`sameOrigin: true`, `openrpc: false`, no `timeout`) |
 | `actionHeaders` | — | Static headers on the HTTP client |
 | `middleware` | `[]` | Fetch middleware. On WS: honor Responses (auth 302/401/…); ignore only `@ilha/router/ssr` document Responses. Otherwise Response short-circuits before actions / server entry. |
 | `plugins` | `[]` | Build plugins (`beforeBuild` / `afterBuild`). Pass objects or module IDs. |
@@ -447,6 +447,8 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 - Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
 - Batch requests capped at 20 items (both HTTP and WebSocket transports).
 - Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. Clients see plain JSON-RPC errors (`code` + `message` only). Thrown messages become `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
+- Every action call runs in its own Effect RPC runtime, disposed when its response ends. A shared runtime would let a concurrent action read another request's context, and on Worker hosts (Cloudflare Workers, celld) it stalls, because the host drops a finished request's pending work.
+- Worker code must not share a promise, timer or runtime across requests unless it is registered with `waitUntil` or its waiters are time-bounded: on celld, work a request started stops when that request answers or its client goes away. `bun run smoke:celld` checks the action server against a real celld node.
 - `actions.sameOrigin` defaults to `true`. HTTP actions require `Origin` and/or `Sec-Fetch-Site` and reject cross-site callers. WebSocket upgrades additionally allow requests that omit both headers when `Host` matches the request URL host (celld and some proxies strip those headers; `localhost` / `127.0.0.1` / `::1` count as the same host).
 - StackBlitz WebContainers do not keep `AsyncLocalStorage` across `async/await`. Oxide detects `process.versions.webcontainer` and falls back to a sync request store, capturing context before Effect schedules work and serializing handler entry so concurrent requests do not stomp that store. Stream pulls re-enter the captured store. This is a demo/dev workaround, not a concurrency model for production.
 

@@ -132,6 +132,8 @@ describe("schedule codegen", () => {
     ]);
     expect(code).toContain("dispatchSchedule");
     expect(code).toContain("handleSchedule");
+    // A request store, so useEnv() and queue/workflow handles work in a tick.
+    expect(code).toContain("withRequestStore(");
   });
 
   test("worker wrapper attaches scheduled when hasSchedules", () => {
