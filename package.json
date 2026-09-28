@@ -29,5 +29,11 @@
     "tsdown": "^0.22.14",
     "typescript": "^6",
     "ultracite": "7.10.8"
+  },
+  "overrides": {
+    "ilha": "^0.14.6"
+  },
+  "patchedDependencies": {
+    "ilha@0.14.6": "patches/ilha@0.14.6.patch"
   }
 }

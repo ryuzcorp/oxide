@@ -1,0 +1,77 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 04751252d84e6842161095997e92455e11ac910f..7479dceafa90872a657cf4d9315a7addc03fa448 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -2,9 +2,9 @@ import { a as Instruction, c as UnsafeHtml, d as Yielded, i as Fragment, n as Co
+ import { t as h } from "./vnode-C_BdUnIA.js";
+ import * as Effect from "effect/Effect";
+ import * as Stream from "effect/Stream";
+-import * as Atom from "effect/unstable/reactivity/Atom";
++import * as Atom from "effect/reactivity/Atom";
+ import "effect/Scope";
+-import { AtomRegistry } from "effect/unstable/reactivity/AtomRegistry";
++import { AtomRegistry } from "effect/reactivity/AtomRegistry";
+ //#region src/watch.d.ts
+ /** Values delivered to watch callbacks. */
+ type WatchValue = string | number | boolean | bigint | null | undefined | readonly WatchValue[] | WatchRecord;
+diff --git a/dist/index.js b/dist/index.js
+index a96190e2cc5cb4f6ce6a4611ef191576e67abfce..1470454469d0ae5837fa4fe8a78013f5c98f16d0 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2,11 +2,11 @@ import { a as interpret, c as handleOwner, d as untrack, f as wrapHandle, g as m
+ import { d as errorView, i as Fragment, p as isFunction, t as h } from "./vnode-DEMDQ0eA.js";
+ import * as Effect from "effect/Effect";
+ import * as Stream from "effect/Stream";
+-import * as Atom from "effect/unstable/reactivity/Atom";
++import * as Atom from "effect/reactivity/Atom";
+ import * as Exit from "effect/Exit";
+ import * as Fiber from "effect/Fiber";
+ import * as Scope from "effect/Scope";
+-import * as Registry from "effect/unstable/reactivity/AtomRegistry";
++import * as Registry from "effect/reactivity/AtomRegistry";
+ 
+ //#region src/context.ts
+ const defaults = /* @__PURE__ */ new WeakMap();
+diff --git a/dist/mount-DiIEX8s7.js b/dist/mount-DiIEX8s7.js
+index 6c436ce52bc9d721c513d8cad5505bf0fcf205e1..9a52063e5e68f71e54c9ef7aff21e918ffe38d29 100644
+--- a/dist/mount-DiIEX8s7.js
++++ b/dist/mount-DiIEX8s7.js
+@@ -1,12 +1,12 @@
+ import { _ as skip, a as ISLAND, b as failureMessage, c as KEEP, d as errorView, f as isBigInt, g as isString, h as isObject, i as Fragment, l as KEY_ATTR, m as isNumber, n as isSetupFn, o as ISLAND_MOUNT_INTERNAL, p as isFunction, r as isVNode, s as ISLAND_SLOT_TAG, u as SLOT_ATTR, v as unwrap, x as toError, y as asFailure } from "./vnode-DEMDQ0eA.js";
+ import * as Effect from "effect/Effect";
+ import * as Stream from "effect/Stream";
+-import * as Atom from "effect/unstable/reactivity/Atom";
++import * as Atom from "effect/reactivity/Atom";
+ import * as Cause from "effect/Cause";
+ import * as Exit from "effect/Exit";
+ import * as Fiber from "effect/Fiber";
+ import * as Scope from "effect/Scope";
+-import * as Registry from "effect/unstable/reactivity/AtomRegistry";
++import * as Registry from "effect/reactivity/AtomRegistry";
+ 
+ //#region src/runtime.ts
+ const stack = [];
+diff --git a/dist/types-CyoYWhJf.d.ts b/dist/types-CyoYWhJf.d.ts
+index dd63352c61083dd2b564280fdbe9d9f0f879dcc0..380ec5d9dee3dc118e326475e33eadd14473a682 100644
+--- a/dist/types-CyoYWhJf.d.ts
++++ b/dist/types-CyoYWhJf.d.ts
+@@ -1,7 +1,7 @@
+ import "effect/Scope";
+-import { AtomRegistry } from "effect/unstable/reactivity/AtomRegistry";
++import { AtomRegistry } from "effect/reactivity/AtomRegistry";
+ import { Effect, Stream } from "effect";
+-import { Atom } from "effect/unstable/reactivity";
++import { Atom } from "effect/reactivity";
+ //#region src/types.d.ts
+ type JsonText = string | number | bigint | boolean | null | undefined;
+ /** Runtime prop bag values painted onto elements / passed to components. */
+diff --git a/dist/vnode-DEMDQ0eA.js b/dist/vnode-DEMDQ0eA.js
+index 875a323842622e8b753d9d9ae2e52ca8b7aeed8e..f39e3d713b0f750cc1970e57d274b2f4bb30a29e 100644
+--- a/dist/vnode-DEMDQ0eA.js
++++ b/dist/vnode-DEMDQ0eA.js
+@@ -1,4 +1,4 @@
+-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
++import * as AsyncResult from "effect/reactivity/AsyncResult";
+ import * as Option from "effect/Option";
+ import * as Result from "effect/Result";
+ 
