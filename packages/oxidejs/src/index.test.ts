@@ -144,9 +144,9 @@ const expectViteDeps = function expectViteDeps(
   expect(config.resolve?.dedupe).toEqual(["effect", "oxidejs"]);
   expect(config.optimizeDeps?.include).toEqual([
     "effect",
-    "effect/unstable/rpc",
-    "effect/unstable/http",
-    "effect/unstable/socket",
+    "effect/rpc",
+    "effect/http",
+    "effect/socket",
     "oxidejs",
     "oxidejs/rpc/client",
   ]);

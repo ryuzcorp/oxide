@@ -1,9 +1,9 @@
 import * as Effect from "effect/Effect";
+import type * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
+import * as Registry from "effect/reactivity/AtomRegistry";
 import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import * as Atom from "effect/unstable/reactivity/Atom";
-import * as Registry from "effect/unstable/reactivity/AtomRegistry";
 
 import { peekRequestStore } from "./request-store";
 import { actionContextLayer } from "./services";

@@ -1,7 +1,7 @@
 import { D1Client } from "@effect/sql-d1";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { SqlClient } from "effect/sql/SqlClient";
 import { useCtx, useEnv } from "oxidejs";
 import { createMigrator, defineSchema, paranorm } from "paranorm";
 import type { InferSchema, Selectable } from "paranorm";

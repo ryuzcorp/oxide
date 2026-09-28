@@ -4,15 +4,15 @@ import {
   HttpBody,
   HttpClient,
   HttpClientRequest,
-} from "effect/unstable/http";
-import type { Rpc, RpcGroup, RpcMessage } from "effect/unstable/rpc";
+} from "effect/http";
+import type { Rpc, RpcGroup, RpcMessage } from "effect/rpc";
 import {
   RpcClient,
   RpcClientError,
   RpcSchema,
   RpcSerialization,
-} from "effect/unstable/rpc";
-import { Socket } from "effect/unstable/socket";
+} from "effect/rpc";
+import { Socket } from "effect/socket";
 
 import type { OxidejsActionHeaders } from "../types";
 import { registerBatchFlusher, scheduleBatchFlush } from "./batch";
@@ -405,10 +405,10 @@ const wsLayer = function wsLayer(url: string) {
   }).pipe(
     Layer.provide(RpcSerialization.layerNdJsonRpc()),
     Layer.provide(
-      Socket.layerWebSocket(url, {
-        // 1000 normal / 1001 going away are reconnectable; don't fail the run as a hard error.
-        closeCodeIsError: (code) => code !== 1000 && code !== 1001,
-      })
+      // Every close (1000/1001 included) fails the reader with a
+      // SocketError(SocketCloseError); the protocol's default retry policy
+      // reconnects, and isTransientWsClose treats 1000/1001/1006 as transient.
+      Socket.layerWebSocket(url)
     ),
     Layer.provide(Socket.layerWebSocketConstructorGlobal)
   );

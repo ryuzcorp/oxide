@@ -1,7 +1,7 @@
 /* eslint-disable func-names -- Effect.gen uses anonymous generators (AGENTS.md) */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { SqlClient } from "effect/sql/SqlClient";
 import { action, liveQuery, useEnv, useRequest, withSchema } from "oxidejs";
 
 import { authFromEnv, MissingAuthSecretError, UnauthorizedError } from "./auth";

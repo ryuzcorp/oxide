@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 
 import { Effect, Layer, Schema } from "effect";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 import { getRequestStore } from "../context";
 import { isWebcontainerVersions } from "../request-store";

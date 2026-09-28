@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.5.7
+
+### Changed
+
+- Bumped `effect` to `4.0.0-rc.118` (and `@effect/sql-d1` to `4.0.0-rc.118` in the kit template)
+- `effect/unstable/*` imports moved to the stable subpaths (`effect/rpc`, `effect/http`, `effect/socket`, `effect/reactivity`, `effect/sql`); the kit template's `FindMyWay` / `SqlClient` imports moved with them
+- The client stub declares `error: Schema.Unknown` on its Rpcs: rc.118 parses JSON-RPC error responses as `Fail` (was `Die`), so a `Never` error schema rejects every failed call with a schema decode error instead of the action's error
+- `Socket.layerWebSocket` no longer takes `closeCodeIsError`: every close now fails the reader with a `SocketError(SocketCloseError)` and the protocol's retry policy reconnects; 1000/1001/1006 stay transient via the existing close-code matcher
+
+## 0.5.6
 
 ### Security
 

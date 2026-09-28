@@ -5,9 +5,9 @@ export default defineConfig({
     neverBundle: [
       "unplugin",
       "effect",
-      "effect/unstable/rpc",
-      "effect/unstable/http",
-      "effect/unstable/socket",
+      "effect/rpc",
+      "effect/http",
+      "effect/socket",
       "crossws/adapters/node",
     ],
   },

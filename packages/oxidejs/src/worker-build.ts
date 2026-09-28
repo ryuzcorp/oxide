@@ -119,9 +119,9 @@ export interface ViteEnvironmentConfig {
 // `virtual:oxide/client` on first action/stream use.
 const OPTIMIZE_DEPS = [
   "effect",
-  "effect/unstable/rpc",
-  "effect/unstable/http",
-  "effect/unstable/socket",
+  "effect/rpc",
+  "effect/http",
+  "effect/socket",
   "oxidejs",
   "oxidejs/rpc/client",
 ] as const;

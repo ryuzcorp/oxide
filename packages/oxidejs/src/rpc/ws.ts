@@ -1,5 +1,5 @@
 import type { Layer } from "effect";
-import type { Rpc, RpcGroup } from "effect/unstable/rpc";
+import type { Rpc, RpcGroup } from "effect/rpc";
 
 import { matchesActionPath } from "../actions";
 import type { ActionContext, ActionContextValue } from "../context";

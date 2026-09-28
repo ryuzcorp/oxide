@@ -1,5 +1,5 @@
 import { setFrameAuth } from "@ilha/router/ssr";
-import { FindMyWay } from "effect/unstable/http";
+import { FindMyWay } from "effect/http";
 import type { ServerEntry } from "oxidejs";
 
 import { authFromEnv, MissingAuthSecretError } from "./lib/auth";

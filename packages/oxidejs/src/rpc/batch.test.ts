@@ -7,7 +7,7 @@ import { batch } from "./batch";
 import type { NestedClient } from "./client";
 import { createClient } from "./client";
 import { createActionHandler } from "./server";
-import { writeGeneratedActions } from "./test-harness";
+import { writeGeneratedActions, writeGeneratedClient } from "./test-harness";
 
 interface Recorded {
   body: string;
@@ -102,6 +102,10 @@ export const ticks = action(async function* (count: number) {
   );
   const out = writeGeneratedActions(root);
   const mod = await import(out);
+  // SAFETY: the browser stub exports the schema-blind client RpcGroup.
+  const clientMod = (await import(writeGeneratedClient(root))) as {
+    default: Parameters<typeof createClient>[0];
+  };
   const handler = createActionHandler(mod.default, mod.actionsHandlers, {
     path: ACTION_PATH,
     sameOrigin: false,
@@ -114,7 +118,7 @@ export const ticks = action(async function* (count: number) {
     },
     port: 0,
   });
-  const client = createClient(mod.default, {
+  const client = createClient(clientMod.default, {
     url: `http://127.0.0.1:${server.port}${ACTION_PATH}`,
   });
   try {

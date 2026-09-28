@@ -8,7 +8,7 @@
     "verify": "blume build --isolated"
   },
   "dependencies": {
-    "effect": "~4.0.0-rc.112",
+    "effect": "~4.0.0-rc.118",
     "oxidejs": "workspace:*",
     "rangi": "^2.2.0"
   },

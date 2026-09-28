@@ -362,7 +362,7 @@ export const generateActionsClientModule = function generateActionsClientModule(
 ): string {
   const lines = [
     `import { Schema } from "effect";`,
-    `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
+    `import { Rpc, RpcGroup } from "effect/rpc";`,
   ];
   const rpcNames: string[] = [];
   for (const [i, mod] of modules.entries()) {
@@ -372,7 +372,7 @@ export const generateActionsClientModule = function generateActionsClientModule(
       const tag = `${mod.key}.${name}`;
       const stream = mod.streams?.includes(name) ?? false;
       lines.push(
-        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown${stream ? ", stream: true" : ""} });`
+        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown${stream ? ", stream: true" : ""} });`
       );
     }
   }
@@ -383,7 +383,7 @@ export const generateActionsClientModule = function generateActionsClientModule(
         rpcNames.push(rpc);
         const tag = `${exp.name}.${method}`;
         lines.push(
-          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown });`
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });`
         );
       }
     }
@@ -395,7 +395,7 @@ export const generateActionsClientModule = function generateActionsClientModule(
         rpcNames.push(rpc);
         const tag = `${exp.name}.${method}`;
         lines.push(
-          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown });`
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });`
         );
       }
     }
@@ -420,7 +420,7 @@ export const generateActionsModule = function generateActionsModule(
   const queues = opts?.queues ?? [];
   const lines = [
     `import { Schema } from "effect";`,
-    `import { Rpc, RpcGroup } from "effect/unstable/rpc";`,
+    `import { Rpc, RpcGroup } from "effect/rpc";`,
     `import { ACTION_META, WORKFLOW_META, QUEUE_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream } from "oxidejs";`,
     `const __meta = (fn) => (fn && fn[ACTION_META]) || {};`,
     `const __wmeta = (h) => (h && h[WORKFLOW_META]) || {};`,
