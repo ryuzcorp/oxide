@@ -15,11 +15,11 @@
   "dependencies": {
     "@better-auth/passkey": "^1.7.3",
     "@effect/sql-d1": "4.0.0-rc.118",
-    "@ilha/router": "^0.11.8",
+    "@ilha/router": "^0.11.10",
     "better-auth": "^1.7.3",
     "effect": "^4.0.0-rc.118",
-    "ilha": "^0.14.5",
-    "paranorm": "^0.3.2",
+    "ilha": "^0.14.8",
+    "paranorm": "^0.3.4",
     "unstorage": "^2.0.0-alpha.10"
   },
   "devDependencies": {
@@ -30,7 +30,7 @@
     "oxidejs": "^0.5.7",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
-    "vite": "^8.2.2",
+    "vite": "^8.3.1",
     "wrangler": "^4.130.0"
   },
   "packageManager": "bun@1.3.5"

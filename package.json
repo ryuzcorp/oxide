@@ -31,9 +31,7 @@
     "ultracite": "7.10.8"
   },
   "overrides": {
-    "ilha": "^0.14.6"
-  },
-  "patchedDependencies": {
-    "ilha@0.14.6": "patches/ilha@0.14.6.patch"
+    "@ilha/router": "^0.11.10",
+    "ilha": "^0.14.8"
   }
 }
