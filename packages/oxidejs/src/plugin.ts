@@ -39,7 +39,13 @@ import {
 } from "./actions";
 import { stampRequestContext } from "./context";
 import type { ExecutionContext } from "./context";
-import { copyPublicDir, resolveOptions } from "./core";
+import {
+  copyPublicDir,
+  hasCloudflareConfig,
+  hasWranglerConfig,
+  loadCloudflareConfig,
+  resolveOptions,
+} from "./core";
 import {
   createOpenRpcResponse,
   matchesOpenRpcPath,
@@ -1005,7 +1011,7 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
       });
     },
     vite: {
-      config(config, env) {
+      async config(config, env) {
         buildHost = "vite";
         viteProductionBuild = env?.command === "build";
         beforeBuildRan = false;
@@ -1014,6 +1020,17 @@ export const unpluginFactory: UnpluginFactory<OxidejsOptions | undefined> = (
         resolved = resolveOptions(options, root, config);
         // SAFETY: Vite UserConfig is passed through for the fields applyViteEnvironments reads (root, environments, build).
         applyViteEnvironments(config as never, resolved);
+        // `enforce: "pre"` runs this before `@cloudflare/vite-plugin` calls the `withOxide` customizer.
+        if (
+          resolved.preset === "worker" &&
+          !hasWranglerConfig(resolved.root) &&
+          hasCloudflareConfig(resolved.root)
+        ) {
+          await loadCloudflareConfig(resolved.root, {
+            isPreview: env?.isPreview ?? false,
+            mode: env?.mode,
+          });
+        }
       },
       configurePreviewServer(server) {
         if (resolved === undefined || resolved.preset === "worker") {

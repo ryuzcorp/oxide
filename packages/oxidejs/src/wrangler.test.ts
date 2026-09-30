@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { setCloudflareConfig } from "./core";
 import {
   isCelldUnsupportedKey,
   mergeDevVarsIntoConfig,
@@ -91,6 +92,70 @@ export const demo = workflow({
       expect(config.workflows).toEqual([
         { binding: "DEMO", class_name: "DemoWorkflow", name: "demo" },
       ]);
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("assigns the loaded cloudflare.config.ts before merging", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-withoxide-cf-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "src", "demo.server.ts"),
+        `
+import { workflow } from "oxidejs";
+export const demo = workflow({
+  name: "demo",
+  run: async () => {},
+});
+`
+      );
+      fs.writeFileSync(
+        path.join(root, "cloudflare.config.ts"),
+        "export default {};\n"
+      );
+      const opts = withOxide({ root });
+      // SAFETY: withOxide always installs a function config customizer.
+      const customize = opts.config as (c: DurableWranglerConfig) => unknown;
+      expect(() => customize({})).toThrow("oxide() did not load it");
+
+      // SAFETY: fixture mirrors convertToWranglerConfig output; only durable keys are typed.
+      setCloudflareConfig(root, {
+        main: "./src/worker.ts",
+        name: "app",
+      } as DurableWranglerConfig);
+      const config: DurableWranglerConfig = {};
+      customize(config);
+      // SAFETY: expected shape includes the untyped wrangler keys assigned above.
+      expect(config).toEqual({
+        main: "./src/worker.ts",
+        name: "app",
+        workflows: [
+          { binding: "DEMO", class_name: "DemoWorkflow", name: "demo" },
+        ],
+      } as DurableWranglerConfig);
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("prefers a wrangler file over cloudflare.config.ts", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oxide-withoxide-cf-"));
+    try {
+      fs.writeFileSync(path.join(root, "wrangler.jsonc"), "{}\n");
+      fs.writeFileSync(
+        path.join(root, "cloudflare.config.ts"),
+        "export default {};\n"
+      );
+      // SAFETY: fixture mirrors convertToWranglerConfig output; only durable keys are typed.
+      setCloudflareConfig(root, { name: "app" } as DurableWranglerConfig);
+      const config: DurableWranglerConfig = {};
+      // SAFETY: withOxide always installs a function config customizer.
+      (withOxide({ root }).config as (c: DurableWranglerConfig) => unknown)(
+        config
+      );
+      expect("name" in config).toBe(false);
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }

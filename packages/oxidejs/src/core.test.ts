@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   assertContained,
   copyPublicDir,
+  hasCloudflareConfig,
   hasWranglerConfig,
   mergeDurableBindings,
   resolveOptions,
@@ -48,6 +49,18 @@ describe("resolveOptions", () => {
     const root = makeTempRoot();
     temps.push(root);
     fs.writeFileSync(path.join(root, "wrangler.jsonc"), "{}\n");
+    expect(resolveOptions({}, root).preset).toBe("worker");
+  });
+
+  test("defaults to worker when cloudflare.config.ts exists", () => {
+    const root = makeTempRoot();
+    temps.push(root);
+    fs.writeFileSync(
+      path.join(root, "cloudflare.config.ts"),
+      "export default {};\n"
+    );
+    expect(hasWranglerConfig(root)).toBe(false);
+    expect(hasCloudflareConfig(root)).toBe(true);
     expect(resolveOptions({}, root).preset).toBe("worker");
   });
 

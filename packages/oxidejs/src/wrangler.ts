@@ -2,7 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { mergeDurableBindings } from "./core";
+import {
+  CLOUDFLARE_CONFIG_NAME,
+  getCloudflareConfig,
+  hasCloudflareConfig,
+  hasWranglerConfig,
+  mergeDurableBindings,
+} from "./core";
 import type { DurableWranglerConfig } from "./core";
 
 export { mergeDurableBindings } from "./core";
@@ -25,6 +31,10 @@ interface ViteEnvironmentOptions {
  *
  * Pass `root` when the Vite project root is not `process.cwd()` (stripped
  * before options reach Cloudflare).
+ *
+ * With a root `cloudflare.config.ts` and no wrangler file (or `configPath`),
+ * the config `oxide()` converted from it is assigned first. List `oxide()` in
+ * Vite `plugins` so it loads before Cloudflare resolves its config.
  *
  * ```ts
  * cloudflare(withOxide())
@@ -67,9 +77,22 @@ export const withOxide = function withOxide<T extends object>(
   delete rest.config;
   delete rest.root;
   delete rest.viteEnvironment;
+  const useCloudflareConfig =
+    !("configPath" in options) &&
+    !hasWranglerConfig(root) &&
+    hasCloudflareConfig(root);
   return {
     ...rest,
     config: (config, ...args) => {
+      if (useCloudflareConfig) {
+        const cloudflareConfig = getCloudflareConfig(root);
+        if (cloudflareConfig === undefined) {
+          throw new Error(
+            `oxidejs: found ${CLOUDFLARE_CONFIG_NAME} but oxide() did not load it — add oxide() to Vite plugins`
+          );
+        }
+        Object.assign(config, structuredClone(cloudflareConfig));
+      }
       mergeDurableBindings(config, root);
       if (typeof userConfig === "function") {
         return userConfig(config, ...args);

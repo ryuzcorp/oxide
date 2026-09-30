@@ -63,7 +63,7 @@ export interface OxidejsOptions {
   /**
    * `"fetch"` (Node) or `"worker"` (Cloudflare Workers companion).
    * Default: `"worker"` when `wrangler.jsonc` / `wrangler.toml` / `wrangler.json`
-   * exists at the project root, otherwise `"fetch"`.
+   * or `cloudflare.config.ts` exists at the project root, otherwise `"fetch"`.
    */
   preset?: OxidejsPreset;
 

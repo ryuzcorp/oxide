@@ -27,6 +27,9 @@ const WRANGLER_CONFIG_NAMES = [
   "wrangler.json",
 ] as const;
 
+/** `cf` CLI config (`@cloudflare/config`), an alternative to a wrangler file. */
+export const CLOUDFLARE_CONFIG_NAME = "cloudflare.config.ts";
+
 /** True when a root wrangler config file is present. */
 export const hasWranglerConfig = function hasWranglerConfig(
   root: string
@@ -36,13 +39,69 @@ export const hasWranglerConfig = function hasWranglerConfig(
   );
 };
 
+/** True when a root `cloudflare.config.ts` is present. */
+export const hasCloudflareConfig = function hasCloudflareConfig(
+  root: string
+): boolean {
+  return fs.existsSync(path.join(root, CLOUDFLARE_CONFIG_NAME));
+};
+
+/** Wrangler-shaped configs converted from `cloudflare.config.ts`, keyed by absolute root. */
+const cloudflareConfigs = new Map<string, DurableWranglerConfig>();
+
+/** Store a converted `cloudflare.config.ts` for `withOxide` to pick up. */
+export const setCloudflareConfig = function setCloudflareConfig(
+  root: string,
+  config: DurableWranglerConfig
+): void {
+  cloudflareConfigs.set(path.resolve(root), config);
+};
+
+/** Converted `cloudflare.config.ts` for `root`, if oxide loaded one. */
+export const getCloudflareConfig = function getCloudflareConfig(
+  root: string
+): DurableWranglerConfig | undefined {
+  return cloudflareConfigs.get(path.resolve(root));
+};
+
+/**
+ * Load `cloudflare.config.ts` via `@cloudflare/config` and convert it to the
+ * wrangler JSON shape `@cloudflare/vite-plugin` expects.
+ */
+export const loadCloudflareConfig = async function loadCloudflareConfig(
+  root: string,
+  ctx: { isPreview: boolean; mode: string | undefined }
+): Promise<DurableWranglerConfig> {
+  const configPath = path.join(root, CLOUDFLARE_CONFIG_NAME);
+  const cf = await import("@cloudflare/config").catch((error: Error) => {
+    throw new Error(
+      `oxidejs: ${CLOUDFLARE_CONFIG_NAME} needs @cloudflare/config — run \`bun add -d @cloudflare/config\``,
+      { cause: error }
+    );
+  });
+  const { result } = await cf.loadAndParseConfig(configPath, ctx);
+  if (!result.success) {
+    throw new Error(
+      `oxidejs: ${CLOUDFLARE_CONFIG_NAME} is invalid:\n${result.error.message}`
+    );
+  }
+  // SAFETY: convertToWranglerConfig yields the wrangler JSON shape; DurableWranglerConfig types only the durable slice oxide merges.
+  const config = cf.convertToWranglerConfig(
+    result.data
+  ) as DurableWranglerConfig;
+  setCloudflareConfig(root, config);
+  return config;
+};
+
 const resolvePreset = function resolvePreset(
   raw: OxidejsOptions | undefined,
   rootAbs: string
 ): OxidejsPreset {
   const preset = raw?.preset;
   if (preset === undefined) {
-    return hasWranglerConfig(rootAbs) ? "worker" : "fetch";
+    return hasWranglerConfig(rootAbs) || hasCloudflareConfig(rootAbs)
+      ? "worker"
+      : "fetch";
   }
   if (preset !== "fetch" && preset !== "worker") {
     throw new Error(`oxidejs: unknown preset "${String(preset)}"`);

@@ -52,6 +52,8 @@ export default defineConfig({
 
 Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. `preset: "worker"` uses the Worker wrapper (ASSETS, workflow class exports, `WebSocketPair`) and leaves Vite Worker environments to Cloudflare's plugin. Put name, compat, D1/R2/vars in the root wrangler file. Override with `preset: "fetch"` or `preset: "worker"` when auto-detect is wrong.
 
+You can use a root `cloudflare.config.ts` (the `cf` CLI config) instead of a wrangler file. Install `@cloudflare/config`. The preset defaults to `"worker"`, `oxide()` loads and converts the file, and `withOxide()` hands the result to Cloudflare's plugin — no wrangler file and no `experimental.newConfig`. A root wrangler file or a `configPath` option wins over `cloudflare.config.ts`. Loading needs Node ≥ 22.18 (not Bun), and editing `cloudflare.config.ts` needs a dev server restart.
+
 ## Server actions
 
 Files named `*.server.ts`, `*.server.tsx`, `*.server.js`, or `*.server.jsx` are server-only. A client import is replaced with an Effect RPC stub that POSTs `/__oxide/action` as newline-delimited JSON-RPC (`application/json-rpc`). The original module never enters the client graph. **Only exports wrapped in `action()` become remote actions** — any other export stays server-local and is not callable over the wire. Server and Vite SSR (`import.meta.env.SSR === true`) keep the real functions. Methods are `<file>.<fn>` (`test.ping`). Call `useRequest()` inside an action for the inbound `Request`. `useCtx()` is the request context (`{ req }` plus anything middleware stamped via `stampRequestContext`, or `createContext` added). On `preset: "worker"`, `useEnv()` and `useFetchCtx()` are the Worker `env` and `ctx` from `fetch(request, env, ctx)` — same values as `useCtx().env` / `useCtx().fetchCtx`. WebSocket upgrades run first (middleware Responses short-circuit, including auth `302`/`401`; only `@ilha/router/ssr` document Responses are ignored so celld does not see `has_target=false`). Other requests run middleware before the action gate. Return `undefined` from `src/server.ts` to fall through to static files. No server action files → the bundle does not import `oxidejs/rpc`. `action()` results are JSON-RPC data — returning a `Response` from an action is an error; return a raw `Response` from `src/server.ts` for raw HTTP responses.
@@ -372,7 +374,7 @@ Same factory as Vite: client stubs, `/__oxide/action`, and `dist/server.js`.
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `preset` | auto | `"worker"` when `wrangler.jsonc` / `.toml` / `.json` exists, else `"fetch"`. Override explicitly. |
+| `preset` | auto | `"worker"` when `wrangler.jsonc` / `.toml` / `.json` or `cloudflare.config.ts` exists, else `"fetch"`. Override explicitly. |
 | `workerEntry` | `src/server.ts` | Relative to project root. Default path is skipped when missing (actions-only). Explicit path must exist. |
 | `outDir` | `dist` | Output root (Node / `"fetch"`) |
 | `clientDir` | `client` | Must stay inside `outDir` |
