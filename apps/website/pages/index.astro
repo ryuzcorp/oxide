@@ -5,93 +5,42 @@ import { highlight } from "./_home/highlight";
 
 const { config } = data;
 const repoUrl = "https://github.com/ryuzcorp/oxide";
-const files = [
-  {
-    html: highlight(
-      `// Looks local. Runs on the server.
-// Your server code never reaches the browser.
-import { create, watch } from "./notes.server";
+const playgroundUrl =
+  "https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/simple?file=src%2Fgreet.server.tsx";
+const installCmd = "npm i -D oxidejs";
 
+const clientCode = highlight(
+  `import { create, watch } from "./notes.server";
+
+// Looks local. Runs on the server.
 const note = await create("Ship Oxide");
-console.log(note); // { id: "…", title: "Ship Oxide" }
+//    ^? { id: string; title: string }
 
-// Stream actions return an async generator after await.
-for await (const n of await watch()) console.log(n);`,
-      "ts",
-    ),
-    name: "client.ts",
-  },
-  {
-    html: highlight(
-      `// Only action()-wrapped exports are callable over the wire.
-import { action, useRequest } from "oxidejs";
+// Streams arrive as an async generator.
+for await (const n of watch()) render(n);`,
+  "ts",
+);
 
-export const create = action(async (title: string) => {
-  return { id: crypto.randomUUID(), title };
-});
+const serverCode = highlight(
+  `import { Effect, Schema } from "effect";
+import { action } from "oxidejs";
+
+class Empty extends Schema.TaggedError<Empty>()("Empty", {}) {}
+
+export const create = action(
+  (title: string) =>
+    Effect.gen(function* () {
+      if (!title.trim()) return yield* Effect.fail(new Empty());
+      return { id: crypto.randomUUID(), title };
+    }),
+  { error: Empty },
+);
 
 export const watch = action(async function* () {
-  useRequest(); // inbound Request inside the stream
   yield { id: "1", title: "Ship Oxide" };
 });`,
-      "ts",
-    ),
-    name: "notes.server.ts",
-  },
-  {
-    html: highlight(
-      `// Every request hits this first. Return nothing to let
-// static files take over — no extra setup needed.
-export default {
-  fetch(request: Request) {
-    if (new URL(request.url).pathname === "/api/ok")
-      return new Response("ok");
-  },
-};`,
-      "ts",
-    ),
-    name: "server.ts",
-  },
-  {
-    html: highlight(
-      `<!doctype html>
-<html lang="en">
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/client.ts"></script>
-  </body>
-</html>`,
-      "html",
-    ),
-    name: "index.html",
-  },
-  {
-    html: highlight(
-      `import { defineConfig } from "vite";
-import oxide from "oxidejs/vite";
-
-export default defineConfig({
-  plugins: [oxide()],
-});`,
-      "ts",
-    ),
-    name: "vite.config.ts",
-  },
-];
-
-type SysInfo = [key: string, value: string, href?: string, mobileValue?: string];
-
-const sysInfo: SysInfo[] = [
-  ["runtime", "node / bun / deno"],
-  ["bundler", "vite / rsbuild", "/oxide/quickstart"],
-  ["entry", "src/server.ts", "/oxide/server-entry"],
-  ["rpc", "effect", "/oxide/server-actions"],
-  ["agentic", "llms.txt", "/llms.txt"],
-  ["deploy", "vps / celld / cloudflare / vercel", undefined, "vps / workers / vercel"],
-];
-
-const btn =
-  "btn rounded-none border-2 font-mono uppercase tracking-wide shadow-none";
+  "ts",
+);
 
 const bundlers = [
   {
@@ -104,7 +53,7 @@ export default defineConfig({
 });`,
       "ts",
     ),
-    name: "Vite",
+    name: "vite.config.ts",
   },
   {
     html: highlight(
@@ -116,9 +65,79 @@ export default defineConfig({
 });`,
       "ts",
     ),
-    name: "Rsbuild",
+    name: "rsbuild.config.ts",
   },
-] as const;
+];
+
+const serverEntry = highlight(
+  `// Optional. Return nothing to fall
+// through to static files.
+export default {
+  fetch(request: Request) {
+    const { pathname } = new URL(request.url);
+    if (pathname === "/api/ok")
+      return new Response("ok");
+  },
+};`,
+  "ts",
+);
+
+const features = [
+  {
+    body: "Import a *.server.ts export in the browser. Oxide swaps it for a typed RPC stub. The implementation never ships to the client.",
+    glyph: "->",
+    title: "Call server code directly",
+  },
+  {
+    body: "Export an async generator or an Effect Stream. Values arrive as NDJSON. Break the loop or abort to cancel on the server.",
+    glyph: "~>",
+    title: "Stream by yielding",
+  },
+  {
+    body: "Fail with a Schema.TaggedError. The client gets the tag and fields back, not a stringly-typed 500.",
+    glyph: "!?",
+    title: "Typed errors on the wire",
+  },
+  {
+    body: "Actions ride HTTP by default. Flip actions: \"ws\" for one socket per client, with ping, retries, and live queries.",
+    glyph: "<>",
+    title: "HTTP or WebSocket",
+  },
+  {
+    body: "Calls made in the same tick share one POST with batch(). Results resolve in order. Fewer round trips, same code.",
+    glyph: "[]",
+    title: "Batch for free",
+  },
+  {
+    body: "On Workers, export workflow(), queue(), or schedule(). Oxide merges the wrangler bindings and exposes start and status over RPC.",
+    glyph: "::",
+    title: "Durable jobs, one file",
+  },
+];
+
+const targets = [
+  { label: "Node", note: "node dist/server.js" },
+  { label: "Bun", note: "bun dist/server.js" },
+  { label: "Deno", note: "deno run dist/server.js" },
+  { label: "Cloudflare", note: "@cloudflare/vite-plugin" },
+  { label: "celld", note: "dist/wrangler.json" },
+  { label: "Vercel", note: "fetch handler" },
+];
+
+const without = [
+  "REST controllers for every call",
+  "A hand-written client SDK",
+  "Duplicated request / response types",
+  "A second build for the backend",
+  "A framework that owns your routes",
+];
+
+const btn =
+  "btn rounded-none border-2 font-mono uppercase tracking-wide shadow-none";
+const kicker =
+  "font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground";
+const sectionTitle =
+  "mt-3 font-mono text-2xl font-semibold tracking-tight text-foreground sm:text-3xl";
 ---
 
 <PageLayout
@@ -143,209 +162,177 @@ export default defineConfig({
   ogImageAlt="Oxide — Ship the backend, skip the framework"
   ogImageSize={{ width: 1200, height: 630 }}
 >
-  <div class="landing-tone hero-bg relative overflow-hidden">
-    <section class="relative mx-auto max-w-5xl px-4 pt-12 pb-16 sm:px-6 sm:pt-16">
-      <div class="grid items-center gap-12 lg:grid-cols-2">
-        <div>
-          <h1 class="font-mono text-lg text-foreground">
-            <span class="text-primary">oxide</span><span class="text-muted-foreground"
-              >@build</span
-            >:<span class="text-muted-foreground">~</span>
-            <span>ship the backend, skip the framework</span
-            ><span
-              aria-hidden="true"
-              class="ml-2 inline-block h-4 w-2 animate-pulse bg-primary align-middle"
-            />
-          </h1>
-          <p class="mt-4 max-w-108 font-mono text-sm leading-6 text-muted-foreground">
-            Turn Vite or Rsbuild into a full-stack build. Import server functions
-            in client code with end-to-end types, then deploy one server bundle anywhere.
-          </p>
-          <div class="mt-8 flex flex-wrap items-center gap-3">
-            <span class="inline-grid">
-              <a
-                href="/getting-started"
-                class={`${btn} btn-outline sysbox-cta-pending [grid-area:1/1] transition-opacity duration-300 motion-reduce:transition-none`}
-              >Start building</a>
-              <a
-                href="/getting-started"
-                class={`${btn} btn-primary sysbox-cta-ready [grid-area:1/1] pointer-events-none opacity-0 transition-opacity duration-300 motion-reduce:transition-none`}
+  <div class="landing-tone">
+    <!-- Hero -->
+    <section class="hero-grid relative overflow-hidden border-border border-b">
+      <div aria-hidden="true" class="hero-glow"></div>
+      <div class="relative mx-auto max-w-6xl px-4 pt-16 pb-20 sm:px-6 sm:pt-24 sm:pb-28">
+        <div class="grid items-center gap-14 lg:grid-cols-[1.15fr_1fr]">
+          <div class="reveal" style="--d:0">
+            <a
+              href="/oxide/worker"
+              class="group inline-flex items-center gap-2 border border-border bg-card/70 px-3 py-1 font-mono text-xs text-muted-foreground backdrop-blur hover:text-foreground"
+            >
+              <span class="ink-dot" aria-hidden="true"></span>
+              new: workflows, queues &amp; cron on Workers
+              <span class="transition-transform group-hover:translate-x-0.5">→</span>
+            </a>
+
+            <h1
+              class="mt-6 font-mono text-4xl font-semibold leading-[1.05] tracking-tight text-foreground sm:text-5xl xl:text-6xl"
+            >
+              Ship the backend.<br />
+              <span class="ink-text">Skip the framework.</span><span
                 aria-hidden="true"
-                tabindex="-1"
-              >Start building</a>
-            </span>
-            <a
-              href={repoUrl}
-              rel="noreferrer"
-              target="_blank"
-              class={`${btn} btn-outline`}
-            >Read the source</a>
-          </div>
-          <p class="mt-6 font-mono text-xs text-muted-foreground/80">
-            <span class="text-primary">[ok]</span> 1 plugin · 1 build · 1 deployable tree
-          </p>
-        </div>
+                class="caret ml-1 inline-block h-[0.8em] w-[0.45em] translate-y-[0.08em] bg-foreground align-baseline"
+              ></span>
+            </h1>
 
-        <div
-          class="sysbox-frame w-full max-w-md justify-self-center font-mono text-xs lg:justify-self-end lg:text-sm"
-        >
-          <div class="sysbox-row px-3 py-2 text-primary" style="--i:0">
-            oxide 0.5
-          </div>
-          <dl class="sysbox-divider m-0 py-2">
-            {
-              sysInfo.map(([key, value, href, mobileValue], index) => (
-                <div
-                  class="sysbox-row grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 px-3 py-1"
-                  style={`--i:${index + 1}`}
-                >
-                  <dt class="text-primary">{key}</dt>
-                  <dd class="m-0 min-w-0 text-foreground">
-                    {href ? (
-                      <a
-                        class="underline decoration-current underline-offset-4 hover:text-primary"
-                        href={href}
-                      >
-                        {value}
-                      </a>
-                    ) : mobileValue ? (
-                      <>
-                        <span class="lg:hidden">{mobileValue}</span>
-                        <span class="hidden lg:inline">{value}</span>
-                      </>
-                    ) : (
-                      value
-                    )}
-                  </dd>
-                </div>
-              ))
-            }
-          </dl>
-        </div>
-      </div>
-    </section>
+            <p class="mt-6 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
+              Oxide turns Vite or Rsbuild into a full-stack build. Import server
+              functions straight into client code with end-to-end types, then deploy
+              one boring server bundle anywhere.
+            </p>
 
-    <section class="relative mx-auto max-w-5xl px-4 pb-20 sm:px-6">
-      <div class="ascii-card terminal-win card rounded-none bg-card shadow-none">
-        <div class="card-body gap-0 p-0">
-          <div class="flex flex-wrap items-start justify-between gap-3 border-b-2 border-border px-4 py-3">
-            <div class="min-w-0 space-y-1">
-              <h2 class="card-title font-mono text-base uppercase tracking-wide">
-                server code in. deployable app out.
-              </h2>
-              <p class="font-mono text-sm leading-6 text-muted-foreground">
-                Five files. No controllers, client SDK, or second build pipeline.
-              </p>
+            <div class="mt-8 flex flex-wrap items-center gap-3">
+              <a href="/getting-started" class={`${btn} btn-ink`}>Start building →</a>
+              <a
+                href={playgroundUrl}
+                rel="noopener noreferrer"
+                target="_blank"
+                class={`${btn} btn-outline`}
+              >▶ Try it live</a>
             </div>
-            <a
-              target="_blank"
-              rel="noopener noreferrer"
-              href="https://stackblitz.com/github/ryuzcorp/oxide/tree/main/templates/simple?file=src%2Fgreet.server.tsx"
-              class={`${btn} btn-sm btn-secondary`}
-            >▶ run</a>
+
+            <div
+              class="install mt-6 inline-flex max-w-full items-center gap-3 border border-border bg-card px-3 py-2 font-mono text-sm"
+            >
+              <span class="ink-text select-none">$</span>
+              <code class="truncate text-foreground">{installCmd}</code>
+              <button
+                type="button"
+                class="copy-btn ml-2 cursor-pointer border-border border-l pl-3 text-xs uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                data-copy={installCmd}
+                aria-label="Copy install command"
+              >copy</button>
+            </div>
           </div>
 
-          <div class="tabs tabs-border w-full">
-            {
-              files.map((file, index) => (
-                <>
-                  <input
-                    type="radio"
-                    name="oxide_files"
-                    class="tab font-mono text-xs"
-                    aria-label={file.name}
-                    checked={index === 0}
-                  />
-                  <div class="tab-content m-0 border-0 p-0">
-                    <div
-                      class="overflow-x-auto px-4 py-4 font-mono text-sm leading-6 [-webkit-text-size-adjust:100%] [text-size-adjust:100%]"
-                      set:html={file.html}
-                    />
-                  </div>
-                </>
-              ))
-            }
-          </div>
-
-          <div
-            class="flex items-center gap-2 border-t-2 border-border px-4 py-2 font-mono text-xs text-muted-foreground"
-          >
-            <span class="text-primary">[ok]</span>
-            {files.length} files · effect rpc · chunked streams
+          <!-- Flow diagram -->
+          <div class="reveal font-mono text-xs sm:text-sm" style="--d:2">
+            <div class="ascii-card bg-card/80 backdrop-blur">
+              <div class="flex items-center justify-between border-border border-b px-4 py-2 text-muted-foreground">
+                <span>how a call travels</span>
+                <span class="ink-text">oxide 0.5</span>
+              </div>
+              <ol class="m-0 list-none space-y-0 p-0">
+                <li class="flow-step" style="--i:0">
+                  <span class="flow-tag">browser</span>
+                  <code class="text-foreground">await create("Ship Oxide")</code>
+                </li>
+                <li class="flow-wire" style="--i:1" aria-hidden="true">
+                  <span class="packet"></span>
+                </li>
+                <li class="flow-step" style="--i:2">
+                  <span class="flow-tag">wire</span>
+                  <code class="min-w-0 truncate text-muted-foreground"
+                    >POST /__oxide/action · json-rpc</code
+                  >
+                </li>
+                <li class="flow-wire" style="--i:3" aria-hidden="true">
+                  <span class="packet" style="animation-delay:.6s"></span>
+                </li>
+                <li class="flow-step" style="--i:4">
+                  <span class="flow-tag">server</span>
+                  <code class="text-foreground">notes.create</code>
+                  <span class="ml-auto text-muted-foreground">Effect</span>
+                </li>
+                <li class="flow-wire" style="--i:5" aria-hidden="true">
+                  <span class="packet reverse" style="animation-delay:1.2s"></span>
+                </li>
+                <li class="flow-step" style="--i:6">
+                  <span class="flow-tag ink-bg">result</span>
+                  <code class="min-w-0 truncate text-foreground"
+                    >{`{ id: "…", title: "Ship Oxide" }`}</code
+                  >
+                </li>
+              </ol>
+              <div class="flex flex-wrap gap-x-4 gap-y-1 border-border border-t px-4 py-2 text-muted-foreground">
+                <span><span class="ink-text">✓</span> typed end to end</span>
+                <span><span class="ink-text">✓</span> no client SDK</span>
+                <span><span class="ink-text">✓</span> no routes</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </section>
-  </div>
 
-  <section class="landing-tone mx-auto max-w-5xl px-4 pb-20 sm:px-6">
-    <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
-      <span class="text-primary">[01] //</span> less plumbing. more shipping.
-    </h2>
-    <div aria-hidden="true" class="ascii-divider mt-3"></div>
-    <div class="mt-8 grid gap-4 sm:grid-cols-3">
-      <div class="ascii-card card rounded-none bg-card shadow-none">
-        <div class="card-body">
-          <h3 class="card-title font-mono text-base uppercase tracking-wide">
-            <span class="text-primary">▸</span> call server code directly
-          </h3>
-          <p class="font-mono text-sm leading-6 text-muted-foreground">
-            Import a <code>*.server.ts</code> function in the browser. Oxide turns
-            the call into typed RPC and keeps the implementation on the server.
-          </p>
-        </div>
-      </div>
-      <div class="ascii-card card rounded-none bg-card shadow-none">
-        <div class="card-body">
-          <h3 class="card-title font-mono text-base uppercase tracking-wide">
-            <span class="text-primary">▸</span> stream by yielding
-          </h3>
-          <p class="font-mono text-sm leading-6 text-muted-foreground">
-            Export an async generator to stream values over chunked JSON-RPC.
-            Consume it with <code>for await</code> and cancel with an abort signal.
-          </p>
-        </div>
-      </div>
-      <div class="ascii-card card rounded-none bg-card shadow-none">
-        <div class="card-body">
-          <h3 class="card-title font-mono text-base uppercase tracking-wide">
-            <span class="text-primary">▸</span> deploy boring output
-          </h3>
-          <p class="font-mono text-sm leading-6 text-muted-foreground">
-            Get one ESM server bundle plus optional client assets. Run it on a VPS,
-            celld, Cloudflare, or Vercel.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
+    <!-- Code split -->
+    <section class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+      <p class={kicker}><span class="ink-text">01</span> / the whole idea</p>
+      <h2 class={sectionTitle}>Two files. One function call.</h2>
+      <p class="mt-3 max-w-2xl leading-7 text-muted-foreground">
+        Write the server function. Import it from the client. Oxide rewrites the
+        import into an Effect RPC stub at build time, so types flow through and
+        server code stays on the server.
+      </p>
 
-  <section class="landing-tone mx-auto max-w-5xl px-4 pb-20 sm:px-6">
-    <div class="grid items-start gap-10 lg:grid-cols-2">
-      <div>
-        <h2 class="font-mono text-base uppercase tracking-wide text-muted-foreground">
-          <span class="text-primary">[02] //</span> one build. no backend side project.
-        </h2>
-        <div aria-hidden="true" class="ascii-divider mt-3"></div>
-        <pre
-          class="ascii-card mt-5 overflow-x-auto bg-muted/40 p-4 font-mono text-sm leading-6 text-foreground"
-        ><code><span class="text-primary">$</span> tree dist/
-dist/
-├── client/        <span class="text-muted-foreground"># if you have a page</span>
-└── server.js      <span class="text-muted-foreground"># your backend</span></code></pre>
-        <p class="mt-4 font-mono text-sm leading-6 text-muted-foreground">
-          Build once with <code class="font-mono text-foreground"
-            >vite build</code
-          >. Oxide emits the browser assets and a server you can run with
-          <code class="font-mono text-foreground">node dist/server.js</code>. Server
-          actions use typed Effect RPC over HTTP or WebSocket.
-        </p>
-        <a class="btn btn-link mt-6 pl-0 font-mono uppercase tracking-wide" href="/oxide/quickstart">
-          build your first app →
-        </a>
+      <div class="code-theme mt-10 grid gap-4 lg:grid-cols-2">
+        <div class="ascii-card bg-card">
+          <div class="win-bar">
+            <span class="win-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>src/client.ts</span>
+            <span class="ml-auto text-[10px] uppercase tracking-widest">browser</span>
+          </div>
+          <div class="overflow-x-auto p-4 font-mono text-[13px] leading-6" set:html={clientCode} />
+        </div>
+        <div class="ascii-card bg-card">
+          <div class="win-bar">
+            <span class="win-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>src/notes.server.ts</span>
+            <span class="ink-text ml-auto text-[10px] uppercase tracking-widest">server only</span>
+          </div>
+          <div class="overflow-x-auto p-4 font-mono text-[13px] leading-6" set:html={serverCode} />
+        </div>
       </div>
-      <div class="landing-code space-y-4">
-        <div class="ascii-card overflow-hidden rounded-none bg-card">
+      <p class="mt-4 font-mono text-xs text-muted-foreground">
+        <span class="ink-text">[ok]</span> Only <code class="text-foreground">action()</code>{" "}
+        exports are callable over the wire. Everything else stays server-local.
+      </p>
+    </section>
+
+    <!-- Features -->
+    <section class="border-border border-y bg-muted/30">
+      <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+        <p class={kicker}><span class="ink-text">02</span> / less plumbing</p>
+        <h2 class={sectionTitle}>Everything between the click and the database.</h2>
+        <div class="mt-10 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+          {
+            features.map((feature) => (
+              <div class="feature group bg-card p-6">
+                <span class="feature-glyph" aria-hidden="true">
+                  {feature.glyph}
+                </span>
+                <h3 class="mt-5 font-mono text-sm font-semibold uppercase tracking-wide text-foreground">
+                  {feature.title}
+                </h3>
+                <p class="mt-2 text-sm leading-6 text-muted-foreground">{feature.body}</p>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+      <p class={kicker}><span class="ink-text">03</span> / one build</p>
+      <h2 class={sectionTitle}>No backend side project.</h2>
+
+      <div class="code-theme mt-10 grid gap-4 lg:grid-cols-3">
+        <div class="step ascii-card bg-card">
+          <div class="win-bar"><span class="step-num">1</span><span>Add the plugin</span></div>
           <div class="tabs tabs-border w-full">
             {
               bundlers.map((bundler, index) => (
@@ -359,7 +346,7 @@ dist/
                   />
                   <div class="tab-content m-0 border-0 p-0">
                     <div
-                      class="p-4 font-mono text-[13px] leading-6"
+                      class="overflow-x-auto p-4 font-mono text-[13px] leading-6"
                       set:html={bundler.html}
                     />
                   </div>
@@ -368,50 +355,134 @@ dist/
             }
           </div>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <section class="landing-tone mx-auto max-w-5xl px-4 pb-24 sm:px-6">
-    <div class="ascii-card card rounded-none bg-card shadow-none">
-      <div class="card-body">
-        <h2 class="card-title font-mono text-base uppercase tracking-wide">
-          <span class="text-primary">[03] $</span> ship something
-        </h2>
-        <p class="font-mono text-sm leading-6 text-muted-foreground">
-          Add one plugin. Write one server function. Call it from the browser.
-          Your backend is ready to ship.
-        </p>
-        <div class="card-actions">
-          <a href="/getting-started" class={`${btn} btn-primary btn-lg`}>Start building</a>
+        <div class="step ascii-card bg-card">
+          <div class="win-bar"><span class="step-num">2</span><span>src/server.ts</span></div>
+          <div class="overflow-x-auto p-4 font-mono text-[13px] leading-6" set:html={serverEntry} />
+        </div>
+
+        <div class="step ascii-card bg-card">
+          <div class="win-bar"><span class="step-num">3</span><span>Build &amp; run</span></div>
+          <pre
+            class="m-0 overflow-x-auto p-4 font-mono text-[13px] leading-6 text-foreground"
+          ><code><span class="ink-text">$</span> vite build
+
+<span class="ink-text">$</span> tree dist/
+dist/
+├── client/   <span class="text-muted-foreground"># if you have a page</span>
+└── server.js <span class="text-muted-foreground"># your backend</span>
+
+<span class="ink-text">$</span> node dist/server.js
+<span class="text-muted-foreground">oxidejs listening on 3000</span></code></pre>
         </div>
       </div>
-    </div>
-  </section>
+
+      <a class="btn btn-link mt-6 pl-0 font-mono uppercase tracking-wide" href="/oxide/quickstart">
+        Read the quickstart →
+      </a>
+    </section>
+
+    <!-- Without / Deploy -->
+    <section class="mx-auto max-w-6xl px-4 pb-20 sm:px-6 sm:pb-28">
+      <div class="grid gap-10 lg:grid-cols-2">
+        <div>
+          <p class={kicker}><span class="ink-text">04</span> / what you skip</p>
+          <h2 class={sectionTitle}>Delete the glue code.</h2>
+          <ul class="mt-8 space-y-3 p-0">
+            {
+              without.map((item) => (
+                <li class="flex items-baseline gap-3 font-mono text-sm">
+                  <span class="ink-text select-none">−</span>
+                  <span class="text-muted-foreground line-through decoration-muted-foreground/50">
+                    {item}
+                  </span>
+                </li>
+              ))
+            }
+            <li class="flex items-baseline gap-3 pt-2 font-mono text-sm">
+              <span class="ink-text select-none">+</span>
+              <span class="text-foreground">One plugin. Plain functions. Real types.</span>
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <p class={kicker}><span class="ink-text">05</span> / deploy</p>
+          <h2 class={sectionTitle}>Boring output runs anywhere.</h2>
+          <div class="mt-8 grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3">
+            {
+              targets.map((target) => (
+                <div class="target bg-card px-4 py-5">
+                  <div class="font-mono text-sm font-semibold text-foreground">{target.label}</div>
+                  <div class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                    {target.note}
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+          <p class="mt-4 text-sm leading-6 text-muted-foreground">
+            One ESM bundle with a standard <code class="font-mono text-foreground">fetch</code>{" "}
+            handler. Add a <code class="font-mono text-foreground">wrangler.jsonc</code>{" "}and Oxide
+            switches to the Workers preset on its own.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="mx-auto max-w-6xl px-4 pb-24 sm:px-6">
+      <div class="cta ascii-card hero-grid relative overflow-hidden bg-card px-6 py-14 text-center sm:px-12 sm:py-20">
+        <div aria-hidden="true" class="hero-glow"></div>
+        <div class="relative">
+          <h2 class="font-mono text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            Ship something <span class="ink-text">today.</span>
+          </h2>
+          <p class="mx-auto mt-4 max-w-lg leading-7 text-muted-foreground">
+            Add one plugin. Write one server function. Call it from the browser.
+            Your backend is ready.
+          </p>
+          <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <a href="/getting-started" class={`${btn} btn-ink btn-lg`}>Start building →</a>
+            <a
+              href={repoUrl}
+              rel="noopener noreferrer"
+              target="_blank"
+              class={`${btn} btn-outline btn-lg`}
+            >Star on GitHub</a>
+          </div>
+          <p class="mt-6 font-mono text-xs text-muted-foreground">
+            <a class="underline underline-offset-4 hover:text-foreground" href="/llms.txt">llms.txt</a>{" "}
+            for your agent · MIT licensed
+          </p>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <footer
     slot="footer"
     class="landing-tone border-border border-t px-4 py-8 text-muted-foreground text-sm sm:px-6"
   >
     <div
-      class="mx-auto flex max-w-5xl flex-col items-center justify-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left"
+      class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left"
     >
       <span class="font-mono">
         oxide · built by the team behind{" "}
-        <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noreferrer" target="_blank">ilha</a>
+        <a class="underline-offset-4 hover:text-foreground hover:underline" href="https://ilha.build/" rel="noopener noreferrer" target="_blank">ilha</a>
       </span>
       <div class="flex h-5 items-center justify-center gap-1 font-mono">
         <a href="/getting-started" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide">docs</a>
         <div class="divider divider-horizontal mx-0"></div>
-        <a href={repoUrl} rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+        <a href={repoUrl} rel="noopener noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
           >github</a
         >
         <div class="divider divider-horizontal mx-0"></div>
-        <a href="https://x.com/oxidejs" rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+        <a href="https://x.com/oxidejs" rel="noopener noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
           >x.com</a
         >
         <div class="divider divider-horizontal mx-0"></div>
-        <a href="https://discord.gg/WnVTMCTz74" rel="noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
+        <a href="https://discord.gg/WnVTMCTz74" rel="noopener noreferrer" target="_blank" class="btn btn-link h-auto min-h-0 px-1 font-mono uppercase tracking-wide"
           >discord</a
         >
       </div>
@@ -420,24 +491,19 @@ dist/
 </PageLayout>
 
 <script>
-  const pendingCta = document.querySelector<HTMLElement>(".sysbox-cta-pending");
-  const readyCta = document.querySelector<HTMLElement>(".sysbox-cta-ready");
-  const lastRow = document.querySelector<HTMLElement>(
-    ".sysbox-row:last-child",
-  );
-  const showPrimary = () => {
-    pendingCta?.classList.add("pointer-events-none", "opacity-0");
-    pendingCta?.setAttribute("aria-hidden", "true");
-    pendingCta?.setAttribute("tabindex", "-1");
-    readyCta?.classList.remove("pointer-events-none", "opacity-0");
-    readyCta?.removeAttribute("aria-hidden");
-    readyCta?.removeAttribute("tabindex");
-  };
-
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    showPrimary();
-  } else {
-    lastRow?.addEventListener("animationend", showPrimary, { once: true });
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".copy-btn")) {
+    button.addEventListener("click", async () => {
+      const text = button.dataset.copy ?? "";
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = "copied";
+      } catch {
+        button.textContent = "failed";
+      }
+      setTimeout(() => {
+        button.textContent = "copy";
+      }, 1500);
+    });
   }
 </script>
 
@@ -445,37 +511,140 @@ dist/
   .landing-tone {
     --blume-foreground: #0a0a0a;
     --blume-muted-foreground: #525252;
-    --ascii-border: #666;
+    --ascii-border: #8a8a8a;
+    --ink: oklch(0.48 0.2 272);
+    --ink-soft: oklch(0.48 0.2 272 / 0.1);
+    --ink-contrast: #fff;
+    --grid-line: rgb(0 0 0 / 0.05);
   }
 
   :global([data-theme="dark"]) .landing-tone {
     --blume-foreground: #fafafa;
-    --blume-muted-foreground: #bdbdbd;
-    --ascii-border: #525252;
+    --blume-muted-foreground: #a3a3a3;
+    --ascii-border: #4a4a4a;
+    --ink: oklch(0.7 0.15 275);
+    --ink-soft: oklch(0.7 0.15 275 / 0.16);
+    --ink-contrast: #0a0a0a;
+    --grid-line: rgb(255 255 255 / 0.05);
   }
 
-  .terminal-win,
-  .landing-code {
+  .ink-text {
+    color: var(--ink);
+  }
+
+  .ink-bg {
+    background: var(--ink) !important;
+    color: var(--ink-contrast) !important;
+    border-color: var(--ink) !important;
+  }
+
+  .btn-ink {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--ink-contrast);
+  }
+
+  .btn-ink:hover {
+    border-color: var(--blume-foreground);
+    background: var(--blume-foreground);
+    color: var(--blume-background);
+  }
+
+  .ink-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    background: var(--ink);
+    box-shadow: 0 0 0 3px var(--ink-soft);
+  }
+
+  /* Hero backdrop: faint grid fading out, with a ink glow. */
+  .hero-grid {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+  }
+
+  .hero-glow {
+    position: absolute;
+    inset: -30% -10% auto auto;
+    width: 60rem;
+    height: 40rem;
+    background: radial-gradient(closest-side, var(--ink-soft), transparent);
+    pointer-events: none;
+  }
+
+  .caret {
+    animation: blink 1.1s steps(1) infinite;
+    background: var(--ink);
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  /* Syntax colors: monochrome with ink highlights. */
+  .code-theme {
     --shj-bg: transparent;
     --shj-fg: var(--blume-foreground);
     --shj-numbers: var(--blume-muted-foreground);
     --shj-cmnt: var(--blume-muted-foreground);
     --shj-bracket: var(--blume-muted-foreground);
-    --shj-kwd: var(--blume-accent);
-    --shj-oper: var(--blume-accent);
-    --shj-esc: var(--blume-accent);
-    --shj-class: var(--blume-accent);
-    --shj-num: var(--blume-accent);
-    --shj-bool: var(--blume-accent);
-    --shj-type: var(--blume-accent);
-    --shj-section: var(--blume-accent);
-    --shj-func: var(--blume-accent);
+    --shj-kwd: var(--ink);
+    --shj-oper: var(--blume-muted-foreground);
+    --shj-esc: var(--ink);
+    --shj-class: var(--blume-foreground);
+    --shj-num: var(--ink);
+    --shj-bool: var(--ink);
+    --shj-type: var(--blume-foreground);
+    --shj-section: var(--ink);
+    --shj-func: var(--blume-foreground);
     --shj-var: var(--blume-foreground);
-    --shj-str: var(--blume-foreground);
-    --shj-insert: var(--blume-accent);
+    --shj-str: var(--blume-muted-foreground);
+    --shj-insert: var(--ink);
   }
 
-  .sysbox-frame,
+  .win-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--ascii-border);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+    color: var(--blume-muted-foreground);
+  }
+
+  .win-dots {
+    display: inline-flex;
+    gap: 0.35rem;
+  }
+
+  .win-dots i {
+    width: 0.55rem;
+    height: 0.55rem;
+    border: 1px solid var(--ascii-border);
+  }
+
+  .win-dots i:first-child {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .step-num {
+    display: inline-grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    background: var(--ink);
+    color: var(--ink-contrast);
+    font-weight: 600;
+  }
+
+  /* Dashed ASCII frame. */
   :global(.ascii-card) {
     position: relative;
     border: 0;
@@ -483,8 +652,6 @@ dist/
     box-shadow: none;
   }
 
-  .sysbox-frame::before,
-  .sysbox-frame::after,
   :global(.ascii-card)::before,
   :global(.ascii-card)::after {
     position: absolute;
@@ -504,62 +671,152 @@ dist/
     pointer-events: none;
   }
 
-  .sysbox-frame::before,
   :global(.ascii-card)::before {
     top: 0;
   }
 
-  .sysbox-frame::after,
   :global(.ascii-card)::after {
     bottom: 0;
   }
 
-  .sysbox-divider {
+  /* Flow diagram */
+  .flow-step {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 1rem;
+    min-width: 0;
+  }
+
+  .flow-tag {
+    flex: none;
+    width: 4.5rem;
+    padding: 0.1rem 0;
+    border: 1px solid var(--ascii-border);
+    text-align: center;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--blume-muted-foreground);
+  }
+
+  .flow-wire {
     position: relative;
+    height: 1.25rem;
+    margin-left: calc(1rem + 2.25rem);
+    border-left: 1px dashed var(--ascii-border);
   }
 
-  .sysbox-divider::before,
-  .ascii-divider {
-    background: repeating-linear-gradient(
-      90deg,
-      var(--ascii-border) 0 16px,
-      transparent 16px 22px
-    );
-    box-shadow:
-      inset 16px 0 var(--ascii-border),
-      inset -16px 0 var(--ascii-border);
-  }
-
-  .sysbox-divider::before {
+  .packet {
     position: absolute;
-    top: 0;
-    right: 0;
-    left: 0;
-    height: 1px;
-    content: "";
-    pointer-events: none;
+    left: -3px;
+    width: 5px;
+    height: 5px;
+    background: var(--ink);
+    animation: travel 1.8s ease-in-out infinite;
   }
 
-  .ascii-divider {
-    height: 1px;
+  .packet.reverse {
+    animation-direction: reverse;
   }
 
-  .sysbox-row {
+  @keyframes travel {
+    0% {
+      top: 0;
+      opacity: 0;
+    }
+    20%,
+    80% {
+      opacity: 1;
+    }
+    100% {
+      top: calc(100% - 5px);
+      opacity: 0;
+    }
+  }
+
+  .flow-step,
+  .flow-wire {
     opacity: 0;
-    animation: sysbox-render 250ms ease-out forwards;
-    animation-delay: calc(100ms + var(--i) * 90ms);
+    animation: fade-in 300ms ease-out forwards;
+    animation-delay: calc(250ms + var(--i) * 110ms);
   }
 
-  @keyframes sysbox-render {
+  .reveal {
+    opacity: 0;
+    transform: translateY(8px);
+    animation: rise 600ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+    animation-delay: calc(var(--d) * 90ms);
+  }
+
+  @keyframes fade-in {
     to {
       opacity: 1;
     }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .sysbox-row {
+  @keyframes rise {
+    to {
       opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Features */
+  .feature {
+    transition: background-color 200ms;
+  }
+
+  .feature:hover {
+    background: var(--ink-soft);
+  }
+
+  .feature-glyph {
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 1px solid var(--ascii-border);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--ink);
+    transition:
+      background-color 200ms,
+      color 200ms,
+      border-color 200ms;
+  }
+
+  .feature:hover .feature-glyph {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--ink-contrast);
+  }
+
+  .target {
+    transition: background-color 200ms;
+  }
+
+  .target:hover {
+    background: var(--ink-soft);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal,
+    .flow-step,
+    .flow-wire {
+      opacity: 1;
+      transform: none;
       animation: none;
+    }
+
+    .caret,
+    .packet {
+      animation: none;
+    }
+
+    .packet {
+      display: none;
     }
   }
 </style>
