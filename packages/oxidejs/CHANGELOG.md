@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+### Changed
+
+- Bumped `effect` to `4.0.0` stable (and `@effect/sql-d1` to `4.0.0` in the kit template)
+
 ## 0.5.7
 
 ### Changed

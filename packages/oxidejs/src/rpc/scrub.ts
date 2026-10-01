@@ -89,60 +89,52 @@ const extractTaggedFail = function extractTaggedFail(
   return undefined;
 };
 
-/** Prefer the Schema Die defect text over a raw Cause JSON blob. */
-const extractParamsDieMessage = function extractParamsDieMessage(
-  message: OxidejsJson | undefined,
-  data: OxidejsJson | undefined
-): string | undefined {
-  const tryDefect = function tryDefect(
-    defect: OxidejsJson | undefined
-  ): string | undefined {
-    if (
-      isStringField(defect) &&
-      (/Expected/iu.test(defect) || /Missing key/iu.test(defect))
-    ) {
-      return defect;
+const tryDefect = (defect: OxidejsJson | undefined) =>
+  isStringField(defect) &&
+  (/Expected/iu.test(defect) || /Missing key/iu.test(defect))
+    ? defect
+    : undefined;
+
+const scanDefect = (value: OxidejsJson | undefined): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isStringField(value)) {
+    try {
+      // SAFETY: Cause messages are often a JSON-encoded Die tree.
+      return scanDefect(JSON.parse(value) as OxidejsJson);
+    } catch {
+      return tryDefect(value);
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const hit = scanDefect(entry);
+      if (hit) {
+        return hit;
+      }
     }
     return undefined;
-  };
-  const scan = function scan(
-    value: OxidejsJson | undefined
-  ): string | undefined {
-    if (value === undefined) {
-      return undefined;
-    }
-    if (isStringField(value)) {
-      try {
-        // SAFETY: Cause messages are often a JSON-encoded Die tree.
-        return scan(JSON.parse(value) as OxidejsJson);
-      } catch {
-        return tryDefect(value);
-      }
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        const hit = scan(entry);
-        if (hit) {
-          return hit;
-        }
-      }
-      return undefined;
-    }
-    if (!isJsonObject(value)) {
-      return undefined;
-    }
-    if (value["_tag"] === "Die") {
-      return tryDefect(value["defect"]);
-    }
-    return (
-      scan(value["left"]) ??
-      scan(value["right"]) ??
-      scan(value["causes"]) ??
-      scan(value["data"])
-    );
-  };
-  return scan(message) ?? scan(data);
+  }
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  if (value["_tag"] === "Die") {
+    return tryDefect(value["defect"]);
+  }
+  return (
+    scanDefect(value["left"]) ??
+    scanDefect(value["right"]) ??
+    scanDefect(value["causes"]) ??
+    scanDefect(value["data"])
+  );
 };
+
+/** Prefer the Schema Die defect text over a raw Cause JSON blob. */
+const extractParamsDieMessage = (
+  message: OxidejsJson | undefined,
+  data: OxidejsJson | undefined
+) => scanDefect(message) ?? scanDefect(data);
 
 const classifyCause = function classifyCause(
   error: JsonObject

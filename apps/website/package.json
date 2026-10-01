@@ -8,15 +8,15 @@
     "verify": "blume build --isolated"
   },
   "dependencies": {
-    "effect": "~4.0.0-rc.118",
+    "effect": "^4.0.0",
     "oxidejs": "workspace:*",
     "rangi": "^2.2.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.54.6",
-    "@ilha/astro": "^0.3.1",
-    "blume": "^2.0.3",
-    "daisyui": "^5.7.27",
+    "@cloudflare/vite-plugin": "^1.62.3",
+    "@ilha/astro": "^0.3.9",
+    "blume": "^2.1.0",
+    "daisyui": "^5.7.47",
     "vite": "^8.3.1"
   }
 }

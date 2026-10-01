@@ -24,14 +24,10 @@
     "@tsconfig/strictest": "^2.0.8",
     "@types/bun": "latest",
     "husky": "^9.1.7",
-    "oxfmt": "^0.66.0",
-    "oxlint": "^1.81.0",
-    "tsdown": "^0.22.14",
-    "typescript": "^6",
-    "ultracite": "7.10.8"
-  },
-  "overrides": {
-    "@ilha/router": "^0.11.10",
-    "ilha": "^0.14.8"
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "tsdown": "^0.23.0",
+    "typescript": "^7",
+    "ultracite": "7.12.2"
   }
 }
