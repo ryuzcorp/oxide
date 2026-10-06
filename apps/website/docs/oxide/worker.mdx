@@ -137,3 +137,14 @@ Exactly one of `workflow` / `queue` / `handle`. Oxide merges unique cron express
 ## Deploy (Cloudflare and celld)
 
 Cloudflare owns `wrangler deploy` from the Vite SSR snapshot (`dist/ssr`). The same production `vite build` also writes a celld-ready `dist/wrangler.json` when that snapshot exists — no extra plugin or env flag. See [celld](/oxide/configuration#celld).
+
+### `celld dev`
+
+Run `celld dev` against the built output, not your source tree. Source mode cannot resolve the `virtual:oxide/worker` entry — that virtual module only exists inside the Vite/Rsbuild build — so `celld dev` on `src/` fails. `vite build` first: `prepareCelldDeploy` writes `dist/wrangler.json` with `main: "celld/entry.js"`, which is what `celld dev` and `celld deploy` consume.
+
+```sh
+vite build && celld dev dist   # dev
+vite build && celld deploy dist # deploy
+```
+
+The kit wires these as `bun run dev:celld` and `bun run deploy:celld`.

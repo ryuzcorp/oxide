@@ -137,7 +137,7 @@ export const add = action(
 );
 ```
 
-`withSchema` is sugar for `action(handler, { payload })` plus a local decode for direct server calls. Prefer one Struct payload over many positional args — it matches Effect Rpc and stays easy to evolve. Schemas that need decoding services are not supported yet.
+`withSchema` is sugar for `action(handler, { payload })` plus a local decode for direct server calls. `await add(payload)` is typed as the handler's data — there is no Effect union to narrow. Calling the `withSchema` function directly with an invalid payload throws `SchemaDecodeError` before the handler runs; through `action()` that is a rejected promise. Over RPC the payload is decoded before the handler runs, so an invalid payload is JSON-RPC invalid params (`-32602`). Prefer one Struct payload over many positional args — it matches Effect Rpc and stays easy to evolve. Schemas that need decoding services are not supported yet.
 
 ### Typed Fail on the wire
 
@@ -161,6 +161,54 @@ export const getTask = action(
 ```
 
 Clients see application error `-32000` with the tag/message. Returning an `Error` as a value does not promote it over RPC — use `Effect.fail` or throw the tagged error.
+
+A rejected client call is an `Error` instance, so `error.message`, `error._tag`, `error.code` and `String(error)` all work. A declared tagged error keeps its `_tag` and decoded fields, and rejects as an instance of the class when its schema reached the client (see [Schemas on the client](#schemas-on-the-client)); invalid params become `SchemaDecodeError` (`-32602`). Plain thrown `Error`s stay masked as `Internal error` (`-32603`) — to surface a user-facing message, call `fail(message)`, which throws `ActionFailure`:
+
+```ts twoslash src/save.server.ts
+import { action, fail } from "oxidejs";
+
+export const save = action(async () => {
+  fail("Not allowed");
+});
+```
+
+The generated action always unions `ActionFailure` into its error schema, so `fail()` needs no `error` option and still works when you declare your own `Schema.TaggedError` `error` for a richer typed failure.
+
+### Schemas on the client
+
+The generated client group uses your schemas only when they live outside `*.server.ts`. Import them from a plain module:
+
+```ts twoslash src/tasks.server.ts
+// @filename: schemas.ts
+import { Schema } from "effect";
+
+export const AddTask = Schema.Struct({ text: Schema.String });
+
+export class NotFound extends Schema.TaggedError<NotFound>()(
+  "NotFound",
+  {
+    id: Schema.String,
+  }
+) {}
+// ---cut---
+// @filename: tasks.server.ts
+import { action, withSchema } from "oxidejs";
+import { AddTask, NotFound } from "./schemas";
+
+export const add = action(
+  withSchema(AddTask, async ({ text }) => ({ id: "1", text })),
+  { error: NotFound }
+);
+```
+
+The client then validates the Encoded payload before sending, decodes the response with `success`, and rebuilds a declared tagged error as an instance of your class:
+
+| Where the schema is | Client behavior |
+| --- | --- |
+| Imported from a plain module | an invalid payload rejects with `SchemaDecodeError` (`-32602`) and no request goes out; a `success` schema decodes the wire value (`Schema.Date` arrives as a `Date`); a declared `error` rejects as `instanceof NotFound` with its fields and `code: -32000` |
+| Inline, locally declared, or in another `*.server.ts` | `Schema.Unknown` in that slot: no payload check, no success decode, and a declared error arrives as an `ActionError` carrying `_tag`, `code` and the decoded fields |
+
+The client bundle never imports a `*.server.ts` file, so the shared module must not import one either. `ActionFailure` and `SchemaDecodeError` keep working either way.
 
 ### Effect handlers and services
 
@@ -329,7 +377,30 @@ controller.abort();
 void stream;
 ```
 
-`idempotencyKey` is sent as `x-oxide-idempotency-key` and available via `useIdempotencyKey()`. Pair with durable dedupe (for example paranorm `once()`) when the mutation queue replays.
+`idempotencyKey` is sent as `x-oxide-idempotency-key` and available via `useIdempotencyKey()`. When the mutation queue replays, claim the key before writing. On D1 do not use paranorm `once()`: it claims with `INSERT OR IGNORE` and then reads `SELECT changes()` in a follow-up statement, but D1 runs each statement in its own implicit transaction and does not carry `changes()` across them — the follow-up reports 0, so the write never runs. Use a single `INSERT … ON CONFLICT DO NOTHING RETURNING` — it returns no row when the key already exists:
+
+```ts
+const claim = (key: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const rows = yield* sql<{ key: string }>`
+      INSERT INTO paranorm_idempotency (key) VALUES (${key})
+      ON CONFLICT DO NOTHING
+      RETURNING key
+    `;
+    return rows.length > 0;
+  });
+
+export const add = action((text: string) =>
+  Effect.gen(function* () {
+    const key = useIdempotencyKey();
+    if (key && !(yield* claim(key))) {
+      return;
+    }
+    // ...write
+  })
+);
+```
 
 ## Mutation queue (client)
 
@@ -353,6 +424,43 @@ await addQueued("Buy milk");
 ```
 
 Optimistic UI is app-owned — listen with `queue.subscribe`. HTTP apps can ignore this module.
+
+### Durable storage
+
+Add `storage` to keep a failed write across a reload. `indexedDbStorage()` is a browser adapter with no dependencies; implement `load` / `put` / `delete` for anything else:
+
+```ts twoslash src/queue-storage.ts
+// @filename: tasks.server.ts
+import { action } from "oxidejs";
+export const add = action(async (text: string) => ({ id: "1", text }));
+// ---cut---
+// @filename: queue-storage.ts
+import {
+  createMutationQueue,
+  indexedDbStorage,
+} from "oxidejs/mutation-queue";
+import { add } from "./tasks.server";
+
+const queue = createMutationQueue({ storage: indexedDbStorage() });
+const addQueued = queue.wrap(add, {
+  key: "tasks.add", // "<file>.<fn>": how a restored write finds its action
+  idempotencyKey: (text) => `add:${text}`,
+});
+
+const surface = (message: string) => {
+  // your toast / telemetry
+};
+
+queue.subscribe((event) => {
+  if (event.type === "discard" && event.item) {
+    surface(`dropped ${event.item.id}`);
+  }
+});
+
+await addQueued("Buy milk");
+```
+
+With storage, `wrap` needs `key`, and args must survive `structuredClone`; a call that cannot be persisted rejects at enqueue with a clear error. Restored writes replay in FIFO order once their action is wrapped, keeping the same `idempotencyKey` so server-side dedupe still applies. Nothing awaits a restored write, so its outcome arrives as an event: `restore`, `success`, or `discard` (removed after a permanent failure). `await queue.ready` waits for the load. `indexedDbStorage()` throws where IndexedDB is missing (SSR, Node); a store that is present but unwritable (private mode) emits `error` and the queue keeps working in memory. `storage: "memory"` (the default) changes nothing.
 
 ## Request context
 

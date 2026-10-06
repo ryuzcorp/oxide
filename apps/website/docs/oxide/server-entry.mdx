@@ -33,6 +33,33 @@ Named exports such as `scheduled` and `queue` are re-exported (`export *`). Put 
 
 On Node the generated server handles `SIGTERM` / `SIGINT`: stop accepting connections, drain in-flight requests, force exit after 5 seconds.
 
+## Isolate-level setup
+
+Setup you start inside a request — a migration, a cache warm — cannot rely on the request that started it. celld (and Cloudflare Workers) drop a finished request's pending work, so a pass started by a request that ends is orphaned; a `WeakMap` promise cache around it then hangs every later request, and a failed pass latches its rejection for the isolate's life.
+
+Run that setup through `isolateOnce`:
+
+```ts twoslash src/db.ts
+import { isolateOnce } from "oxidejs";
+
+declare class D1Database {}
+
+declare const applyMigrations: (db: D1Database) => Promise<void>;
+
+const migrate = isolateOnce(applyMigrations, {
+  timeout: 15_000,
+  wait: 5000,
+});
+
+export const ensureDb = (db: D1Database) => migrate(db);
+```
+
+Concurrent callers share one in-flight pass. The pass is bounded by `timeout` (default 30 000 ms): a pass that has not settled fails and clears, so the next caller retries. A caller that has waited `wait` ms (default 5000 ms) on a pass another request started runs its own pass instead, so an orphaned pass cannot hang the isolate. That pass can overlap one that is still alive but slow, so `fn` must be idempotent and safe to run concurrently (e.g. migrations that record what they applied). A successful pass stays cached for the isolate's life.
+
+Key the pass by a binding object (the `D1Database` above, for example) to keep one pass per binding — the cache is a `WeakMap`, so it does not leak. Omit the key for one pass per isolate. `isolateOnceEffect` returns the Effect-shaped runner.
+
+`run.reset(key?)` forgets the cached pass for that key (or the unkeyed slot), so the next call runs `fn` again — for example after a schema change in dev, or between tests. Callers already awaiting an in-flight pass still get its result.
+
 ## `FetchHandler`
 
 ```ts twoslash

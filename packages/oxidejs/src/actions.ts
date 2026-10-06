@@ -130,10 +130,26 @@ const isStreamActionInner = function isStreamActionInner(inner: string) {
   return /\bStream\./u.test(inner);
 };
 
+/** One schema the client group re-imports from a non-server module. */
+export interface ClientSchemaImport {
+  /** Resolved module specifier: absolute path for relative imports, bare otherwise. */
+  from: string;
+  /** Export name in that module. */
+  name: string;
+}
+
+export interface ActionSchemaImports {
+  error?: ClientSchemaImport;
+  payload?: ClientSchemaImport;
+  success?: ClientSchemaImport;
+}
+
 export interface ServerModule {
   abs: string;
   exports: string[];
   key: string;
+  /** Client-importable schemas per exported action. Absent slots fall back to `Schema.Unknown`. */
+  schemas?: Record<string, ActionSchemaImports>;
   streams: string[];
 }
 
@@ -177,6 +193,274 @@ export const parseStreamExports = function parseStreamExports(
     }
   }
   return [...names];
+};
+
+/** `import { A } from "x"` / `import * as ns from "x"`; `import type` is skipped. */
+const MODULE_IMPORT_RE =
+  /\bimport\s+(?<typeOnly>type\s+)?(?<clause>\{[^}]*\}|\*\s+as\s+[A-Za-z_$][\w$]*)\s+from\s+(?<spec>"[^"]*"|'[^']*')/gu;
+
+const WITH_SCHEMA_CALL_RE = /^withSchema\s*\(/u;
+const SCHEMA_REF_RE =
+  /^(?<head>[A-Za-z_$][\w$]*)(?:\.(?<member>[A-Za-z_$][\w$]*))?$/u;
+const MODULE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+interface ImportedModule {
+  from: string;
+  name?: string;
+}
+
+/**
+ * Split a call / literal body on top-level commas.
+ * Bracket depth, string quotes and template literals are respected.
+ */
+const splitTopLevel = function splitTopLevel(source: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let escape = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    if (quote !== null) {
+      if (escape) {
+        escape = false;
+      } else if (c === "\\") {
+        escape = true;
+      } else if (c === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      depth += 1;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (c === "," && depth === 0) {
+      parts.push(source.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(source.slice(start));
+  return parts;
+};
+
+/** Index of the first `:` outside brackets and strings, or -1. */
+const indexOfTopLevelColon = function indexOfTopLevelColon(
+  source: string
+): number {
+  let depth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let escape = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    if (quote !== null) {
+      if (escape) {
+        escape = false;
+      } else if (c === "\\") {
+        escape = true;
+      } else if (c === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      depth += 1;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (c === ":" && depth === 0) {
+      return i;
+    }
+  }
+  return -1;
+};
+
+/** Top-level `key: value` pairs of an object literal, or undefined when it is not one. */
+const parseObjectEntries = function parseObjectEntries(
+  source: string
+): Map<string, string> | undefined {
+  const trimmed = source.trim();
+  if (!(trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    return undefined;
+  }
+  const entries = new Map<string, string>();
+  for (const part of splitTopLevel(trimmed.slice(1, -1))) {
+    const colon = indexOfTopLevelColon(part);
+    if (colon === -1) {
+      continue;
+    }
+    const key = part
+      .slice(0, colon)
+      .trim()
+      .replaceAll(/^["'`]|["'`]$/gu, "");
+    if (key) {
+      entries.set(key, part.slice(colon + 1).trim());
+    }
+  }
+  return entries;
+};
+
+/** Named + namespace imports of one source file. Type-only imports are ignored. */
+interface ModuleImports {
+  named: Map<string, ImportedModule>;
+  namespaces: Map<string, string>;
+}
+
+const parseModuleImports = function parseModuleImports(
+  source: string
+): ModuleImports {
+  const named = new Map<string, ImportedModule>();
+  const namespaces = new Map<string, string>();
+  for (const match of source.matchAll(MODULE_IMPORT_RE)) {
+    const { groups } = match;
+    if (!groups || groups["typeOnly"] !== undefined) {
+      continue;
+    }
+    const spec = (groups["spec"] ?? "").replaceAll(/^["']|["']$/gu, "");
+    const clause = groups["clause"] ?? "";
+    if (!spec) {
+      continue;
+    }
+    const namespace = /^\*\s+as\s+(?<alias>[A-Za-z_$][\w$]*)$/u.exec(
+      clause.trim()
+    );
+    const namespaceAlias = namespace?.groups?.["alias"];
+    if (namespaceAlias !== undefined) {
+      namespaces.set(namespaceAlias, spec);
+      continue;
+    }
+    for (const item of clause.replaceAll(/^\{|\}$/gu, "").split(",")) {
+      const trimmed = item.trim().replace(/^type\s+/u, "");
+      if (!trimmed) {
+        continue;
+      }
+      const parts = trimmed.split(/\s+as\s+/u);
+      const [exportName, local] = parts;
+      if (exportName && local) {
+        named.set(local.trim(), { from: spec, name: exportName.trim() });
+      } else if (exportName) {
+        named.set(exportName.trim(), { from: spec, name: exportName.trim() });
+      }
+    }
+  }
+  return { named, namespaces };
+};
+
+/** Resolve a relative import to an absolute file; bare specifiers pass through. */
+const resolveSchemaModule = function resolveSchemaModule(
+  spec: string,
+  fromFile: string
+): string | null {
+  if (!spec.startsWith(".")) {
+    return spec;
+  }
+  const base = path.resolve(path.dirname(fromFile), spec);
+  const candidates = [base];
+  for (const ext of MODULE_EXTENSIONS) {
+    candidates.push(`${base}${ext}`);
+  }
+  for (const ext of MODULE_EXTENSIONS) {
+    candidates.push(path.join(base, `index${ext}`));
+  }
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
+/** Map one schema expression to its client import, or undefined when it is not importable. */
+const resolveSchemaImport = function resolveSchemaImport(
+  expr: string,
+  imports: ModuleImports,
+  fromFile: string
+): ClientSchemaImport | undefined {
+  const match = SCHEMA_REF_RE.exec(expr.trim());
+  if (!match) {
+    return undefined;
+  }
+  const { head: rawHead, member } = match.groups ?? {};
+  const head = rawHead ?? "";
+  const named = imports.named.get(head);
+  const namespace = imports.namespaces.get(head);
+  const spec = member === undefined ? named?.from : (named?.from ?? namespace);
+  const name = member ?? named?.name;
+  if (spec === undefined || name === undefined) {
+    return undefined;
+  }
+  const resolved = resolveSchemaModule(spec, fromFile);
+  if (resolved === null || isServerFileId(resolved)) {
+    return undefined;
+  }
+  return { from: resolved, name };
+};
+
+/** Client-importable payload / success / error schemas for each action export. */
+const parseActionSchemaImports = function parseActionSchemaImports(
+  source: string,
+  abs: string
+) {
+  const imports = parseModuleImports(source);
+  const schemas: Record<string, ActionSchemaImports> = {};
+  for (const match of source.matchAll(EXPORT_RE)) {
+    const name = match.groups?.["exportName"] ?? match[1];
+    if (!(name && match.index !== undefined)) {
+      continue;
+    }
+    const inner = extractActionCallInner(
+      source,
+      match.index + match[0].length - 1
+    );
+    if (inner === null) {
+      continue;
+    }
+    const [handler, ...rest] = splitTopLevel(inner);
+    const options =
+      parseObjectEntries(rest.at(-1) ?? "") ?? new Map<string, string>();
+    let payloadExpr = options.get("payload");
+    const withSchema = WITH_SCHEMA_CALL_RE.exec((handler ?? "").trim());
+    if (withSchema) {
+      const openParen = (handler ?? "").indexOf("(", withSchema[0].length - 1);
+      const withSchemaInner = extractActionCallInner(handler ?? "", openParen);
+      if (withSchemaInner !== null) {
+        payloadExpr = splitTopLevel(withSchemaInner)[0]?.trim();
+      }
+    }
+    const refs: ActionSchemaImports = {};
+    for (const [slot, expr] of [
+      ["error", options.get("error")],
+      ["payload", payloadExpr],
+      ["success", options.get("success")],
+    ] as const) {
+      if (expr === undefined) {
+        continue;
+      }
+      const resolved = resolveSchemaImport(expr, imports, abs);
+      if (resolved !== undefined) {
+        refs[slot] = resolved;
+      }
+    }
+    if (Object.keys(refs).length > 0) {
+      schemas[name] = refs;
+    }
+  }
+  return schemas;
 };
 
 export const scanServerFiles = function scanServerFiles(
@@ -228,12 +512,17 @@ export const scanServerFiles = function scanServerFiles(
     }
     byKey.set(key, abs);
     const source = fs.readFileSync(abs, "utf-8");
-    modules.push({
+    const schemas = parseActionSchemaImports(source, abs);
+    const mod: ServerModule = {
       abs,
       exports: parseExportedNames(source),
       key,
       streams: parseStreamExports(source),
-    });
+    };
+    if (Object.keys(schemas).length > 0) {
+      mod.schemas = schemas;
+    }
+    modules.push(mod);
   }
   return modules;
 };
@@ -355,15 +644,69 @@ export const generateClientStub = function generateClientStub(
   return `${lines.join("\n")}\n`;
 };
 
+/**
+ * Client payload schema: the client sends the schema's **Encoded** value (the
+ * server decodes it into the handler's Type), so the encoded side is what the
+ * client validates and encodes here. Without a declared schema the original
+ * free-form args array is kept.
+ */
+const clientPayloadExpr = function clientPayloadExpr(ref?: string): string {
+  return ref === undefined
+    ? `Schema.Struct({ args: Schema.Array(Schema.Unknown) })`
+    : `Schema.Struct({ args: Schema.Tuple([Schema.toEncoded(${ref})]) })`;
+};
+
+/** Client error schema: scrub's envelope rebuilt into the declared error class. */
+const clientErrorExpr = function clientErrorExpr(ref?: string): string {
+  return ref === undefined ? `Schema.Unknown` : `clientErrorSchema(${ref})`;
+};
+
+interface ClientSchemaResolver {
+  /** Import lines for every schema referenced so far, in first-use order. */
+  importLines: () => string[];
+  /** Alias for one schema, allocated on first use. */
+  ref: (schema: ClientSchemaImport | undefined) => string | undefined;
+}
+
+/** Alias table for the schemas the client group re-imports from non-server modules. */
+const makeClientSchemaResolver =
+  function makeClientSchemaResolver(): ClientSchemaResolver {
+    const aliases = new Map<string, string>();
+    return {
+      importLines: () =>
+        [...aliases].map(([key, alias]) => {
+          const [from, name] = key.split("\u0000");
+          return `import { ${name} as ${alias} } from ${JSON.stringify(from)};`;
+        }),
+      ref: (schema) => {
+        if (schema === undefined) {
+          return;
+        }
+        const key = `${schema.from}\u0000${schema.name}`;
+        const existing = aliases.get(key);
+        if (existing !== undefined) {
+          return existing;
+        }
+        const alias = `__s${aliases.size}`;
+        aliases.set(key, alias);
+        return alias;
+      },
+    };
+  };
+
 export const generateActionsClientModule = function generateActionsClientModule(
   modules: ServerModule[],
   workflows: WorkflowModule[] = [],
   queues: QueueModule[] = []
 ): string {
-  const lines = [
-    `import { Schema } from "effect";`,
-    `import { Rpc, RpcGroup } from "effect/rpc";`,
-  ];
+  // Client bundle rule: only schemas the server file imports from a non-server
+  // module are re-imported here. Inline / local / *.server.ts schemas stay
+  // `Schema.Unknown`, so the client never pulls a server module into its graph.
+  const schemas = makeClientSchemaResolver();
+  const usesClientError = modules.some((mod) =>
+    Object.values(mod.schemas ?? {}).some((refs) => refs.error !== undefined)
+  );
+  const lines: string[] = [];
   const rpcNames: string[] = [];
   for (const [i, mod] of modules.entries()) {
     for (const name of mod.exports) {
@@ -371,8 +714,12 @@ export const generateActionsClientModule = function generateActionsClientModule(
       rpcNames.push(rpc);
       const tag = `${mod.key}.${name}`;
       const stream = mod.streams?.includes(name) ?? false;
+      const refs = mod.schemas?.[name];
+      const payload = schemas.ref(refs?.payload);
+      const success = schemas.ref(refs?.success);
+      const error = schemas.ref(refs?.error);
       lines.push(
-        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown${stream ? ", stream: true" : ""} });`
+        `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: ${clientPayloadExpr(payload)}, success: ${success ?? "Schema.Unknown"}, error: ${clientErrorExpr(error)}${stream ? ", stream: true" : ""} });`
       );
     }
   }
@@ -383,7 +730,7 @@ export const generateActionsClientModule = function generateActionsClientModule(
         rpcNames.push(rpc);
         const tag = `${exp.name}.${method}`;
         lines.push(
-          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });`
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: ${clientPayloadExpr()}, success: Schema.Unknown, error: Schema.Unknown });`
         );
       }
     }
@@ -395,17 +742,25 @@ export const generateActionsClientModule = function generateActionsClientModule(
         rpcNames.push(rpc);
         const tag = `${exp.name}.${method}`;
         lines.push(
-          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });`
+          `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, { payload: ${clientPayloadExpr()}, success: Schema.Unknown, error: Schema.Unknown });`
         );
       }
     }
   }
+  const imports = [
+    `import { Schema } from "effect";`,
+    `import { Rpc, RpcGroup } from "effect/rpc";`,
+  ];
+  if (usesClientError) {
+    imports.push(`import { clientErrorSchema } from "oxidejs";`);
+  }
+  imports.push(...schemas.importLines());
   lines.push(
     `export const actionsGroup = RpcGroup.make(${rpcNames.join(", ")});`,
     `export default actionsGroup;`,
     `export { actionsGroup as actions };`
   );
-  return `${lines.join("\n")}\n`;
+  return `${[...imports, ...lines].join("\n")}\n`;
 };
 
 export const generateActionsModule = function generateActionsModule(
@@ -421,7 +776,7 @@ export const generateActionsModule = function generateActionsModule(
   const lines = [
     `import { Schema } from "effect";`,
     `import { Rpc, RpcGroup } from "effect/rpc";`,
-    `import { ACTION_META, WORKFLOW_META, QUEUE_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream } from "oxidejs";`,
+    `import { ACTION_META, WORKFLOW_META, QUEUE_META, getRequestStore, withRequestStore, runActionInContext, actionResultToStream, ActionFailure } from "oxidejs";`,
     `const __meta = (fn) => (fn && fn[ACTION_META]) || {};`,
     `const __wmeta = (h) => (h && h[WORKFLOW_META]) || {};`,
     `const __qmeta = (h) => (h && h[QUEUE_META]) || {};`,
@@ -459,7 +814,7 @@ export const generateActionsModule = function generateActionsModule(
         `const ${rpc} = Rpc.make(${JSON.stringify(tag)}, {`,
         `  payload: __payload(__meta_${i}_${name}),`,
         `  success: __meta_${i}_${name}.success ?? Schema.Unknown,`,
-        `  error: __meta_${i}_${name}.error ?? Schema.Never,`,
+        `  error: __meta_${i}_${name}.error ? Schema.Union([__meta_${i}_${name}.error, ActionFailure]) : ActionFailure,`,
         `  ...(__stream_${i}_${name} ? { stream: true } : {}),`,
         `});`
       );
@@ -536,7 +891,7 @@ export const generateActionsModule = function generateActionsModule(
       lines.push(
         `  ${JSON.stringify(tag)}: ({ args }) => {`,
         `    const __s = getRequestStore();`,
-        `    const __fn = () => ${alias}[${JSON.stringify(name)}].apply(null, args);`,
+        `    const __fn = () => (__meta_${i}_${name}.rpcHandler ?? ${alias}[${JSON.stringify(name)}]).apply(null, args);`,
         `    if (__stream_${i}_${name}) {`,
         `      return actionResultToStream(${JSON.stringify(tag)}, __s, __fn, (fn) => __withStore(__s, fn));`,
         `    }`,

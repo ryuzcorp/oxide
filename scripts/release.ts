@@ -13,7 +13,11 @@ import {
   writeFileSync,
   statSync,
   existsSync,
+  copyFileSync,
+  mkdtempSync,
+  rmSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const argv = Bun.argv.slice(2);
@@ -68,6 +72,7 @@ interface PackageJsonDeps {
 // Structurally detect what to change, then rewrite just those `"key": "value"`
 // substrings so untouched formatting survives byte-for-byte.
 const updated: string[] = [];
+const changedPackageJsons: string[] = [];
 
 const sync = function sync(filePath: string): boolean {
   const text = readFileSync(filePath, "utf-8");
@@ -101,6 +106,7 @@ const sync = function sync(filePath: string): boolean {
   }
   writeFileSync(filePath, out);
   updated.push(`  synced ${filePath}`);
+  changedPackageJsons.push(filePath);
   return true;
 };
 
@@ -118,8 +124,47 @@ const walk = (dir: string): void => {
   }
 };
 
+// A template may ship a standalone bun.lock for its Docker build
+// (templates/kit copies it into the image and runs `bun install
+// --frozen-lockfile`). Bun resolves templates/* as workspace members of this
+// repo, so it ignores that lockfile in place; regenerate it from a temp copy
+// that holds only package.json + bun.lock.
+const refreshTemplateLockfile = (pkgFile: string): void => {
+  const dir = path.dirname(pkgFile);
+  const lock = path.join(dir, "bun.lock");
+  if (!existsSync(lock)) {
+    return;
+  }
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "oxide-lock-"));
+  try {
+    copyFileSync(pkgFile, path.join(tmp, "package.json"));
+    copyFileSync(lock, path.join(tmp, "bun.lock"));
+    const run = Bun.spawnSync(["bun", "install"], {
+      cwd: tmp,
+      stderr: "inherit",
+      stdout: "ignore",
+    });
+    if (run.exitCode !== 0) {
+      console.warn(
+        `warn: could not refresh ${lock}; run \`bun install\` in ${dir} before building its image`
+      );
+      return;
+    }
+    copyFileSync(path.join(tmp, "bun.lock"), lock);
+    updated.push(`  refreshed ${lock}`);
+  } finally {
+    rmSync(tmp, { force: true, recursive: true });
+  }
+};
+
 for (const root of ["packages", "templates", "apps"]) {
   walk(root);
+}
+
+for (const pkgFile of changedPackageJsons) {
+  if (pkgFile.startsWith(`templates${path.sep}`)) {
+    refreshTemplateLockfile(pkgFile);
+  }
 }
 
 if (

@@ -6,8 +6,11 @@ import type { OxidejsJson } from "../types";
 export type JsonRpcId = string | number | null;
 
 interface JsonRpcErrorBody {
+  [key: string]: OxidejsJson;
   code: number;
   message: string;
+  /** Encoded tagged error for a declared `error` schema (client rehydrates it). */
+  data?: OxidejsJson;
 }
 
 interface JsonObject {
@@ -73,7 +76,8 @@ const extractTaggedFail = function extractTaggedFail(
         const message = isStringField(err["message"])
           ? err["message"]
           : err["_tag"];
-        return { code: APPLICATION_ERROR, message };
+        // Keep the encoded error so the client can rebuild the tagged class.
+        return { code: APPLICATION_ERROR, data: err, message };
       }
     }
     // Some Effect builds nest Die/Fail under sequential/parallel trees.
@@ -219,7 +223,8 @@ const scrubError = function scrubError(error: OxidejsJson): JsonRpcErrorBody {
     const message = isStringField(error["message"])
       ? error["message"]
       : error["_tag"];
-    return { code: APPLICATION_ERROR, message };
+    // Keep the encoded error so the client can rebuild the tagged class.
+    return { code: APPLICATION_ERROR, data: error, message };
   }
   return { ...INTERNAL };
 };
@@ -295,12 +300,16 @@ export const scrubRpcMessage = function scrubRpcMessage(
     id = null;
   }
 
-  // SAFETY: JSON-RPC error envelopes only carry JSON values (code/message/id).
-  return {
-    error: { code: scrubbedError.code, message: scrubbedError.message },
-    id,
-    jsonrpc: "2.0",
-  } as OxidejsJson;
+  // SAFETY: JSON-RPC error envelopes only carry JSON values (code/message/id/data).
+  const errorBody: JsonRpcErrorBody = {
+    code: scrubbedError.code,
+    message: scrubbedError.message,
+  };
+  if (scrubbedError.data !== undefined) {
+    errorBody.data = scrubbedError.data;
+  }
+  const envelope: OxidejsJson = { error: errorBody, id, jsonrpc: "2.0" };
+  return envelope;
 };
 
 const scrubRpcLine = function scrubRpcLine(

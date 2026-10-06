@@ -5,6 +5,7 @@ import {
   HttpClient,
   HttpClientRequest,
 } from "effect/http";
+import * as Result from "effect/Result";
 import type { Rpc, RpcGroup, RpcMessage } from "effect/rpc";
 import {
   RpcClient,
@@ -12,8 +13,10 @@ import {
   RpcSchema,
   RpcSerialization,
 } from "effect/rpc";
+import * as Schema from "effect/Schema";
 import { Socket } from "effect/socket";
 
+import { SchemaDecodeError, toActionError } from "../action-error";
 import type { OxidejsActionHeaders } from "../types";
 import { registerBatchFlusher, scheduleBatchFlush } from "./batch";
 import { NDJSON_CONTENT } from "./scrub";
@@ -113,6 +116,7 @@ interface CacheEntry {
 }
 
 interface RpcRequestMeta {
+  payloadSchema?: Schema.Top;
   successSchema?: object;
 }
 
@@ -482,6 +486,8 @@ const streamToAsyncGenerator = function streamToAsyncGenerator<T>(
 
     try {
       yield* pull();
+    } catch (error) {
+      throw toActionError(error);
     } finally {
       signal?.removeEventListener("abort", onAbort);
     }
@@ -550,7 +556,14 @@ const callFlat = function callFlat(
               new Error(`Action ${tag} timed out after ${timeoutMs}ms`)
             ),
         });
-  return Effect.runPromise(bounded, { signal: callOpts?.signal });
+  const runBounded = async function runBounded() {
+    try {
+      return await Effect.runPromise(bounded, { signal: callOpts?.signal });
+    } catch (error) {
+      throw toActionError(error);
+    }
+  };
+  return runBounded();
 };
 
 const callFlatStreamResilient = function callFlatStreamResilient(
@@ -625,6 +638,30 @@ const isCallOptions = function isCallOptions(
   return "signal" in bag || "idempotencyKey" in bag;
 };
 
+/**
+ * Validate one call's Encoded payload against the generated client payload
+ * schema before it is sent. A declared payload schema rejects invalid input
+ * locally with a `SchemaDecodeError` (JSON-RPC Invalid params) instead of a
+ * round trip; actions without one accept anything, as before.
+ */
+const validatePayload = function validatePayload(
+  group: ActionGroup,
+  tag: string,
+  args: ActionCallArg[]
+): void {
+  // SAFETY: Effect request map values expose payloadSchema; used only as a decoder.
+  const rpc = group.requests.get(tag) as RpcRequestMeta | undefined;
+  const { payloadSchema } = rpc ?? {};
+  if (payloadSchema === undefined) {
+    return;
+  }
+  // SAFETY: Effect request map values expose payloadSchema; decoding accepts any schema value.
+  const decoded = Schema.decodeUnknownResult(payloadSchema as never)({ args });
+  if (Result.isFailure(decoded)) {
+    throw SchemaDecodeError.from(decoded.failure);
+  }
+};
+
 const nestClient = function nestClient(
   group: ActionGroup,
   flat: FlatClient,
@@ -645,6 +682,7 @@ const nestClient = function nestClient(
       const hasSignal = opts !== undefined && isCallOptions(opts);
       const params = hasSignal ? args.slice(0, -1) : args;
       const callOpts = hasSignal ? opts : undefined;
+      validatePayload(group, tag, params);
       if (isStreamTag(group, tag)) {
         return callFlatStreamResilient(
           flat,

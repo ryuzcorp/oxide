@@ -37,7 +37,7 @@
 - `schedule({ name, cron, workflow })` in `*.server.ts` (`preset: "worker"`): Cron triggers — wrangler `triggers.crons` via merge, same-worker `scheduled` handler starts the workflow with id `` `${name}-${scheduledTime}` `` (or `queue` / `handle` escape). Queue targets inherit `producerStart` from the queue handle.
 - Return `undefined` from `src/server.ts` to fall through to static files / `index.html`. Missing the default `src/server.ts` is fine (actions / assets only).
 - `async function*` exports stream as NDJSON JSON-RPC over the same action endpoint. Effect `Stream` handlers need `{ stream: true }` (or an async generator).
-- `action(fn, { payload?, success?, error? })` stamps Effect Rpc schemas for the generated actions module. `withSchema(schema, fn)` is sugar for `{ payload: schema }` plus a local decode.
+- `action(fn, { payload?, success?, error? })` stamps Effect Rpc schemas for the generated actions module. `withSchema(schema, fn)` is sugar for `{ payload: schema }` plus a local decode (never combine it with `{ payload }` — `action()` throws). Schemas imported from a non-`.server` module are statically re-imported into the client group (Encoded-side payload validation, success decode, typed error classes); inline schemas stay server-only. The client must never import `*.server.ts`.
 - Prefer Effect handlers (`Effect.gen`, `Stream`, Schema-stamped `payload` / `success` / `error`). Yield `OxideRequest` / `OxideCtx` for request context. Promise / `async function*` and `useRequest()` / `useCtx()` still work when Effect would be noise.
 - Wire Fail is Schema-tagged via Rpc `error` (`Effect.fail` or throw the tagged error). Returning an `Error` as a value does not promote it over RPC.
 - Live queries: prefer `liveQuery.stream` / `subscribeStream` / `mutateEffect` from Effect handlers; async generators remain for compatibility.
@@ -50,8 +50,6 @@
 
 ### Effect roadmap (nice-to-have later)
 
-- Client Rpc codegen: stamp real Schema codecs on the client group (today server meta is authoritative; client still uses `Unknown` payloads).
-- Mutation queue: optional durable storage (IndexedDB) on top of Schedule retries.
 - Optional Effect LSP / agent-friendly doc patterns (do not bake tsgo into the package).
 - Workflow drivers beyond Cloudflare Workers (e.g. Vercel Workflow SDK on fetch).
 

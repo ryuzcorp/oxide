@@ -124,7 +124,34 @@ export const add = action(
 );
 ```
 
-The client arg is the schema's Encoded type; the handler receives Type. Decode failures over RPC map to JSON-RPC Invalid params (`-32602`). Optional `success` / `error` schemas stamp the generated Rpc tag; use `Schema.TaggedError` + `Effect.fail` for wire-typed Fail (`-32000` after scrub).
+The client arg is the schema's Encoded type; the handler receives Type, and an awaiting caller sees only that data — not an Effect union. Calling the `withSchema` function directly with an invalid payload throws `SchemaDecodeError` before the handler runs; through `action()` that is a rejected promise. Over RPC a decode failure is JSON-RPC Invalid params (`-32602`). Optional `success` / `error` schemas stamp the generated Rpc tag; declare a `Schema.TaggedError` `error` for a wire-typed Fail (`-32000` after scrub), or `fail(message)` (throws `ActionFailure`) for a user-facing message.
+
+Declare the payload once: `action(withSchema(schema, fn), { payload })` throws at definition, because RPC would decode it twice.
+
+Where the schemas live decides what the client gets. Import them from a plain module (not `*.server.*`) and the generated client Rpc group uses them: it validates the Encoded payload before sending (an invalid shape rejects with `SchemaDecodeError`, `-32602`, without a request), decodes the response with `success` so the client sees the handler's Type (a `Schema.Date` success arrives as a `Date`), and rejects a declared tagged `error` as an instance of that class — `instanceof NotFound`, real fields, `code: -32000`. Putting the schemas in a shared module keeps the client bundle free of the server module; nothing reachable only through a `*.server.ts` file is ever imported by the client. The group builds that error codec with `clientErrorSchema(schema)` (exported for codegen), which unwraps the JSON-RPC error envelope — you rarely call it yourself.
+
+Declare a schema inline, locally, or in another `*.server.ts` file and it stays server-only: the client keeps `Schema.Unknown` for that slot, so it sends whatever you pass, a `success` schema does not decode, and a declared error arrives as an `ActionError` (still with `_tag`, `code` and the decoded fields):
+
+```ts
+// src/tasks/shared.ts — plain module, safe for the client
+import { Schema } from "effect";
+
+export const AddTask = Schema.Struct({ text: Schema.String });
+export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
+  id: Schema.String,
+}) {}
+```
+
+```ts
+// src/tasks.server.ts
+import { action, withSchema } from "oxidejs";
+import { AddTask, NotFound } from "./tasks/shared";
+
+export const add = action(
+  withSchema(AddTask, async ({ text }) => ({ id: "1", text })),
+  { error: NotFound }
+);
+```
 
 `action()` also accepts `Effect` handlers — prefer them for domain Fail (`Schema.TaggedError` + `Effect.fail`). Yield `OxideRequest` / `OxideCtx` for the same values as `useRequest()` / `useCtx()`. Effect `Stream` returns need `{ stream: true }` (or return a `Stream` — Fail channels are typed). Handlers run under an `oxidejs.action` span (`rpc.method`).
 
@@ -316,7 +343,55 @@ await addQueued("Milk"); // runs now, or enqueues on transient WS failure
 window.addEventListener("online", () => void queue.flush());
 ```
 
-`wrap` forwards the queue id as trailing `{ idempotencyKey }`. That key is sent as RPC header `x-oxide-idempotency-key` and available as `useIdempotencyKey()` on the server. Pair with paranorm `once()` for durable dedupe.
+Pass `storage` to keep a failed write across a reload. `indexedDbStorage()` is a browser adapter with no dependencies; implement `load` / `put` / `delete` for anything else:
+
+```ts
+import { createMutationQueue, indexedDbStorage } from "oxidejs/mutation-queue";
+import { add } from "./tasks.server";
+
+const queue = createMutationQueue({ storage: indexedDbStorage() });
+const addQueued = queue.wrap(add, {
+  key: "tasks.add", // "<file>.<fn>": how a restored write finds its action
+  idempotencyKey: (text) => `add:${text}`,
+});
+
+await queue.ready; // persisted writes are loaded (and replaying)
+```
+
+With storage, `wrap` needs `key`, and args must survive `structuredClone`; a call that cannot be persisted rejects at enqueue with a clear error. Restored writes replay in FIFO order once their action is wrapped, keeping the same `idempotencyKey` so server-side dedupe still applies. Nothing awaits a restored write, so its outcome arrives as an event: `restore`, `success`, or `discard` (removed after a permanent failure). Built with `indexedDbStorage()` the adapter throws where IndexedDB is missing (SSR/Node); a store that is present but unwritable (private mode) emits `error` and the queue keeps working in memory. `storage: "memory"` (the default) changes nothing.
+
+`wrap` forwards the queue id as trailing `{ idempotencyKey }`. That key is sent as RPC header `x-oxide-idempotency-key` and available as `useIdempotencyKey()` on the server.
+
+For durable dedupe, claim the key with one statement that reports whether it inserted. Do not use paranorm `once()` on D1: it claims with `INSERT OR IGNORE` and then reads `SELECT changes()` in a follow-up statement, but D1 runs each statement in its own implicit transaction and does not carry `changes()` across them — the follow-up reports 0, so `once()` takes every call for a duplicate and the write never runs. Use `INSERT … ON CONFLICT DO NOTHING RETURNING`, which returns no row when the key already exists:
+
+```ts
+import * as Effect from "effect/Effect";
+import { SqlClient } from "effect/sql/SqlClient";
+import { action, useIdempotencyKey } from "oxidejs";
+
+const claim = (key: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const rows = yield* sql<{ key: string }>`
+      INSERT INTO paranorm_idempotency (key) VALUES (${key})
+      ON CONFLICT DO NOTHING
+      RETURNING key
+    `;
+    return rows.length > 0;
+  });
+
+export const add = action((text: string) =>
+  Effect.gen(function* () {
+    const key = useIdempotencyKey();
+    if (key && !(yield* claim(key))) {
+      return; // duplicate replay — the first call already wrote
+    }
+    // ...write `text`
+  })
+);
+```
+
+`paranorm_idempotency` is the `key TEXT PRIMARY KEY` table paranorm's `_extends: [idempotency]` creates; any equivalent table works. Run `claim` against the same `SqlClient` as the write (the kit wraps both in `withDb`).
 
 ### WebSocket hibernation
 
@@ -448,11 +523,36 @@ The generated `__asset` function uses `path.join` — not `path.resolve` — so 
 - Unknown or missing content-types → `415`.
 - Body size capped at 1 MB by default (enforced on the actual body, not just `Content-Length`).
 - Batch requests capped at 20 items (both HTTP and WebSocket transports).
-- Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. Clients see plain JSON-RPC errors (`code` + `message` only). Thrown messages become `Internal error` (`-32603`). Unknown methods → `-32601`; invalid params → `-32602`.
+- Effect `Defect` / `Cause` payloads are scrubbed before they leave the endpoint. A rejected client call is an `Error` instance: `ActionError` carrying the JSON-RPC `code`, the server error's `_tag` and its decoded fields; `SchemaDecodeError` for invalid params (`-32602`); or `ActionFailure` for `fail(message)`. A plain thrown `Error` is still masked as `Internal error` (`-32603`) — call `fail(message)` or declare a tagged `error` to surface a message. Unknown methods → `-32601`; invalid params → `-32602`.
 - Every action call runs in its own Effect RPC runtime, disposed when its response ends. A shared runtime would let a concurrent action read another request's context, and on Worker hosts (Cloudflare Workers, celld) it stalls, because the host drops a finished request's pending work.
 - Worker code must not share a promise, timer or runtime across requests unless it is registered with `waitUntil` or its waiters are time-bounded: on celld, work a request started stops when that request answers or its client goes away. `bun run smoke:celld` checks the action server against a real celld node.
 - `actions.sameOrigin` defaults to `true`. HTTP actions require `Origin` and/or `Sec-Fetch-Site` and reject cross-site callers. WebSocket upgrades additionally allow requests that omit both headers when `Host` matches the request URL host (celld and some proxies strip those headers; `localhost` / `127.0.0.1` / `::1` count as the same host).
 - StackBlitz WebContainers do not keep `AsyncLocalStorage` across `async/await`. Oxide detects `process.versions.webcontainer` and falls back to a sync request store, capturing context before Effect schedules work and serializing handler entry so concurrent requests do not stomp that store. Stream pulls re-enter the captured store. This is a demo/dev workaround, not a concurrency model for production.
+
+### Isolate-level setup
+
+Setup you start inside a request — a migration, a cache warm — cannot rely on the request that started it. celld (and Cloudflare Workers) drop a finished request's pending work, so a pass started by a request that ends is orphaned; a `WeakMap` promise cache around it then hangs every later request, and a failed pass latches its rejection for the isolate's life.
+
+Run that setup through `isolateOnce`:
+
+```ts
+import { isolateOnce } from "oxidejs";
+
+const migrate = isolateOnce(
+  async (db: D1Database) => {
+    await db.exec("create table if not exists tasks (id text primary key)");
+  },
+  { timeout: 15_000, wait: 5000 }
+);
+
+export const ensureDb = (db: D1Database) => migrate(db);
+```
+
+Concurrent callers share one in-flight pass. The pass is bounded by `timeout` (default 30 000 ms): a pass that has not settled fails and clears, so the next caller retries. A caller that has waited `wait` ms (default 5000 ms) on a pass another request started runs its own pass instead, so an orphaned pass cannot hang the isolate. That pass can overlap one that is still alive but slow, so `fn` must be idempotent and safe to run concurrently (e.g. migrations that record what they applied). A successful pass stays cached for the isolate's life.
+
+Key the pass by a binding object to keep one pass per binding (`WeakMap`-backed, so the cache does not leak); omit the key for one pass per isolate. `isolateOnceEffect` returns the Effect-shaped runner.
+
+`run.reset(key?)` forgets the cached pass for that key (or the unkeyed slot), so the next call runs `fn` again — for example after a schema change in dev, or between tests. Callers already awaiting an in-flight pass still get its result.
 
 ### Host header
 

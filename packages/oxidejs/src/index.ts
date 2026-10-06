@@ -27,6 +27,11 @@ export {
   OxideCtx,
   OxideRequest,
   SchemaDecodeError,
+  ActionError,
+  ActionFailure,
+  clientErrorSchema,
+  fail,
+  toActionError,
   withSchema,
   oxideRuntimeLayer,
   dispatchQueueBatch,
@@ -54,6 +59,16 @@ export {
   matchesOpenRpcPath,
   OPENRPC_PATH,
 } from "./context";
+export {
+  isolateOnce,
+  isolateOnceEffect,
+  IsolateOnceTimeoutError,
+} from "./isolate-once";
+export type {
+  IsolateOnceEffectRunner,
+  IsolateOnceOptions,
+  IsolateOnceRunner,
+} from "./isolate-once";
 export type {
   ActionMeta,
   ActionOptions,

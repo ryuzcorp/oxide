@@ -30,5 +30,22 @@ celld deploy dist \
   --endpoint "${S3_ENDPOINT}" \
   --region "${AWS_REGION}"
 
-echo "kit: deploy uploaded; celld will load it on start"
+# Adopt the new deployment now instead of waiting for the node's poll
+# (CELLD_DEPLOY_POLL_S). On the first `compose up` celld is not running yet
+# (it starts after this job), so the reload is skipped and celld loads
+# deploy/current.json on start.
+RELOAD_URL="${CELLD_RELOAD_URL:-http://celld:8081/reload}"
+echo "kit: POST ${RELOAD_URL}"
+if reload_body=$(curl -fsS --max-time 60 -X POST "${RELOAD_URL}" 2>&1); then
+  echo "kit: celld reloaded ${reload_body}"
+else
+  code=$?
+  if [ "${code}" -eq 7 ]; then
+    echo "kit: celld not running yet; it loads deploy/current.json on start"
+  else
+    echo "kit: reload failed (curl ${code}): ${reload_body}" >&2
+    exit 1
+  fi
+fi
+
 echo "kit: open ${BETTER_AUTH_URL}"

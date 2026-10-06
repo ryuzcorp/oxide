@@ -4,10 +4,10 @@
 # Deploy CLI and runtime node share the same pinned celld binary (copied from the
 # official image). Bump CELLD_VERSION in compose.yaml together with this ARG.
 
-ARG CELLD_VERSION=0.4.1
+ARG CELLD_VERSION=0.6.1
 FROM ghcr.io/denoland/celld:${CELLD_VERSION} AS celld
 
-FROM docker.io/oven/bun:1.3-debian
+FROM docker.io/oven/bun:1.4-debian
 
 ARG TARGETARCH
 ARG ESBUILD_VERSION=0.25.12

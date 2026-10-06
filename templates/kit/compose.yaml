@@ -1,8 +1,13 @@
 # One-click kit demo: RustFS (S3) + celld + kit build/deploy.
 #
-# REQUIRED: use `make up` / `make down` (see Makefile).
-# Do not run `docker compose up` / `podman compose up` alone — there is no
-# depends_on; kit and celld will race RustFS and an empty fleet.
+#   docker compose up --build -d    # or: make up
+#   docker compose down -v          # or: make down
+#
+# The services are ordered with `depends_on` + conditions, so plain
+# `docker compose up` is enough: RustFS is healthy -> the one-shot
+# `rustfs-init` creates the fleet bucket -> the one-shot `kit` builds and
+# deploys -> celld starts on a populated bucket (no empty-fleet crash loop).
+# `make up` just wraps this with a URL echo.
 #
 # Demo defaults below are localhost-only. Do not publish these ports on a LAN
 # without changing BETTER_AUTH_SECRET and RustFS keys.
@@ -13,7 +18,7 @@
 name: oxide-kit
 
 # Bump together with Dockerfile ARG CELLD_VERSION / COPY --from=celld.
-x-celld-version: &celld_version "0.4.1"
+x-celld-version: &celld_version "0.6.1"
 
 services:
   rustfs:
@@ -28,10 +33,17 @@ services:
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_OBS_LOGGER_LEVEL: error
     ports:
-      - "${RUSTFS_API_PORT:-9000}:9000"
-      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${RUSTFS_API_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9001}:9001"
     volumes:
       - rustfs-data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health/ready >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
 
   # Create the fleet bucket on RustFS (S3 API). One container so creds stick.
   rustfs-init:
@@ -60,8 +72,14 @@ services:
         aws --endpoint-url "$$ep" s3api head-bucket --bucket celld
         echo "rustfs bucket ready: celld"
     restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
 
-  # One-shot: vite build → celld deploy (S3 only). Started by `make up`.
+  # One-shot: vite build → celld deploy (S3 only). Then POST /reload so a
+  # redeploy goes live at once instead of waiting for CELLD_DEPLOY_POLL_S.
+  # On first boot celld is not up yet (it depends on this job), so the reload
+  # is skipped and celld loads deploy/current.json on start.
   kit:
     build:
       context: .
@@ -76,14 +94,23 @@ services:
       AWS_EC2_METADATA_DISABLED: "true"
       S3_ENDPOINT: http://rustfs:9000
       CELLD_BUCKET: ${CELLD_BUCKET:-s3://celld}
+      CELLD_RELOAD_URL: ${CELLD_RELOAD_URL:-http://celld:8081/reload}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-only-change-me-to-a-long-random-string}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8080}
     restart: "no"
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
 
-  # Same pinned celld as the kit image (COPY --from=celld). Started by `make up` after deploy.
+  # Same pinned celld as the kit image (COPY --from=celld). Starts after the
+  # deploy job, on a bucket that already has deploy/current.json.
   celld:
-    image: ghcr.io/denoland/celld:0.4.1
+    image: ghcr.io/denoland/celld:0.6.1
     restart: unless-stopped
+    # SIGTERM must reach celld, not a shell wrapper: the command below `exec`s
+    # the binary so it is PID 1. Compose gives it 25s, above the node's
+    # CELLD_SHUTDOWN_TOTAL_MS (15s) so it can seal its node log and hand off.
+    stop_grace_period: 25s
     environment:
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-kitaccess}
       AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-kitsecretkitsecretkitsecret12}
@@ -93,29 +120,45 @@ services:
       CELLD_BUCKET: ${CELLD_BUCKET:-s3://celld}
       CELLD_WATCH: /var/lib/celld/state
       CELLD_DURABILITY: bucket
-      CELLD_DEPLOY_POLL_S: ${CELLD_DEPLOY_POLL_S:-5}
+      # A running node adopts a new deploy on POST /reload (the kit job calls
+      # it); the poll is only a fallback for a missed reload.
+      CELLD_DEPLOY_POLL_S: ${CELLD_DEPLOY_POLL_S:-300}
+      # actions: "ws" — a resident Durable Object moves to new code only at a
+      # safe point (no open WebSocket); celld forces the move with 1012 after
+      # this many seconds. 0 forces every resident object at adoption.
+      CELLD_DEPLOY_MAX_AGE_S: ${CELLD_DEPLOY_MAX_AGE_S:-60}
+      # Keep the node's asset cache inside its own state dir. celld's default
+      # (/tmp/celld/asset-cache) is one directory shared by every node in the
+      # container, created 0700 by whichever starts first — a node serving
+      # assets as another user then crash-loops on EACCES. Bound it so the
+      # cache cannot grow without limit.
+      CELLD_ASSET_CACHE_DIR: /var/lib/celld/asset-cache
+      CELLD_ASSET_CACHE_BYTES: ${CELLD_ASSET_CACHE_BYTES:-268435456}
+      # Only enable behind a trusted reverse proxy that replaces both
+      # X-Forwarded-Host and X-Forwarded-Proto; otherwise links/redirects use
+      # the wrong host/scheme. The demo binds celld directly, so it stays off.
+      CELLD_TRUST_FORWARDED_HEADERS: ${CELLD_TRUST_FORWARDED_HEADERS:-0}
+      # Well below stop_grace_period above.
+      CELLD_SHUTDOWN_TOTAL_MS: ${CELLD_SHUTDOWN_TOTAL_MS:-15000}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        bucket="$${CELLD_BUCKET:-s3://celld}"
-        endpoint="$${S3_ENDPOINT:-http://rustfs:9000}"
-        region="$${AWS_REGION:-us-east-1}"
-        while true; do
-          echo "celld: starting ($$bucket)"
-          /usr/local/bin/celld \
-            --bucket "$$bucket" \
-            --endpoint "$$endpoint" \
-            --region "$$region" \
-            --listen 0.0.0.0:8080 \
-            --internal-listen 0.0.0.0:8081 \
-            --advertise celld:8081 && break
-          echo "celld: waiting for deploy/current.json (retry in 2s)"
-          sleep 2
-        done
+        exec /usr/local/bin/celld \
+          --bucket "$${CELLD_BUCKET:-s3://celld}" \
+          --endpoint "$${S3_ENDPOINT:-http://rustfs:9000}" \
+          --region "$${AWS_REGION:-us-east-1}" \
+          --listen 0.0.0.0:8080 \
+          --internal-listen 0.0.0.0:8081 \
+          --advertise celld:8081
     ports:
-      - "${KIT_PORT:-8080}:8080"
+      - "127.0.0.1:${KIT_PORT:-8080}:8080"
     volumes:
       - celld-state:/var/lib/celld
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
+      kit:
+        condition: service_completed_successfully
 
 volumes:
   rustfs-data:

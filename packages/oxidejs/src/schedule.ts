@@ -2,9 +2,9 @@
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { SchemaDecodeError } from "./action-error";
 import { makeQueueEnvelope, QUEUE_META, toQueueBinding } from "./queue";
 import type { QueueHandle } from "./queue";
-import { SchemaDecodeError } from "./with-schema";
 import {
   createWorkflowInstance,
   toWorkflowBinding,

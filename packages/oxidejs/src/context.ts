@@ -106,6 +106,14 @@ export type {
   ServerActionHandle,
   StreamActionHandle,
 } from "./action";
+export {
+  ActionError,
+  ActionFailure,
+  clientErrorSchema,
+  SchemaDecodeError,
+  fail,
+  toActionError,
+} from "./action-error";
 export { LiveQueryClosedError, liveQuery, publish } from "./live-query";
 export type { LiveQuery, LiveQueryOptions } from "./live-query";
 export { batch } from "./rpc/batch";
@@ -118,7 +126,7 @@ export {
   runActionInContext,
 } from "./run-action";
 export { actionContextLayer, OxideCtx, OxideRequest } from "./services";
-export { SchemaDecodeError, withSchema } from "./with-schema";
+export { withSchema } from "./with-schema";
 export {
   dispatchQueueBatch,
   isQueueEnvelope,

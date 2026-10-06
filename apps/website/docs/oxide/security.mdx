@@ -32,7 +32,7 @@ Generated `__asset` uses `path.join` — not `path.resolve` — so a leading `/`
 - Endpoint is POST-only (`405` otherwise). Content-Type must be recognized (`415` otherwise).
 - Dispatch uses `Object.hasOwn` (no `__proto__` / `constructor` walks).
 - Body size defaults to 1 MB (real body, not only `Content-Length`). Batches cap at 20 items.
-- Wire errors scrub to `code` + `message` only. Defects → `-32603` Internal error. Payload / Schema decode → `-32602`. Schema-tagged Fail → `-32000`. Unknown method → `-32601`.
+- Wire errors scrub to `code` + `message`, plus the tagged error's fields when an action declares an `error` schema. Plain throws → `-32603` Internal error. Payload / Schema decode → `-32602`. Schema-tagged Fail → `-32000`. Unknown method → `-32601`. Clients receive these as `Error` instances (`ActionError` / `SchemaDecodeError` / `ActionFailure`) with `message`, `_tag` and `code`.
 
 Set `sameOrigin: false` only when you accept cross-origin calls and provide CORS, CSRF, and authentication. See [`middleware`](/oxide/configuration#middleware).
 

@@ -1,7 +1,7 @@
-# REQUIRED entrypoint for the kit celld demo.
-# Do not use `docker/podman compose up` alone — see compose.yaml header.
+# Entrypoint for the kit celld demo. Plain `docker compose up` also works
+# (compose.yaml orders RustFS → bucket → deploy → celld itself).
 #
-#   make up      # start stack (detached); exits when ready
+#   make up      # build + start the stack, detached
 #   make logs    # follow celld + rustfs
 #   make down
 
@@ -13,11 +13,9 @@ export
 .PHONY: up down logs
 
 up:
-	$(COMPOSE) up --build -d rustfs
-	$(COMPOSE) run --rm --no-deps rustfs-init
-	$(COMPOSE) run --rm --build kit
-	$(COMPOSE) up -d celld
+	$(COMPOSE) up --build -d
 	@echo "open http://localhost:$${KIT_PORT:-8080}"
+	@echo "redeploy: $(COMPOSE) run --rm kit   # rebuilds and POSTs /reload"
 	@echo "follow logs: make logs"
 
 logs:

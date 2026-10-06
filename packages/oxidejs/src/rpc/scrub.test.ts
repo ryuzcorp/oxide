@@ -113,7 +113,11 @@ test("scrubRpcJson maps tagged Fail Cause to application error", () => {
       )
     )
   ).toEqual({
-    error: { code: -32_000, message: "NotFound" },
+    error: {
+      code: -32_000,
+      data: { _tag: "NotFound", id: "1" },
+      message: "NotFound",
+    },
     id: 1,
     jsonrpc: "2.0",
   });

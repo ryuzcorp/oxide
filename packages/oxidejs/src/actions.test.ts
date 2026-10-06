@@ -1799,3 +1799,109 @@ export const wait = action(async () => {
     }
   });
 });
+
+const writeClientSchemas = function writeClientSchemas(root: string) {
+  fs.mkdirSync(path.join(root, "shared"));
+  fs.writeFileSync(
+    path.join(root, "shared", "schemas.ts"),
+    `import * as Schema from "effect/Schema";
+export const TaskText = Schema.Struct({ text: Schema.String });
+// oxlint-disable-next-line unicorn/throw-new-error
+export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", { id: Schema.String }) {}
+`
+  );
+  fs.writeFileSync(
+    path.join(root, "other.server.ts"),
+    `// oxlint-disable-next-line unicorn/throw-new-error
+class ServerOnly extends Error {}
+export const ServerOnlySchema = ServerOnly;
+`
+  );
+  fs.writeFileSync(
+    path.join(root, "demo.server.ts"),
+    `import { action } from "oxidejs";
+import * as Schema from "effect/Schema";
+import { NotFound, TaskText } from "./shared/schemas";
+import { ServerOnlySchema } from "./other.server";
+export const add = action(async (p) => p.text, { payload: TaskText, success: Schema.String, error: NotFound });
+export const inline = action(async () => 1, { error: Schema.Struct({ message: Schema.String }) });
+export const local = action(async () => 1);
+export const cross = action(async () => 1, { error: ServerOnlySchema, success: ServerOnlySchema });
+`
+  );
+};
+
+describe("client schema codecs", () => {
+  test("imports schemas from non-server modules", () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-client-"));
+    writeClientSchemas(root);
+    try {
+      const code = generateActionsClientModule(scanServerFiles(root));
+      const schemasFile = JSON.stringify(
+        path.join(root, "shared", "schemas.ts")
+      );
+      expect(code).toContain(`import { clientErrorSchema } from "oxidejs";`);
+      expect(code).toContain(`from ${schemasFile};`);
+      expect(code).toContain(
+        `import { TaskText as __s0 } from ${schemasFile};`
+      );
+      expect(code).toContain(`import { String as __s1 } from "effect/Schema";`);
+      expect(code).toContain(
+        `import { NotFound as __s2 } from ${schemasFile};`
+      );
+      expect(code).toContain(
+        'Rpc.make("demo.add", { payload: Schema.Struct({ args: Schema.Tuple([Schema.toEncoded(__s0)]) }), success: __s1, error: clientErrorSchema(__s2) });'
+      );
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("falls back to Schema.Unknown for inline, local and server schemas", () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-client-"));
+    writeClientSchemas(root);
+    try {
+      const code = generateActionsClientModule(scanServerFiles(root));
+      expect(code).toContain(
+        'Rpc.make("demo.inline", { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });'
+      );
+      expect(code).toContain(
+        'Rpc.make("demo.local", { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: Schema.Unknown, error: Schema.Unknown });'
+      );
+      const cross = /Rpc\.make\("demo\.cross", (?<body>[^\n]*)\);/u.exec(code);
+      expect(cross?.groups?.["body"]).toContain(
+        "payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) })"
+      );
+      expect(cross?.groups?.["body"]).toContain("success: Schema.Unknown");
+      expect(cross?.groups?.["body"]).toContain("error: Schema.Unknown");
+      // The server module itself is never part of the client graph.
+      expect(code).not.toContain("other.server.ts");
+      expect(code).not.toContain("__m0");
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("resolves withSchema payload schemas and streams", () => {
+    const root = fs.mkdtempSync(path.join(import.meta.dir, "oxide-client-"));
+    writeClientSchemas(root);
+    fs.appendFileSync(
+      path.join(root, "demo.server.ts"),
+      `import { withSchema } from "oxidejs";
+export const wrap = action(withSchema(TaskText, async (p) => p.text));
+export const feed = action(async function* () { yield new Date(); }, { stream: true, success: Schema.String });
+`
+    );
+    try {
+      const code = generateActionsClientModule(scanServerFiles(root));
+      expect(code).toContain(
+        'Rpc.make("demo.wrap", { payload: Schema.Struct({ args: Schema.Tuple([Schema.toEncoded(__s0)]) })'
+      );
+      expect(code).toContain(
+        'Rpc.make("demo.feed", { payload: Schema.Struct({ args: Schema.Array(Schema.Unknown) }), success: __s1, error: Schema.Unknown, stream: true });'
+      );
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+});

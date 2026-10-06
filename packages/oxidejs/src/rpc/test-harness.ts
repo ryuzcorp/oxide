@@ -34,16 +34,25 @@ export const writeGeneratedActions = function writeGeneratedActions(
 };
 
 /**
- * Browser stub module: schema-blind RpcGroup the production client bundle
+ * Browser stub module: schema-aware RpcGroup the production client bundle
  * decodes with. Tests that assert client-visible errors must create their
  * client from this, not the server module (whose declared error schemas only
  * the server encodes with).
+ *
+ * `oxidejs` imports are rewritten to the in-repo runtime the same way
+ * {@link writeGeneratedActions} does.
  */
 export const writeGeneratedClient = function writeGeneratedClient(
   root: string
 ) {
   const out = path.join(root, "client.mjs");
-  fs.writeFileSync(out, generateActionsClientModule(scanServerFiles(root)));
+  fs.writeFileSync(
+    out,
+    generateActionsClientModule(scanServerFiles(root)).replaceAll(
+      'from "oxidejs"',
+      `from ${JSON.stringify(OXIDE_RUNTIME)}`
+    )
+  );
   return out;
 };
 

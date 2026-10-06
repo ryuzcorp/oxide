@@ -5,6 +5,7 @@ import * as Registry from "effect/reactivity/AtomRegistry";
 import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { toActionError } from "./action-error";
 import { peekRequestStore } from "./request-store";
 import { actionContextLayer } from "./services";
 
@@ -14,6 +15,8 @@ const ACTION_KEY = Symbol.for("oxidejs.actionKey");
 export const ACTION_META = Symbol.for("oxidejs.actionMeta");
 /** Payload schema stamped by `withSchema` for `action()` to pick up. */
 export const WITH_SCHEMA_PAYLOAD = Symbol.for("oxidejs.withSchema.payload");
+/** Raw handler stamped by `withSchema`; RPC calls it with an already-decoded payload. */
+export const WITH_SCHEMA_HANDLER = Symbol.for("oxidejs.withSchema.handler");
 
 const asyncGeneratorProbe = async function* asyncGeneratorProbe() {
   yield;
@@ -29,10 +32,23 @@ export interface CallOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A stored action handler reference. RPC calls it with the payload the
+ * generated schema already decoded; `action()` resolves the return value.
+ */
+// oxlint-disable-next-line anti-slop/no-unknown-returns -- the return is the action result, resolved by action()
+export type ActionHandler = (...args: never[]) => unknown;
+
 /** Schemas and flags attached to an `action()` export for Effect Rpc codegen. */
 export interface ActionMeta {
   error?: Schema.Codec<unknown, unknown, never, never>;
   payload?: Schema.Codec<unknown, unknown, never, never>;
+  /**
+   * Raw handler for a `withSchema` action. The generated Rpc payload schema
+   * already decoded the argument, so RPC calls this instead of the wrapper —
+   * one decode, not two. Internal to codegen.
+   */
+  rpcHandler?: ActionHandler;
   stream?: boolean;
   success?: Schema.Codec<unknown, unknown, never, never>;
 }
@@ -57,6 +73,7 @@ interface ActionKeyCarrier {
 interface ActionMetaCarrier {
   [ACTION_META]?: ActionMeta;
   [WITH_SCHEMA_PAYLOAD]?: Schema.Codec<unknown, unknown, never, never>;
+  [WITH_SCHEMA_HANDLER]?: ActionHandler;
 }
 
 interface ActionCallPayload {
@@ -145,6 +162,7 @@ const mergeActionMeta = function mergeActionMeta(
   opts?: ActionOptions
 ): ActionMeta {
   const fromWithSchema = fn[WITH_SCHEMA_PAYLOAD];
+  const rawHandler = fn[WITH_SCHEMA_HANDLER];
   const stream =
     opts?.stream === true ||
     // SAFETY: action exports are functions; AsyncGeneratorFunction marks streams.
@@ -153,9 +171,21 @@ const mergeActionMeta = function mergeActionMeta(
   if (opts?.error) {
     meta.error = opts.error;
   }
+  if (fromWithSchema && opts?.payload !== undefined) {
+    // The RPC payload schema would decode, then the withSchema wrapper would
+    // decode the already-decoded value again.
+    throw new Error(
+      "oxidejs: action(withSchema(schema, fn), { payload }) declares the payload twice; use one of withSchema or { payload }"
+    );
+  }
   const payload = opts?.payload ?? fromWithSchema;
   if (payload) {
     meta.payload = payload;
+  }
+  if (rawHandler) {
+    // RPC decodes with `meta.payload`; hand the decoded value straight to the
+    // raw handler so a transforming schema is not decoded a second time.
+    meta.rpcHandler = rawHandler;
   }
   if (stream) {
     meta.stream = true;
@@ -385,18 +415,28 @@ export const brandServerAction = function brandServerAction<
   return handle;
 };
 
-/** Wrap an RPC caller as an `Atom.fn`-shaped client action handle. */
+/**
+ * Wrap an RPC caller as an `Atom.fn`-shaped client action handle.
+ *
+ * Wire errors are normalized to `Error` instances here (the action stub and
+ * this wrapper live in the same bundle as the exported error classes), so a
+ * rejected call has `message`, `_tag`, `code` and the decoded error fields.
+ */
 export const wrapClientRpc = function wrapClientRpc<Args extends unknown[], A>(
   rpc: (...args: Args | [...Args, CallOptions]) => Promise<A>
 ): ServerActionHandle<Args, A> {
-  const invoke = (...args: Args | [...Args, CallOptions]) =>
-    Promise.resolve(rpc(...args));
+  const invoke = async (...args: Args | [...Args, CallOptions]) => {
+    try {
+      return await rpc(...args);
+    } catch (error) {
+      throw toActionError(error);
+    }
+  };
 
   const atom = Atom.make(
     Atom.fn((packed: PackArgs<Args>) =>
       Effect.tryPromise({
-        catch: (error) =>
-          error instanceof Error ? error : new Error(String(error)),
+        catch: toActionError,
         // SAFETY: Atom.fn packs the full Args tuple as the write payload.
         try: () => invoke(...(packed as Args)),
       })
@@ -428,7 +468,13 @@ export const wrapClientStreamRpc = function wrapClientStreamRpc<
 ): StreamActionHandle<Args, Y, R> {
   // SAFETY: Object.assign below installs set/bind/with/atom/$$atom on this callable.
   const call = ((...allArgs: Args | [...Args, CallOptions]) =>
-    rpc(...allArgs)) as StreamActionHandle<Args, Y, R>;
+    (async function* mappedStream() {
+      try {
+        yield* rpc(...allArgs);
+      } catch (error) {
+        throw toActionError(error);
+      }
+    })()) as StreamActionHandle<Args, Y, R>;
 
   Object.assign(call, {
     $$atom: 1 as const,
@@ -509,9 +555,11 @@ export function action<Args extends unknown[], Result>(
     return defineStreamAction(asGen, meta);
   }
 
-  const invoke = (...args: Args) =>
+  // Async so a handler that throws synchronously (e.g. a `withSchema` decode
+  // failure) still rejects the returned promise instead of throwing at the call.
+  const invoke = async (...args: Args) =>
     // SAFETY: fn returns Result | Promise | Effect; resolveValue awaits to Awaited<Result>.
-    resolveValue(fn(...args) as never) as Promise<Awaited<Result>>;
+    (await resolveValue(fn(...args) as never)) as Awaited<Result>;
 
   const atom = Atom.make(
     Atom.fn((packed: PackArgs<Args>) =>

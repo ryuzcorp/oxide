@@ -3,9 +3,9 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
+import { SchemaDecodeError } from "./action-error";
 import { nextRequestScopedId, useEnv } from "./request-store";
 import type { OxidejsJson } from "./types";
-import { SchemaDecodeError } from "./with-schema";
 
 export const WORKFLOW_META = Symbol.for("oxidejs.workflowMeta");
 

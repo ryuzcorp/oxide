@@ -3,8 +3,8 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { CallOptions } from "./action";
+import { SchemaDecodeError } from "./action-error";
 import { deriveKeyedId, nextRequestScopedId, useEnv } from "./request-store";
-import { SchemaDecodeError } from "./with-schema";
 import {
   createWorkflowInstance,
   createWorkflowInstanceBatch,

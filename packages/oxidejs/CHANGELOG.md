@@ -1,10 +1,70 @@
 # Changelog
 
-## 0.5.8
+## 0.6.0
+
+### Added
+
+- `isolateOnce(fn, { timeout, wait })` / `isolateOnceEffect`: once-per-isolate async setup that is safe on celld and Workers. Concurrent callers share one pass, bounded by `timeout` (default 30 s). A failure or timeout clears the pass, so the next caller retries. A caller that has waited `wait` ms (default 5 s) on a pass started by another request runs its own, so a pass orphaned when its request ended cannot hang the isolate. That pass can overlap a slow live one, so `fn` must be idempotent and safe to run concurrently. Success is cached for the isolate. An optional object key (e.g. a D1 binding) keeps one pass per key.
+- `isolateOnce` / `isolateOnceEffect` runners have `reset(key?)`: forget the cached pass so the next call runs `fn` again (in-flight callers keep their pass). New exported types `IsolateOnceRunner` / `IsolateOnceEffectRunner`.
+- `ActionError`: client action calls reject with an `Error` carrying the JSON-RPC `code`, the server error's `_tag` and its decoded fields. Fields are copied as own properties, so a `__proto__` key in wire data cannot change the error's prototype.
+- `ActionFailure` + `fail(message)`: throw `fail("…")` in an action to send a user-facing message. Every generated action error schema includes `ActionFailure`, so no `error` option is needed.
+- `toActionError(error, declared?)`: turns a raw RPC rejection envelope into the matching Oxide error class; with a declared tagged error schema it decodes `data` into that class.
+- Client schemas: the generated client RpcGroup now uses an action's real `payload` / `success` / `error` schemas when the `*.server.ts` file imports them from a shared (non-`.server`) module. Codegen resolves them statically (named imports and `import * as ns`), so the client never imports server code. Inline or locally declared schemas stay server-only (`Schema.Unknown` on the client, as before).
+  - Payload: the client validates the schema's Encoded side before sending, so an invalid argument rejects with `SchemaDecodeError` (`-32602`) and no request goes out.
+  - Success: the wire value decodes back to the handler's Type, so a `Schema.Date` result arrives as a `Date` (streams decode each chunk).
+  - Error: a declared `Schema.TaggedError` rejects as an instance of that class (`instanceof NotFound`, real fields, `code: -32000`). `clientErrorSchema(declared?)` is the client error codec codegen uses.
+- Durable mutation queue (`oxidejs/mutation-queue`): `createMutationQueue({ storage })` takes a `MutationQueueStorage` adapter (`load` / `put` / `delete`), and `indexedDbStorage(name?)` is a dependency-free IndexedDB adapter (throws at construction when IndexedDB is missing, e.g. SSR). Queued writes then survive a reload, tab close or crash.
+  - `wrap(fn, { key })` names the action (`"<file>.<fn>"`) so a restored write finds it again; required when `storage` is set.
+  - Restored writes replay in FIFO order ahead of new ones, keep their original `idempotencyKey` (server dedupe still applies), and report through `subscribe` with new `restore` / `discard` events. `queue.ready` resolves once persisted writes have loaded; `flush()` waits for it.
+  - With `storage`, non-cloneable args or a missing `key` reject at enqueue instead of losing the write. Without `storage`, behavior is unchanged.
+  - New exported types `MutationQueueStorage`, `PersistedMutation`, `MutationOutcome`; `MutationQueueItem.key`.
+- `bun run release` regenerates a template's standalone `bun.lock` whenever it changes that template's `oxidejs` range, so the kit Docker build's `bun install --frozen-lockfile` keeps working.
 
 ### Changed
 
-- Bumped `effect` to `4.0.0` stable (and `@effect/sql-d1` to `4.0.0` in the kit template)
+- **Breaking (types):** `withSchema` returns `(payload: Encoded) => R` instead of `R | Effect.Effect<never, SchemaDecodeError>`, so an awaited action result is the handler's data. Calling the `withSchema` function directly with an invalid payload now throws `SchemaDecodeError` synchronously instead of returning `Effect.fail`; through `action()` it is a rejected promise. Over RPC it is still `-32602`.
+- `action()` handles always return a promise: a handler that throws synchronously now rejects that promise instead of throwing at the call site.
+- **Breaking:** `action(withSchema(schema, fn), { payload })` now throws when the action is defined. Declaring the payload twice made RPC decode it twice; use either `withSchema` or `{ payload }`.
+- Client action rejections are `Error` instances (`ActionError`, `SchemaDecodeError` or `ActionFailure`) instead of plain `{ code, message }` objects. A plain thrown `Error` is still masked as `-32603 Internal error`.
+- JSON-RPC error responses for a declared tagged `error` now include `error.data` (the encoded error), so the client can rebuild its tag and fields. This is an added field only.
+- `SchemaDecodeError.from(...)` instances carry `code: -32602`.
+- Kit template: `ensureDb` uses `isolateOnce` (15 s timeout, 5 s wait) instead of a `WeakMap` promise cache with no bound.
+- Kit template celld setup now follows the production celld contract:
+  - celld `0.4.1` → `0.6.1`; base image `oven/bun:1.3-debian` → `1.4-debian`.
+  - Each node gets its own `CELLD_ASSET_CACHE_DIR` and a `CELLD_ASSET_CACHE_BYTES` bound.
+  - `CELLD_TRUST_FORWARDED_HEADERS` is documented, off by default.
+  - `CELLD_DEPLOY_POLL_S=300` is now only a fallback, since every deploy POSTs the node's internal `/reload` and goes live immediately.
+  - `CELLD_DEPLOY_MAX_AGE_S=60` for `actions: "ws"`.
+  - `CELLD_SHUTDOWN_TOTAL_MS=15000` stays under `stop_grace_period: 25s`.
+  - `depends_on` conditions and a RustFS healthcheck mean a plain `docker compose up` works without `make up`.
+  - Published ports (app `8080`, RustFS `9000` / `9001`) bind `127.0.0.1` only, matching the "localhost-only" note. Before this, they listened on every interface with the demo's default RustFS credentials.
+- The kit template now needs oxidejs `0.6.0` (`isolateOnce`). It can't build against the registry `0.5.10`.
+- Docs: paranorm `once()` is not safe on D1: its follow-up `SELECT changes()` runs as a separate query and always reads 0, so the write never runs. Use a single `INSERT … ON CONFLICT DO NOTHING RETURNING` instead.
+- Docs: added the `vite build && celld dev dist` flow (source-mode `celld dev` cannot resolve `virtual:oxide/worker`) and an isolate-level setup section.
+
+### Fixed
+
+- Client action errors lost the server `_tag` and every decoded error field, and `String(error)` rendered `[object Object]`.
+- `withSchema` with a transforming schema (e.g. `Schema.FiniteFromString`) answered `-32603 Internal error` to valid payloads over RPC, because the payload was decoded twice. RPC now decodes once.
+- Kit template: a migration pass orphaned by an ended request hung every later request, and a failed migration stayed failed for the isolate's lifetime.
+
+## 0.5.10
+
+### Changed
+
+- Simplified RPC defect scrubbing for `SchemaDecodeError` params (`extractParamsDieMessage` now scans the Die tree directly); internal, no behavior change
+
+## 0.5.9
+
+### Changed
+
+- Bumped `effect` to `4.0.0` stable (and `@effect/sql-d1` to `4.0.0` in the kit template), `unplugin` to `^3.4.0`, and `@cloudflare/config` to `^0.22.0`
+
+## 0.5.8
+
+### Added
+
+- Worker preset treats a root `cloudflare.config.ts` (`@cloudflare/config`, optional peer) as a worker project: when no wrangler file is present, `oxide()` loads it with `loadAndParseConfig` and converts it to the wrangler shape `withOxide` picks up
 
 ## 0.5.7
 

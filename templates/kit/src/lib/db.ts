@@ -2,7 +2,7 @@ import { D1Client } from "@effect/sql-d1";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { SqlClient } from "effect/sql/SqlClient";
-import { useCtx, useEnv } from "oxidejs";
+import { isolateOnce, useCtx, useEnv } from "oxidejs";
 import { createMigrator, defineSchema, paranorm } from "paranorm";
 import type { InferSchema, Selectable } from "paranorm";
 
@@ -110,25 +110,34 @@ export const missingD1 = () =>
       "kit: D1 binding env.DB is missing. Build the app and run it with celld (bun run dev) or Wrangler (bun run dev:cf).",
   });
 
-const migrations = new WeakMap<D1Database, Promise<null>>();
-
 /** Effect Layer for this D1 binding (`SqlClient`). */
 const dbLayer = (db: D1Database) => D1Client.layer({ db });
 
-/** Apply pending ParanORM migrations for this D1 binding (once per isolate). */
-export const ensureDb = (db: D1Database) => {
-  let pending = migrations.get(db);
-  if (!pending) {
-    pending = (async () => {
-      await Effect.runPromise(
-        migrator.migrate.pipe(Effect.provide(dbLayer(db)), Effect.scoped)
-      );
-      return null;
-    })();
-    migrations.set(db, pending);
-  }
-  return pending;
-};
+/** Bound on one migration pass. A D1 call that never answers fails the pass
+ * (and clears it) instead of holding every later request. */
+const DB_SETUP_TIMEOUT_MS = 15_000;
+
+/** How long a request waits on a migration another request started before it
+ * drops that pass and runs its own. celld drops a request's pending work when
+ * that request ends or its client goes away, so a shared pass can be orphaned
+ * without ever failing. */
+const DB_SETUP_WAIT_MS = 5000;
+
+/**
+ * Apply pending ParanORM migrations for this D1 binding, once per isolate.
+ * Concurrent callers share one pass. A failed or timed-out pass clears so the
+ * next request retries; a request that waits {@link DB_SETUP_WAIT_MS} on a
+ * pass another request owns runs its own.
+ */
+export const ensureDb = isolateOnce(
+  async (db: D1Database) => {
+    await Effect.runPromise(
+      migrator.migrate.pipe(Effect.provide(dbLayer(db)), Effect.scoped)
+    );
+    return null;
+  },
+  { timeout: DB_SETUP_TIMEOUT_MS, wait: DB_SETUP_WAIT_MS }
+);
 
 export const ensureDbEffect = (db: D1Database) =>
   Effect.promise(() => ensureDb(db));
