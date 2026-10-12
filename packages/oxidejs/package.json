@@ -1,6 +1,6 @@
 {
   "name": "oxidejs",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Vite/Rsbuild plugin. One build → dist/server.js + optional client. Server actions via *.server.ts.",
   "keywords": [
     "cloudflare",
@@ -32,6 +32,10 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
+    },
+    "./cf": {
+      "types": "./dist/cf.d.mts",
+      "import": "./dist/cf.mjs"
     },
     "./vite": {
       "types": "./dist/vite.d.mts",
@@ -82,12 +86,12 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "effect": "^4.0.0",
+    "effect": "^4.0.3",
     "linkedom": "^0.18.13",
     "unplugin": "^3.4.0"
   },
   "devDependencies": {
-    "@cloudflare/config": "0.22.0"
+    "@cloudflare/config": "0.24.1"
   },
   "peerDependencies": {
     "@cloudflare/config": "*",

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+### Added
+
+- `oxideDurable(root?)` (`oxidejs/cf`): scanned `workflow()` / `queue()` / `schedule()` bindings as `cloudflare.config.ts` fragments (`{ env, exports, triggers }`) for `defineWorker`. Spread them into the worker config so `cf deploy` — which forces the plugin's `experimental.newConfig` flow, where any `config` customizer is rejected — still deploys workflows, queue producers/consumers, and crons.
+
+### Fixed
+
+- `withOxide()` no longer returns a `config` customizer when Vite runs under the `cf` CLI build-output flow (`CLOUDFLARE_VITE_FORCE_BUILD_OUTPUT=true`); the plugin rejected it with `` `config` cannot be used together with `experimental.newConfig` ``, breaking every `cf deploy`. Plain `vite dev` / `vite build` behavior is unchanged.
+
 ## 0.6.0
 
 ### Added

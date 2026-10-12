@@ -7,30 +7,31 @@
     "dev:celld": "vite build && celld dev dist",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "cf deploy",
     "deploy:celld": "vite build && celld deploy dist",
-    "cf:login": "wrangler login",
+    "cf:login": "cf auth login",
     "celld": "celld"
   },
   "dependencies": {
     "@better-auth/passkey": "^1.7.7",
-    "@effect/sql-d1": "4.0.0",
-    "@ilha/router": "^0.11.12",
+    "@effect/sql-d1": "4.0.3",
+    "@ilha/router": "^0.11.16",
     "better-auth": "^1.7.7",
-    "effect": "^4.0.0",
-    "ilha": "^0.14.9",
-    "paranorm": "^0.3.4",
+    "cf": "1.0.0-beta.14",
+    "effect": "^4.0.3",
+    "ilha": "^0.15.2",
+    "paranorm": "^0.3.5",
     "unstorage": "^2.0.0-alpha.10"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.62.3",
-    "@cloudflare/workers-types": "^5.20260818.1",
+    "@cloudflare/config": "0.24.1",
+    "@cloudflare/vite-plugin": "^1.63.1",
+    "@cloudflare/workers-types": "^5.20261012.1",
     "@tailwindcss/vite": "^4.3.3",
     "daisyui": "^5.7.47",
-    "oxidejs": "^0.6.0",
+    "oxidejs": "^0.6.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7",
-    "vite": "^8.3.1",
-    "wrangler": "^4.145.0"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
   }
 }

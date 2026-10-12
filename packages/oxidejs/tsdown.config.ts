@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
   deps: {
     neverBundle: [
+      "@cloudflare/config",
       "unplugin",
       "effect",
       "effect/rpc",
@@ -13,6 +14,7 @@ export default defineConfig({
   },
   dts: true,
   entry: {
+    cf: "src/cf.ts",
     index: "src/index.ts",
     "mutation-queue": "src/mutation-queue.ts",
     plugin: "src/plugin.ts",

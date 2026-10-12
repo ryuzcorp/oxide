@@ -2,7 +2,7 @@ import { createStorage, normalizeBaseKey, normalizeKey } from "unstorage";
 import cloudflareR2BindingDriver from "unstorage/drivers/cloudflare-r2-binding";
 
 const missingR2 = () =>
-  new Error("kit: R2 binding FILES is missing — check wrangler r2_buckets");
+  new Error("kit: R2 binding FILES is missing — check cloudflare.config.ts");
 
 /** Per-user unstorage over the Worker `FILES` R2 binding. */
 export const filesStorage = (bucket: R2Bucket | undefined) => {

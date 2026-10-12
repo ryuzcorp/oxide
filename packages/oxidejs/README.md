@@ -17,9 +17,9 @@ The `oxidejs` entry exports runtime helpers (`action`, `useRequest`, …). The b
 ## Vite
 
 ```ts
+import oxide from "oxidejs/vite";
 // vite.config.ts
 import { defineConfig } from "vite";
-import oxide from "oxidejs/vite";
 
 export default defineConfig({
   plugins: [oxide()],
@@ -42,8 +42,8 @@ Workers apps add a root `wrangler.jsonc` (preset defaults to `"worker"`) and `@c
 
 ```ts
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { withOxide } from "oxidejs/wrangler";
 import oxide from "oxidejs/vite";
+import { withOxide } from "oxidejs/wrangler";
 
 export default defineConfig({
   plugins: [oxide({ actions: "ws", middleware: [] }), cloudflare(withOxide())],
@@ -52,7 +52,7 @@ export default defineConfig({
 
 Point root `wrangler.jsonc` `main` at a thin entry that re-exports `virtual:oxide/worker`. `preset: "worker"` uses the Worker wrapper (ASSETS, workflow class exports, `WebSocketPair`) and leaves Vite Worker environments to Cloudflare's plugin. Put name, compat, D1/R2/vars in the root wrangler file. Override with `preset: "fetch"` or `preset: "worker"` when auto-detect is wrong.
 
-You can use a root `cloudflare.config.ts` (the `cf` CLI config) instead of a wrangler file. Install `@cloudflare/config`. The preset defaults to `"worker"`, `oxide()` loads and converts the file, and `withOxide()` hands the result to Cloudflare's plugin — no wrangler file and no `experimental.newConfig`. A root wrangler file or a `configPath` option wins over `cloudflare.config.ts`. Loading needs Node ≥ 22.18 (not Bun), and editing `cloudflare.config.ts` needs a dev server restart.
+You can use a root `cloudflare.config.ts` (the `cf` CLI config) instead of a wrangler file. Install `@cloudflare/config` (and `cf` for the `cf/config` import). The preset defaults to `"worker"`, `oxide()` loads and converts the file, and `withOxide()` hands the result to Cloudflare's plugin — no wrangler file. A root wrangler file or a `configPath` option wins over `cloudflare.config.ts`. Loading needs Node ≥ 22.18 (not Bun), and editing `cloudflare.config.ts` needs a dev server restart. `cf deploy` forces the plugin's `experimental.newConfig` flow, where any `config` customizer is rejected: `withOxide()` then contributes only environment naming, so declare scanned durable bindings in the config file itself with `oxideDurable` from `oxidejs/cf` (spread its `env` / `exports` / `triggers` into `defineWorker`) — otherwise workflows, queue producers/consumers, and crons never reach the deploy.
 
 ## Server actions
 
@@ -101,6 +101,7 @@ Unary actions return a Promise and expose helpers for UI wiring:
 
 ```ts
 import { batch } from "oxidejs";
+
 import { ping, task } from "./tasks.server";
 
 const [pong, first] = await batch(ping, task("a"));
@@ -145,6 +146,7 @@ export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
 ```ts
 // src/tasks.server.ts
 import { action, withSchema } from "oxidejs";
+
 import { AddTask, NotFound } from "./tasks/shared";
 
 export const add = action(
@@ -329,6 +331,7 @@ Optional offline write queue for WebSocket actions. `flush` retries transient fa
 
 ```ts
 import { createMutationQueue } from "oxidejs/mutation-queue";
+
 import { add } from "./tasks.server";
 
 const queue = createMutationQueue({
@@ -347,6 +350,7 @@ Pass `storage` to keep a failed write across a reload. `indexedDbStorage()` is a
 
 ```ts
 import { createMutationQueue, indexedDbStorage } from "oxidejs/mutation-queue";
+
 import { add } from "./tasks.server";
 
 const queue = createMutationQueue({ storage: indexedDbStorage() });

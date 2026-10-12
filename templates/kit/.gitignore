@@ -7,7 +7,7 @@ dist
 *.tgz
 .ilha
 .celld
-.wrangler
+.cloudflare
 .dev.vars
 .dev.vars*
 !.dev.vars.example

@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { setCloudflareConfig } from "./core";
 import {
+  CF_BUILD_OUTPUT_ENV_VAR,
   isCelldUnsupportedKey,
   mergeDevVarsIntoConfig,
   maybePrepareCelldDeploy,
@@ -191,6 +192,22 @@ export const demo = workflow({
       config
     );
     expect(result).toBe(overrides);
+  });
+
+  test("omits the config customizer for the cf CLI build-output flow", () => {
+    const prev = process.env[CF_BUILD_OUTPUT_ENV_VAR];
+    process.env[CF_BUILD_OUTPUT_ENV_VAR] = "true";
+    try {
+      const opts = withOxide({ viteEnvironment: { name: "api" } });
+      expect("config" in opts).toBe(false);
+      expect(opts.viteEnvironment).toEqual({ name: "api" });
+    } finally {
+      if (prev === undefined) {
+        delete process.env["CLOUDFLARE_VITE_FORCE_BUILD_OUTPUT"];
+      } else {
+        process.env[CF_BUILD_OUTPUT_ENV_VAR] = prev;
+      }
+    }
   });
 });
 

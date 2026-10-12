@@ -36,17 +36,26 @@ interface ViteEnvironmentOptions {
  * the config `oxide()` converted from it is assigned first. List `oxide()` in
  * Vite `plugins` so it loads before Cloudflare resolves its config.
  *
+ * Under the `cf` CLI build-output flow (`cf deploy` sets
+ * `CLOUDFLARE_VITE_FORCE_BUILD_OUTPUT`), the plugin loads
+ * `cloudflare.config.ts` itself and rejects any `config` customizer — so no
+ * `config` key is returned. Scanned durable bindings reach that flow through
+ * `oxideDurable` (`oxidejs/cf`) in the config file instead of this merger.
+ *
  * ```ts
  * cloudflare(withOxide())
  * cloudflare(withOxide({ root: import.meta.dirname }))
  * cloudflare(withOxide({ config: (c) => { … } }))
  * ```
  */
+/** Env var the `cf` CLI sets when it delegates a build to Vite. */
+export const CF_BUILD_OUTPUT_ENV_VAR = "CLOUDFLARE_VITE_FORCE_BUILD_OUTPUT";
+
 export const withOxide = function withOxide<T extends object>(
   // SAFETY: empty options are valid; callers omit the arg for merge-only.
   options: T & { root?: string } = {} as T
 ): Omit<T, "config" | "root" | "viteEnvironment"> & {
-  config: CloudflareConfigCustomizer;
+  config?: CloudflareConfigCustomizer;
   viteEnvironment: ViteEnvironmentOptions;
 } {
   // SAFETY: optional Cloudflare `config` is object | function | undefined.
@@ -77,6 +86,29 @@ export const withOxide = function withOxide<T extends object>(
   delete rest.config;
   delete rest.root;
   delete rest.viteEnvironment;
+  if (process.env[CF_BUILD_OUTPUT_ENV_VAR] === "true") {
+    // The `cf` CLI build forces `experimental.newConfig`: the plugin loads
+    // `cloudflare.config.ts` itself and rejects any `config` customizer, so
+    // only environment naming is contributed here. Scanned durable bindings
+    // reach that flow through `oxideDurable` (`oxidejs/cf`) in the config
+    // file, not through the merger below.
+    // SAFETY: `config` is deleted from `rest` above; destructuring keeps it
+    // out of the returned options (the plugin rejects the key entirely).
+    const { config: _dropped, ...passthrough } = rest;
+    // SAFETY: `config`/`root`/`viteEnvironment` are deleted from `rest`
+    // above; the remainder is exactly the user's extra Cloudflare options.
+    const passthroughOptions = passthrough as Omit<
+      T,
+      "config" | "root" | "viteEnvironment"
+    >;
+    return {
+      ...passthroughOptions,
+      viteEnvironment: {
+        name: "ssr",
+        ...userEnv,
+      },
+    };
+  }
   const useCloudflareConfig =
     !("configPath" in options) &&
     !hasWranglerConfig(root) &&

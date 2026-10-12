@@ -21,9 +21,9 @@ const note = await create("Ship Oxide");
 Looks local. Runs on the server.
 
 ```ts
+import oxide from "oxidejs/vite";
 // vite.config.ts
 import { defineConfig } from "vite";
-import oxide from "oxidejs/vite";
 
 export default defineConfig({
   plugins: [oxide()],

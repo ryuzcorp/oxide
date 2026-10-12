@@ -9,10 +9,16 @@
       "oxidejs/client": ["../../packages/oxidejs/client.d.ts"],
       "oxidejs/virtual": ["../../packages/oxidejs/virtual.d.ts"],
       "oxidejs/vite": ["../../packages/oxidejs/dist/vite.d.mts"],
-      "oxidejs/wrangler": ["../../packages/oxidejs/dist/wrangler.d.mts"]
+      "oxidejs/wrangler": ["../../packages/oxidejs/dist/wrangler.d.mts"],
+      "oxidejs/cf": ["../../packages/oxidejs/dist/cf.d.mts"]
     },
     "types": ["vite/client", "oxidejs/client", "oxidejs/virtual"],
     "strictNullChecks": true
   },
-  "include": ["src", "vite.config.ts", ".ilha/pages.d.ts"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "cloudflare.config.ts",
+    ".ilha/pages.d.ts"
+  ]
 }
